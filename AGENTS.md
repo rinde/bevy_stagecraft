@@ -1,6 +1,157 @@
 # Agent notes
 
-- `just ci` runs everything CI runs. Run it before pushing.
+This file is for whoever changes the code. If it and the code disagree, the
+code wins, and both documents need fixing in the same change.
+
+## What this is
+
+A test driver for Bevy UIs and the apps built on them. A scenario (setup,
+view, scripted pointer and keyboard steps, checks) runs three ways:
+
+- headless in `cargo test`;
+- recorded offscreen for review (feature `record`);
+- played in a gallery (feature `gallery`).
+
+## Tickets live on GitHub
+
+Read tickets with the GitHub tools. Label a ticket **"In progress"** before
+starting work on it. Treat the title as the specification, and ask if it is
+ambiguous.
+
+## Always work with PRs
+
+Work on a branch named `issue-<n>-<short-slug>`, branched from an up-to-date
+`main`. Before stopping, create the PR (body says `Closes #<n>`) and check
+whether it needs a rebase. Never merge it yourself.
+
+## The one architectural rule
+
+No dependency on any game crate (`rail_core`, `rail_game`, ...) and no game
+state. The crate takes Bevy types only. Games extend it through its extension
+points: custom targets, probes, named checks and world builders. This is the
+same rule as `rail_ui` and `rin-bevy-ui`.
+
+## Bevy version policy
+
+The Bevy version is the same as rails and is upgraded together with it, never
+in one repository alone. It is pinned exactly (`=0.19.1`) in the workspace
+`Cargo.toml`.
+
+The Bevy feature list in `crates/rin_bevy_ui_tester/Cargo.toml` is curated by
+hand, with `default-features = false` in the workspace. Do not "simplify" it to
+a bundle such as `default` or `ui`: a library must not force audio, gamepad,
+dynamic linking or a windowing backend on whoever depends on it. Windowing and
+rendering sit behind the `gallery` and `record` features.
+
+## Where to find what
+
+The crate is `crates/rin_bevy_ui_tester`. It is still a skeleton (`lib.rs` is
+doc comments only). Fill in this table as each module lands.
+
+| Module     | Purpose                                      | Status  |
+| ---------- | -------------------------------------------- | ------- |
+| `input`    | Scripted pointer and keyboard events         | planned |
+| `scenario` | Scenario definition: setup, view, steps, checks | planned |
+| `player`   | Runs a scenario step by step                 | planned |
+| `targets`  | Finding UI nodes to act on; custom targets   | planned |
+| `probe`    | Reading state out of the world; custom probes | planned |
+| `recorder` | Offscreen recording (feature `record`)       | planned |
+| `overlay`  | Pointer and step overlay drawn on frames     | planned |
+| `gallery`  | Playback in a window (feature `gallery`)     | planned |
+| `capture`  | Frame capture and image output               | planned |
+
+## Running things
+
+`just` is the entry point; the plain-cargo equivalents are below.
+
+| Recipe             | What it does                                    | Plain cargo                                                                       |
+| ------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------- |
+| `just build`       | Build everything                                | `cargo build --workspace --all-targets --all-features`                            |
+| `just check`       | Type-check everything                           | `cargo check --workspace --all-targets --all-features`                            |
+| `just test`        | Unit, integration and doc tests                 | `cargo test --workspace --all-targets --all-features` plus the same with `--doc`  |
+| `just lint`        | Format check, clippy, rustdoc, warnings denied  | `cargo fmt --all -- --check`, `cargo clippy ... -- -D warnings`, `cargo doc ...`  |
+| `just fmt`         | Format in place                                 | `cargo fmt --all`                                                                 |
+| `just doc`         | Rustdoc, warnings denied                        | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --document-private-items` |
+| `just features`    | Check none, `record`, `gallery`, all features   | `cargo check --workspace --all-targets --no-default-features [--features ...]`    |
+| `just unused-deps` | Fail on unused dependencies                     | `cargo machete --with-metadata`                                                   |
+| `just deny`        | Licences, advisories, bans                      | `cargo deny check`                                                                |
+| `just test-gpu`    | Tests needing a (software) GPU                  | `WGPU_BACKEND=vulkan cargo test --workspace --features record gpu`                |
+| `just ci`          | Everything CI runs                              | all of the above except `test-gpu`                                                |
+
+`just test-gpu` needs a Vulkan driver. On a machine without a GPU, install
+lavapipe: `sudo apt-get install -y mesa-vulkan-drivers libvulkan1`. CI does the
+same in its `gpu` job. Linux builds also need
+`libwayland-dev libx11-dev libxkbcommon-dev`.
+
+`.claude/hooks/session-start.sh` is meant to set all of this up for agent
+sessions (tracked in ticket #6; it does not exist yet, so install tools by
+hand until it does). You need `just`, `cargo-machete` and `cargo-deny`.
+
+## Code practices
+
+The lint regime lives in `[workspace.lints]` in `Cargo.toml` and `clippy.toml`;
+every crate inherits it. Clippy `all`, `pedantic`, `nursery` and `cargo` are
+denied.
+
+**Forbidden in production code:** `unwrap`, `expect`, `panic!`, `todo!`,
+`unimplemented!`, `dbg!`, `print!`/`println!`/`eprintln!`, indexing and
+slicing, `unsafe`, `std::` paths that exist in `core`/`alloc`, and the Bevy
+methods in `clippy.toml` (`Query::single`, `single_mut`, `World::resource`,
+`resource_mut`).
+
+The fallible idiom instead: return `Result` or `Option` and propagate with `?`;
+use `.get(i)` rather than `[i]`; use `let Some(x) = ... else { return ... };`;
+use `World::get_resource` and `Query::iter().next()` (or `get`) and handle the
+`None`; report problems through errors or Bevy's `warn!`/`error!`
+logging, not stdout.
+
+- `allow` is permitted only in tests, always with `reason = "..."`.
+- Every item is documented, private ones included (`missing_docs` is denied and
+  rustdoc runs with `--document-private-items`).
+- British spelling (behaviour, colour, initialise). Comments say *why*, not
+  what.
+- `#[must_use]` on accessors, `const fn` where it compiles, and
+  `#[derive(Debug)]` on every type.
+- Named constants instead of magic numbers.
+
+## Determinism
+
+A scenario must produce the same frames in every runner. So: fixed 1/60 s
+steps, no wall clock, and no `HashMap`/`HashSet` iteration where the order
+reaches behaviour (use ordered collections or sort first).
+
+## Testing
+
+- Test names are sentences stating the claim, for example
+  `clicking_a_disabled_button_does_nothing`.
+- Tests drive a plain Bevy UI, never a game.
+- GPU tests have `gpu` in their name, need feature `record`, and run only via
+  `just test-gpu` (and CI's `gpu` job, on lavapipe). `just test` must pass on a
+  machine without a GPU.
+
+## Bevy-side conventions
+
+- Register systems in the plugin, in named system sets.
+- Take `Commands` by value.
+- Never call the disallowed methods listed above.
+
+## Before you call it done
+
+1. `just fmt`.
+2. `just ci`.
+3. Update `README.md` if usage changed, and the module table above if modules
+   changed.
+4. Create or update the PR, and check whether it needs a rebase.
+
+## CI billing failures
+
+A CI job that fails because of billing or quota (for example the account
+cannot start runners) is not a failure of the change. Say so in the PR rather
+than changing code to chase it.
+
+## Private software
+
+`publish = false` stays. There is no licence file and no open-source framing.
 
 ## Dependencies and advisories (`just deny`)
 
