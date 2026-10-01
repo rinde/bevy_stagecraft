@@ -1,0 +1,118 @@
+# CI runs exactly the `just` recipes, so a green `just ci` is a green CI.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Bevy test binaries otherwise fill the runner's disk.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: extractions/setup-just@v2
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libx11-dev libxkbcommon-dev
+      - run: just lint
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: extractions/setup-just@v2
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libx11-dev libxkbcommon-dev
+      - run: just test
+
+  features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: extractions/setup-just@v2
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libx11-dev libxkbcommon-dev
+      - run: just features
+
+  unused-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - run: just unused-deps
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: just deny
+
+  check-cross-platform:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - run: cargo check --workspace --all-targets --locked
+
+  gpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: extractions/setup-just@v2
+      - name: Install software Vulkan (lavapipe)
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+      - run: just test-gpu
