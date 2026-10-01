@@ -50,3 +50,8 @@ features = [
 
 [lints]
 workspace = true
+
+# Temporary: the crate is still a skeleton of doc comments, so `bevy` is
+# declared but not yet used. Remove once the crate has code using bevy.
+[package.metadata.cargo-machete]
+ignored = ["bevy"]

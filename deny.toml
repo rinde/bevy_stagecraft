@@ -1,0 +1,45 @@
+# Minimal cargo-deny configuration so that `just deny` passes in CI.
+# TODO(#4): issue #4 will flesh this out (stricter bans, exceptions, etc.).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # ttf-parser is unmaintained; reached only via bevy_winit -> winit ->
+    # sctk-adwaita (window decorations). Not ours to fix; revisit on Bevy upgrade.
+    "RUSTSEC-2026-0192",
+]
+
+[licenses]
+version = 2
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# Our own crate is `publish = false` and has no licence field yet.
+[licenses.private]
+ignore = true
+
+[bans]
+# Bevy pulls in several versions of some crates; not ours to fix.
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
