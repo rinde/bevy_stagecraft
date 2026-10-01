@@ -83,9 +83,13 @@ lavapipe: `sudo apt-get install -y mesa-vulkan-drivers libvulkan1`. CI does the
 same in its `gpu` job. Linux builds also need
 `libwayland-dev libx11-dev libxkbcommon-dev`.
 
-`.claude/hooks/session-start.sh` is meant to set all of this up for agent
-sessions (tracked in ticket #6; it does not exist yet, so install tools by
-hand until it does). You need `just`, `cargo-machete` and `cargo-deny`.
+`.claude/hooks/session-start.sh` sets all of this up for cloud sessions; it is
+registered as a `SessionStart` hook in `.claude/settings.json`. It installs the
+pinned toolchain (with `rustfmt` and `clippy`), `just`, `cargo-machete` and
+`cargo-deny` (prebuilt via `cargo-binstall`), the lavapipe and Linux build
+libraries, and warms the build cache in the background. It is idempotent and
+does nothing outside cloud sessions. Run it by hand with
+`.claude/hooks/session-start.sh --force` (this also waits for the cache warm-up).
 
 ## Code practices
 
