@@ -15,6 +15,21 @@ The crate is a skeleton: the modules below are being built (see the tickets on
 GitHub). The example shows the intended shape of a scenario; it is a sketch and
 will not compile until the scenario API lands. Update it with the API.
 
+## Headless app and synthetic input
+
+`HeadlessPlugins` runs a real Bevy app, UI included, with no GPU and no
+display. `SyntheticInput` drives it like a mouse and keyboard:
+
+```rust,ignore
+let mut app = App::new();
+app.add_plugins(HeadlessPlugins::default());
+app.finish();
+app.cleanup();
+// ... spawn a Camera2d and a UI ...
+app.world_mut().resource_mut::<SyntheticInput>().move_cursor(Vec2::new(150.0, 50.0));
+app.update();
+```
+
 ## Example scenario
 
 ```rust,ignore

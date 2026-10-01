@@ -5,3 +5,11 @@
 //!
 //! The one rule: this crate **knows nothing about any game**. It takes Bevy
 //! types only.
+
+extern crate alloc;
+
+pub mod headless;
+pub mod input;
+
+pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
+pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};

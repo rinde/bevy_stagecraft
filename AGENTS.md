@@ -45,12 +45,13 @@ rendering sit behind the `gallery` and `record` features.
 
 ## Where to find what
 
-The crate is `crates/rin_bevy_ui_tester`. It is still a skeleton (`lib.rs` is
-doc comments only). Fill in this table as each module lands.
+The crate is `crates/rin_bevy_ui_tester`. Fill in this table as each module
+lands.
 
 | Module     | Purpose                                      | Status  |
 | ---------- | -------------------------------------------- | ------- |
-| `input`    | Scripted pointer and keyboard events         | planned |
+| `headless` | `HeadlessPlugins`: a real Bevy app and UI with no GPU or display (virtual primary window, fixed 1/60 s time) | done |
+| `input`    | `SyntheticInput`: queued mouse and keyboard input, drained in `PreUpdate` into Bevy's input messages and `PointerInput` | done |
 | `scenario` | Scenario definition: setup, view, steps, checks | planned |
 | `player`   | Runs a scenario step by step                 | planned |
 | `targets`  | Finding UI nodes to act on; custom targets   | planned |
