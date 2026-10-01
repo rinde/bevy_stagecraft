@@ -47,3 +47,6 @@ features = [
     "bevy_mesh",
     "bevy_gizmos",
 ]
+
+[lints]
+workspace = true
