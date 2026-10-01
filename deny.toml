@@ -1,16 +1,21 @@
-# Minimal cargo-deny configuration so that `just deny` passes in CI.
-# TODO(#4): issue #4 will flesh this out (stricter bans, exceptions, etc.).
+# cargo-deny configuration, run by `just deny` (and so by `just ci`).
+# Other projects depend on this crate, so what it pulls in is checked here.
 
 [graph]
 all-features = true
 
 [advisories]
 version = 2
+# Vulnerabilities are always denied; unmaintained crates are denied in every
+# workspace and transitive dependency.
 yanked = "deny"
+unmaintained = "all"
+# Every ignore needs the advisory ID, the reason and a date to revisit.
 ignore = [
+    # Revisit by 2027-01-01 (or on the next Bevy upgrade, whichever is first).
     # ttf-parser is unmaintained; reached only via bevy_winit -> winit ->
-    # sctk-adwaita (window decorations). Not ours to fix; revisit on Bevy upgrade.
-    "RUSTSEC-2026-0192",
+    # sctk-adwaita (window decorations). Not ours to fix.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained, only via bevy_winit -> winit -> sctk-adwaita; revisit 2027-01-01" },
 ]
 
 [licenses]
@@ -35,11 +40,38 @@ ignore = true
 
 [bans]
 # Bevy pulls in several versions of some crates; not ours to fix.
-multiple-versions = "allow"
+multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
+skip = [
+    { crate = "accesskit_consumer", reason = "bevy_a11y and winit pull different accesskit generations" },
+    { crate = "bitflags", reason = "1.x and 2.x both in the Bevy graphics/windowing stack" },
+    { crate = "block2", reason = "macOS bindings, objc2 generations differ between winit and wgpu" },
+    { crate = "codespan-reporting", reason = "naga (wgpu) and Bevy shader tooling use different releases" },
+    { crate = "downcast-rs", reason = "Bevy and its asset/ECS crates straddle 1.x and 2.x" },
+    { crate = "foldhash", reason = "hashbrown 0.15 and 0.16 each pin their own foldhash" },
+    { crate = "font-types", reason = "read-fonts/skrifa generations used by cosmic-text and parley" },
+    { crate = "getrandom", reason = "0.3 and 0.4 both used across rand and uuid/ahash stacks" },
+    { crate = "hashbrown", reason = "Bevy, wgpu and indexmap each pin a different hashbrown" },
+    { crate = "jni-sys", reason = "Android bindings differ between winit and its dependencies" },
+    { crate = "linux-raw-sys", reason = "rustix 0.38 and 1.x each use their own" },
+    { crate = "objc2", reason = "macOS bindings, generations differ between winit and wgpu" },
+    { crate = "objc2-foundation", reason = "macOS bindings, generations differ between winit and wgpu" },
+    { crate = "r-efi", reason = "UEFI target support, versions pinned by getrandom generations" },
+    { crate = "read-fonts", reason = "font stack generations differ between cosmic-text and parley" },
+    { crate = "redox_syscall", reason = "Redox target only, several generations in the windowing stack" },
+    { crate = "rustix", reason = "0.38 via older winit/polling deps, 1.x elsewhere" },
+    { crate = "skrifa", reason = "font stack generations differ between cosmic-text and parley" },
+    { crate = "syn", reason = "syn 2 and 3 coexist among proc-macro dependencies" },
+    { crate = "thiserror", reason = "1.x and 2.x both in the Bevy dependency tree" },
+    { crate = "thiserror-impl", reason = "follows thiserror" },
+    { crate = "windows-sys", reason = "several generations in the Windows windowing/IO stack" },
+]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Only crates.io for now. If a rinde git repository is ever needed, add it to
+# `allow-git` explicitly.
+allow-git = []
