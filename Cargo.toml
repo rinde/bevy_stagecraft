@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+# Equal to the toolchain pinned in rust-toolchain.toml (same compiler as rails).
+rust-version = "1.98.1"
+repository = "https://github.com/rinde/rin-bevy-ui-tester"
+publish = false
+
+# Bevy version: must stay exactly in step with rinde/rails. Bevy upgrades land
+# here and in rails together, never in one without the other.
+[workspace.dependencies]
+bevy = { version = "=0.19.1", default-features = false }
+
+# Bevy is unusably slow unoptimised, so dependencies get full optimisation
+# even in dev builds, while our own code stays quick to compile.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
