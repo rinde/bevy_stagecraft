@@ -1,0 +1,6 @@
+disallowed-methods = [
+    { path = "bevy::prelude::Query::single", reason = "panics or errors on zero/multiple matches; handle the Result explicitly" },
+    { path = "bevy::prelude::Query::single_mut", reason = "panics or errors on zero/multiple matches; handle the Result explicitly" },
+    { path = "bevy::prelude::World::resource", reason = "panics if the resource is missing; use get_resource and handle None" },
+    { path = "bevy::prelude::World::resource_mut", reason = "panics if the resource is missing; use get_resource_mut and handle None" },
+]

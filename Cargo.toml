@@ -21,3 +21,63 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+# Bevy system parameters (`Query<..>`, `Res<..>`) carry elided lifetimes in
+# their paths everywhere; spelling them out would be noise.
+elided_lifetimes_in_paths = "allow"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+# Restriction lints.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+float_cmp_const = "deny"
+mem_forget = "deny"
+rest_pat_in_fully_bound_structs = "deny"
+str_to_string = "deny"
+verbose_file_reads = "deny"
+# Worth having in a library.
+allow_attributes_without_reason = "deny"
+allow_attributes = "deny"
+missing_assert_message = "deny"
+undocumented_unsafe_blocks = "deny"
+# Rule: public enums that may grow carry #[non_exhaustive] instead.
+std_instead_of_core = "deny"
+alloc_instead_of_core = "deny"
+# Allowances carried over from rails.
+# Bevy pulls in several versions of the same transitive crates; not ours to fix.
+multiple_crate_versions = "allow"
+# Bevy systems take many parameters by design.
+too_many_arguments = "allow"
+# Bevy system parameters (Res, Query, Commands) are taken by value.
+needless_pass_by_value = "allow"
+# Bevy query types are complex by nature.
+type_complexity = "allow"
+# Names such as `ui::UiScenario` read better at call sites when re-exported.
+module_name_repetitions = "allow"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+# Allowed because docs are built with --document-private-items.
+private_intra_doc_links = "allow"
