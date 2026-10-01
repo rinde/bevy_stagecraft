@@ -11,9 +11,8 @@ This is private software.
 
 ## Status
 
-The crate is a skeleton: the modules below are being built (see the tickets on
-GitHub). The example shows the intended shape of a scenario; it is a sketch and
-will not compile until the scenario API lands. Update it with the API.
+The crate is being built up ticket by ticket (see the tickets on GitHub).
+Headless scenarios work today; recording and the gallery are still to come.
 
 ## Headless app and synthetic input
 
@@ -32,20 +31,34 @@ app.update();
 
 ## Example scenario
 
+A scenario is plain data: steps, with time counted in frames of 1/60 s, and
+checks referred to by name. `run_headless` builds a headless app, runs the
+setup hook, plays the steps and returns a `ScenarioReport`.
+
 ```rust,ignore
-use rin_bevy_ui_tester::prelude::*;
+use rin_bevy_ui_tester::{Scenario, Step, Target};
 
 #[test]
 fn clicking_the_button_increments_the_counter() {
-    Scenario::new("counter")
-        .setup(|world| spawn_counter_ui(world))      // build a plain Bevy UI
-        .step(Step::move_pointer_to(Target::text("Add")))
-        .step(Step::click())
-        .step(Step::press_key(KeyCode::Tab))
-        .check("counter shows 1", |probe| probe.text("Count") == "1")
+    let report = Scenario::new("counter")
+        .setup(spawn_counter_ui)                 // build a plain Bevy UI
+        .steps([
+            Step::move_to(Target::text("Add")),  // fails if something covers it
+            Step::click(),
+            Step::wait(1),
+            Step::check("counter shows 1"),
+        ])
+        .check("counter shows 1", |probe| probe.has_text("1"))
         .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
 }
 ```
+
+Targets are `Target::screen`, `Target::text` (any Bevy UI toolkit),
+`Target::world` and `Target::custom`, which an app backs with a resolver
+registered in `TargetResolvers`. After moving onto a widget target the player
+checks that the widget, or a descendant, is under the pointer, and otherwise
+fails naming what covers it. A failed step skips the rest of the script.
 
 ## Depending on it from a private git repository
 

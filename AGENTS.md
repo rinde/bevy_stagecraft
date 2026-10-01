@@ -52,10 +52,10 @@ lands.
 | ---------- | -------------------------------------------- | ------- |
 | `headless` | `HeadlessPlugins`: a real Bevy app and UI with no GPU or display (virtual primary window, fixed 1/60 s time) | done |
 | `input`    | `SyntheticInput`: queued mouse and keyboard input, drained in `PreUpdate` into Bevy's input messages and `PointerInput` | done |
-| `scenario` | Scenario definition: setup, view, steps, checks | planned |
-| `player`   | Runs a scenario step by step                 | planned |
-| `targets`  | Finding UI nodes to act on; custom targets   | planned |
-| `probe`    | Reading state out of the world; custom probes | planned |
+| `scenario` | `Scenario` builder (setup, view, steps, named checks, expects), `Step`, `Modifiers` | done |
+| `player`   | `ScenarioPlayerPlugin`: plays a scenario through `SyntheticInput` one frame per update into the `ScenarioReport` resource; `Scenario::run_headless` / `run_in` | done |
+| `targets`  | `Target` (screen, text, world, custom) and the `TargetResolvers` extension point | done |
+| `probe`    | `Probe` over the `World` with generic helpers (`count`, `hovered`, `resource`, `has_text`) | done |
 | `recorder` | Offscreen recording (feature `record`)       | planned |
 | `overlay`  | Pointer and step overlay drawn on frames     | planned |
 | `gallery`  | Playback in a window (feature `gallery`)     | planned |
