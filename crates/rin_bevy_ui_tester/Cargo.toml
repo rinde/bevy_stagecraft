@@ -1,0 +1,49 @@
+[package]
+name = "rin_bevy_ui_tester"
+version = "0.1.0"
+description = "Scripted pointer and keyboard scenarios for testing Bevy UI headlessly"
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Offscreen rendering, used to record scenarios for review.
+record = [
+    "bevy/bevy_core_pipeline",
+    "bevy/bevy_ui_render",
+    "bevy/bevy_render",
+]
+# A real window, used to play recordings back in the gallery.
+gallery = ["bevy/bevy_winit", "bevy/x11", "bevy/wayland"]
+
+[dependencies]
+# Deliberately no audio, gamepad or dynamic_linking: a library must not force
+# those on whoever depends on it.
+[dependencies.bevy]
+workspace = true
+features = [
+    # Minimum to run headless: windows, mouse and keyboard input, and focus
+    # (bevy_input itself is always on).
+    "bevy_window",
+    "mouse",
+    "keyboard",
+    "bevy_input_focus",
+    # Picking, so scripted pointers hit UI nodes.
+    "bevy_picking",
+    "ui_picking",
+    # UI itself and its widgets.
+    "bevy_ui",
+    "bevy_ui_widgets",
+    # Text, with the bundled font so tests need no assets.
+    "bevy_text",
+    "default_font",
+    # Assets, cameras, and the types UI layout and rendering refer to.
+    "bevy_asset",
+    "bevy_camera",
+    "bevy_render",
+    "bevy_image",
+    "bevy_mesh",
+    "bevy_gizmos",
+]
