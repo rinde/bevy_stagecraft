@@ -1,0 +1,631 @@
+//! Recording a scenario from a real session.
+//!
+//! Use the app by hand and save what was done as a scenario file, which then
+//! runs in tests, the recorder and the gallery like any other.
+//!
+//! [`SessionPlugin`] watches the real mouse and keyboard of the primary
+//! window. Between [`start`] and [`stop`] (or the gallery's **Record**
+//! button) it logs input against a frame counter at the fixed 1/60 s, so the
+//! script plays back the same whatever frame rate the session ran at. On stop
+//! the log becomes readable steps (see [`steps_from_events`]):
+//!
+//! * runs of moves become `Glide`s along a simplified path;
+//! * a press and release in place becomes a `Click`, a straight press, move
+//!   and release a `Drag`;
+//! * a click on a UI node with a label becomes `Target::text(..)`; anything
+//!   else is offered to the app's [`SessionHooks::resolve_target`] hook and
+//!   stays `screen(..)` if the app has no answer;
+//! * idle time beyond a threshold is shortened to a short `Wait`.
+//!
+//! # What the app plugs in
+//!
+//! The crate knows nothing about the app, so [`SessionHooks`] is the
+//! extension point:
+//!
+//! * [`SessionHooks::capture_setup`] runs on start and writes whatever the
+//!   app needs to get back to this state (rails writes a save file into the
+//!   directory), returning what the script's `setup` should say;
+//! * [`SessionHooks::capture_view`] names the view the app is in;
+//! * [`SessionHooks::resolve_target`] turns a click position into an
+//!   app-defined target (rails turns ground clicks into lattice points);
+//! * [`SessionHooks::state`] reads the app's state as plain `key: value`
+//!   text. The difference between start and stop is written into the script
+//!   as `expect_state`, which the person can keep, edit or delete; a loaded
+//!   script checks it with the same probe set in [`crate::Registry::state`].
+//!
+//! # Limits
+//!
+//! Only the primary window is recorded, and nothing carrying
+//! [`crate::NotUnderTest`] is ever named as a target. A click on a label plays
+//! back on the middle of the labelled node, not on the exact pixel. Typed
+//! text is not recorded, only key presses. Touch is not recorded.
+
+use alloc::collections::BTreeMap;
+use core::{fmt, time::Duration};
+use std::{fs, path::PathBuf};
+
+use bevy::{
+    app::{App, Plugin, PreUpdate},
+    ecs::{
+        entity::Entity,
+        message::{MessageCursor, Messages},
+        query::With,
+        resource::Resource,
+        schedule::{IntoScheduleConfigs, SystemSet},
+        world::World,
+    },
+    input::{
+        ButtonState,
+        keyboard::{KeyCode, KeyboardInput},
+        mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
+    },
+    math::Vec2,
+    time::{Real, Time},
+    window::{CursorMoved, PrimaryWindow, Window},
+};
+
+mod hooks;
+mod log;
+mod target;
+
+pub use hooks::SessionHooks;
+pub use log::{RecordedEvent, RecordedKind, StepOptions, steps_from_events};
+
+use crate::{
+    headless::FRAME_STEP,
+    script::{FORMAT_VERSION, Script},
+};
+
+/// How many pixels one line of mouse wheel is worth in a script, which turns
+/// the wheel in pixels.
+pub const LINE_PIXELS: f32 = 24.0;
+
+/// System sets of the session recorder, in `PreUpdate`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SessionSystems {
+    /// Logs the real input of this update and carries out start and stop
+    /// requests. After the gallery has sorted the real input, so what it
+    /// removed is not logged.
+    Record,
+}
+
+/// Where recordings go and what the app plugs in.
+#[derive(Resource, Debug, Clone)]
+pub struct SessionConfig {
+    /// The directory the script and whatever the setup hook wrote go to.
+    pub dir: PathBuf,
+    /// What the app plugs in.
+    pub hooks: SessionHooks,
+    /// The thresholds that turn the log into steps.
+    pub options: StepOptions,
+}
+
+/// Records sessions into `dir`; see the [module documentation](self).
+#[derive(Debug, Clone)]
+pub struct SessionPlugin {
+    /// The configuration to insert.
+    config: SessionConfig,
+}
+
+impl SessionPlugin {
+    /// A recorder that writes into `dir` and has no hooks.
+    #[must_use]
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            config: SessionConfig {
+                dir: dir.into(),
+                hooks: SessionHooks::default(),
+                options: StepOptions::default(),
+            },
+        }
+    }
+
+    /// Sets what the app plugs in.
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: SessionHooks) -> Self {
+        self.config.hooks = hooks;
+        self
+    }
+
+    /// Sets the thresholds that turn the log into steps.
+    #[must_use]
+    pub const fn with_options(mut self, options: StepOptions) -> Self {
+        self.config.options = options;
+        self
+    }
+}
+
+impl Plugin for SessionPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(self.config.clone())
+            .init_resource::<SessionRecorder>()
+            .add_systems(PreUpdate, record_session.in_set(SessionSystems::Record));
+    }
+}
+
+/// Starting or stopping a session failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionError(String);
+
+impl SessionError {
+    /// An error with this message.
+    fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl core::error::Error for SessionError {}
+
+/// A session that was written out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedSession {
+    /// The `.ron` file.
+    pub path: PathBuf,
+    /// What was written to it.
+    pub script: Script,
+}
+
+/// A request to start or stop, made without access to the whole world.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Request {
+    /// Start a session called this.
+    Start(String),
+    /// Stop and save.
+    Stop,
+}
+
+/// A session in progress.
+struct Active {
+    /// The scenario's name.
+    name: String,
+    /// File name without extension, shared with the setup hook.
+    stem: String,
+    /// Window size at the start, in logical pixels.
+    window_size: Option<(u32, u32)>,
+    /// What the setup hook said.
+    setup: Option<crate::script::Setup>,
+    /// What the view hook said.
+    view: Option<String>,
+    /// The app's state at the start.
+    before: Option<BTreeMap<String, String>>,
+    /// Real time spent recording.
+    elapsed: Duration,
+    /// The log so far.
+    events: Vec<RecordedEvent>,
+    /// Where the cursor is in the primary window.
+    cursor: Option<Vec2>,
+    /// Buttons held down, so a stop never leaves one pressed in the log.
+    held_buttons: Vec<MouseButton>,
+    /// Keys held down.
+    held_keys: Vec<KeyCode>,
+}
+
+/// The session recorder: whether a session is on, and the last result.
+///
+/// Start and stop with [`SessionRecorder::request_start`] and
+/// [`SessionRecorder::request_stop`] (carried out at the next update), or
+/// straight away with [`start`] and [`stop`].
+#[derive(Resource, Default)]
+pub struct SessionRecorder {
+    /// The session in progress.
+    active: Option<Active>,
+    /// What was asked and not yet done.
+    request: Option<Request>,
+    /// What the last stop or failed start came to.
+    last: Option<Result<SavedSession, SessionError>>,
+    /// How far each kind of message has been read.
+    cursors: Cursors,
+}
+
+impl fmt::Debug for SessionRecorder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionRecorder")
+            .field("recording", &self.active.is_some())
+            .field("request", &self.request)
+            .field("last", &self.last)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Where this recorder has read up to in each kind of message.
+#[derive(Default)]
+struct Cursors {
+    /// Cursor movement.
+    moved: MessageCursor<CursorMoved>,
+    /// Mouse buttons.
+    buttons: MessageCursor<MouseButtonInput>,
+    /// The wheel.
+    wheel: MessageCursor<MouseWheel>,
+    /// Keys.
+    keys: MessageCursor<KeyboardInput>,
+}
+
+impl SessionRecorder {
+    /// Whether a session is being recorded.
+    #[must_use]
+    pub const fn is_recording(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// Asks for a session called `name` to start at the next update.
+    pub fn request_start(&mut self, name: impl Into<String>) {
+        self.request = Some(Request::Start(name.into()));
+    }
+
+    /// Asks for the session to stop and be saved at the next update.
+    pub fn request_stop(&mut self) {
+        self.request = Some(Request::Stop);
+    }
+
+    /// What the last stop, or a start that failed, came to.
+    #[must_use]
+    pub const fn last(&self) -> Option<&Result<SavedSession, SessionError>> {
+        self.last.as_ref()
+    }
+}
+
+/// Starts recording a session called `name`, straight away: the app's setup
+/// hook runs now and the state it captures is where playback will begin.
+///
+/// # Errors
+///
+/// [`SessionError`] when a session is already on, when the plugin is not
+/// added, or when the setup hook or the directory fails; nothing is
+/// recorded then.
+pub fn start(world: &mut World, name: &str) -> Result<(), SessionError> {
+    with_recorder(world, |world, recorder, config| {
+        recorder.begin(world, config, name)
+    })
+}
+
+/// Stops the session and writes it out.
+///
+/// # Errors
+///
+/// [`SessionError`] when no session is on or the file cannot be written.
+pub fn stop(world: &mut World) -> Result<SavedSession, SessionError> {
+    with_recorder(world, |world, recorder, config| {
+        recorder.finish(world, config)
+    })
+}
+
+/// Runs `body` with the recorder and the configuration taken out of `world`.
+fn with_recorder<T>(
+    world: &mut World,
+    body: impl FnOnce(&mut World, &mut SessionRecorder, &SessionConfig) -> Result<T, SessionError>,
+) -> Result<T, SessionError> {
+    let config = world
+        .get_resource::<SessionConfig>()
+        .cloned()
+        .ok_or_else(|| SessionError::new("the session plugin is not added"))?;
+    let mut recorder = world
+        .remove_resource::<SessionRecorder>()
+        .ok_or_else(|| SessionError::new("the session plugin is not added"))?;
+    let result = body(world, &mut recorder, &config);
+    world.insert_resource(recorder);
+    result
+}
+
+/// The frame of 1/60 s that `elapsed` falls in, rounded to the nearest.
+fn frame_of(elapsed: Duration) -> u32 {
+    let step = FRAME_STEP.as_nanos().max(1);
+    u32::try_from((elapsed.as_nanos() + step / 2) / step).unwrap_or(u32::MAX)
+}
+
+/// The system: logs this update's real input and carries out requests.
+fn record_session(world: &mut World) {
+    let Some(config) = world.get_resource::<SessionConfig>().cloned() else {
+        return;
+    };
+    let Some(mut recorder) = world.remove_resource::<SessionRecorder>() else {
+        return;
+    };
+    recorder.log(world, &config);
+    match recorder.request.take() {
+        Some(Request::Start(name)) => {
+            let result = recorder.begin(world, &config, &name);
+            if let Err(error) = result {
+                bevy::log::warn!("cannot start recording a session: {error}");
+                recorder.last = Some(Err(error));
+            }
+        }
+        Some(Request::Stop) => {
+            let result = recorder.finish(world, &config);
+            if let Err(error) = &result {
+                bevy::log::warn!("cannot save the session: {error}");
+            }
+            recorder.last = Some(result);
+        }
+        None => {}
+    }
+    world.insert_resource(recorder);
+}
+
+/// A position as the log keeps it, to a tenth of a pixel, so a file does not
+/// fill up with digits nobody needs.
+fn tidy(position: Vec2) -> Vec2 {
+    (position * 10.0).round() / 10.0
+}
+
+/// The primary window and its cursor, if it has both.
+fn primary_window(world: &mut World) -> Option<(Entity, Option<Vec2>)> {
+    let entity = world
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .iter(world)
+        .next()?;
+    let cursor = world
+        .get::<Window>(entity)
+        .and_then(Window::cursor_position);
+    Some((entity, cursor))
+}
+
+/// Takes what `cursor` has not read yet out of the world's messages.
+fn unread<M: bevy::ecs::message::Message + Clone>(
+    world: &World,
+    cursor: &mut MessageCursor<M>,
+) -> Vec<M> {
+    world
+        .get_resource::<Messages<M>>()
+        .map(|messages| cursor.read(messages).cloned().collect())
+        .unwrap_or_default()
+}
+
+impl SessionRecorder {
+    /// Logs this update's real input, or skips it when not recording.
+    fn log(&mut self, world: &mut World, config: &SessionConfig) {
+        let moves = unread(world, &mut self.cursors.moved);
+        let buttons = unread(world, &mut self.cursors.buttons);
+        let wheel = unread(world, &mut self.cursors.wheel);
+        let keys = unread(world, &mut self.cursors.keys);
+        let delta = world
+            .get_resource::<Time<Real>>()
+            .map_or(FRAME_STEP, Time::delta);
+        let Some((window, _)) = primary_window(world) else {
+            return;
+        };
+        let Some(active) = self.active.as_mut() else {
+            return;
+        };
+        active.elapsed += delta;
+        let frame = frame_of(active.elapsed);
+        let world: &World = world;
+
+        // Messages of different kinds are not ordered against each other, so
+        // within an update the cursor has moved before anything is pressed.
+        if let Some(position) = moves
+            .iter()
+            .filter(|moved| moved.window == window)
+            .map(|moved| tidy(moved.position))
+            .next_back()
+        {
+            active.cursor = Some(position);
+            active.events.push(RecordedEvent {
+                frame,
+                kind: RecordedKind::Moved(position),
+            });
+        }
+        for press in buttons.iter().filter(|press| press.window == window) {
+            let Some(position) = active.cursor else {
+                continue;
+            };
+            match press.state {
+                ButtonState::Pressed => active.held_buttons.push(press.button),
+                ButtonState::Released => active.held_buttons.retain(|held| *held != press.button),
+            }
+            active.events.push(RecordedEvent {
+                frame,
+                kind: RecordedKind::Button {
+                    button: press.button,
+                    state: press.state,
+                    position,
+                    target: target::classify(world, &config.hooks, position),
+                },
+            });
+        }
+        for turn in wheel.iter().filter(|turn| turn.window == window) {
+            let Some(position) = active.cursor else {
+                continue;
+            };
+            let scale = match turn.unit {
+                MouseScrollUnit::Line => LINE_PIXELS,
+                MouseScrollUnit::Pixel => 1.0,
+            };
+            active.events.push(RecordedEvent {
+                frame,
+                kind: RecordedKind::Wheel {
+                    x: turn.x * scale,
+                    y: turn.y * scale,
+                    position,
+                },
+            });
+        }
+        // The operating system repeats a held key; a script holds it once.
+        for key in keys
+            .iter()
+            .filter(|key| key.window == window && !key.repeat)
+        {
+            match key.state {
+                ButtonState::Pressed => active.held_keys.push(key.key_code),
+                ButtonState::Released => active.held_keys.retain(|held| *held != key.key_code),
+            }
+            active.events.push(RecordedEvent {
+                frame,
+                kind: RecordedKind::Key {
+                    key: key.key_code,
+                    state: key.state,
+                },
+            });
+        }
+    }
+
+    /// Starts a session: captures the setup, the view and the state, notes
+    /// the window size, and begins logging from the next update.
+    fn begin(
+        &mut self,
+        world: &mut World,
+        config: &SessionConfig,
+        name: &str,
+    ) -> Result<(), SessionError> {
+        if self.active.is_some() {
+            return Err(SessionError::new("a session is already being recorded"));
+        }
+        fs::create_dir_all(&config.dir).map_err(|error| {
+            SessionError::new(format!("cannot create {}: {error}", config.dir.display()))
+        })?;
+        let stem = free_stem(&config.dir, name);
+        let setup = config
+            .hooks
+            .run_capture_setup(world, &config.dir, &stem)
+            .map_err(|error| SessionError::new(format!("the setup hook failed: {error}")))?;
+        let view = config.hooks.run_capture_view(world);
+        let before = config.hooks.snapshot(world);
+        let (_, cursor) = primary_window(world).unzip();
+        let window_size = world
+            .query_filtered::<&Window, With<PrimaryWindow>>()
+            .iter(world)
+            .next()
+            .map(|window| {
+                let size = window.resolution.size().round().as_uvec2();
+                (size.x, size.y)
+            });
+        // Whatever arrived before now is not part of the session.
+        drop(unread(world, &mut self.cursors.moved));
+        drop(unread(world, &mut self.cursors.buttons));
+        drop(unread(world, &mut self.cursors.wheel));
+        drop(unread(world, &mut self.cursors.keys));
+        self.active = Some(Active {
+            name: name.to_owned(),
+            stem,
+            window_size,
+            setup,
+            view,
+            before,
+            elapsed: Duration::ZERO,
+            events: Vec::new(),
+            cursor: cursor.flatten(),
+            held_buttons: Vec::new(),
+            held_keys: Vec::new(),
+        });
+        Ok(())
+    }
+
+    /// Ends the session and writes the script.
+    fn finish(
+        &mut self,
+        world: &World,
+        config: &SessionConfig,
+    ) -> Result<SavedSession, SessionError> {
+        let mut active = self
+            .active
+            .take()
+            .ok_or_else(|| SessionError::new("no session is being recorded"))?;
+        let end = frame_of(active.elapsed);
+        // A button or key still down when the person stops is let go, so the
+        // script never ends with one stuck.
+        let position = active.cursor.unwrap_or(Vec2::ZERO);
+        for button in core::mem::take(&mut active.held_buttons) {
+            active.events.push(RecordedEvent {
+                frame: end,
+                kind: RecordedKind::Button {
+                    button,
+                    state: ButtonState::Released,
+                    position,
+                    target: crate::targets::Target::screen(position),
+                },
+            });
+        }
+        for key in core::mem::take(&mut active.held_keys) {
+            active.events.push(RecordedEvent {
+                frame: end,
+                kind: RecordedKind::Key {
+                    key,
+                    state: ButtonState::Released,
+                },
+            });
+        }
+        let steps = steps_from_events(&active.events, end, &config.options);
+        let after = config.hooks.snapshot(world);
+        let expect_state = match (&active.before, after) {
+            (Some(before), Some(after)) => after
+                .into_iter()
+                .filter(|(key, value)| before.get(key) != Some(value))
+                .collect(),
+            _ => BTreeMap::new(),
+        };
+        let script = Script {
+            format_version: FORMAT_VERSION,
+            name: active.name,
+            window_size: active.window_size,
+            setup: active.setup,
+            view: active.view,
+            steps,
+            expect: Vec::new(),
+            expect_state,
+        };
+        let ron = script
+            .to_ron()
+            .map_err(|error| SessionError::new(error.to_string()))?;
+        let text = format!("{HEADER}{ron}\n");
+        let path = config.dir.join(format!("{}.ron", active.stem));
+        fs::write(&path, text).map_err(|error| {
+            SessionError::new(format!("cannot write {}: {error}", path.display()))
+        })?;
+        let saved = SavedSession { path, script };
+        self.last = Some(Ok(saved.clone()));
+        Ok(saved)
+    }
+}
+
+/// What a recorded file starts with. RON allows comments, and this tells the
+/// person what they may change.
+const HEADER: &str = "\
+// Recorded from a session. Edit freely.
+// `steps` are what was done: glides, clicks and drags, with long idle time
+// shortened. `expect_state` is what changed in the app's state while
+// recording; keep the lines you want checked and delete the rest.
+";
+
+/// A file-name-safe version of `name` that no file in `dir` has yet.
+fn free_stem(dir: &std::path::Path, name: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let stem = if stem.is_empty() {
+        "session".to_owned()
+    } else {
+        stem
+    };
+    let mut candidate = stem.clone();
+    let mut number = 1_u32;
+    while dir.join(format!("{candidate}.ron")).exists() {
+        number += 1;
+        candidate = format!("{stem}-{number}");
+    }
+    candidate
+}
+
+/// Shared by the gallery: a path shown to the person.
+impl SavedSession {
+    /// How the save reads in a status line.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "Saved {} ({} steps)",
+            self.path.display(),
+            self.script.steps.len()
+        )
+    }
+}

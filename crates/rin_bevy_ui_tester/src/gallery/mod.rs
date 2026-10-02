@@ -41,6 +41,15 @@
 //! plays or pauses, Right steps one frame, Down steps to the next step, Left
 //! restarts.
 //!
+//! # Recording
+//!
+//! **Record** starts a [session recording](crate::session) from what is on
+//! screen: the script pauses, the primary window is taken over, and the real
+//! mouse and keyboard of that window are logged until **Stop recording**,
+//! which writes a `.ron` file into the export directory. Nothing in the
+//! Scenarios window is recorded, and its nodes are never named as targets.
+//! Selecting, restarting, playing or stepping is refused while recording.
+//!
 //! The app's reset hook must put the app's own state back and nothing else:
 //! it must not despawn the gallery's, the overlay's or the cameras of the
 //! Scenarios window.
@@ -65,13 +74,14 @@ mod ui;
 
 pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
 pub use input::scenarios_pointer;
-pub use state::{GalleryAction, GalleryPhase, GalleryState, PendingStep, Speed};
+pub use state::{GalleryAction, GalleryPhase, GalleryState, PendingStep, Recording, Speed};
 pub use ui::{GalleryToolbar, SCENARIOS_WINDOW_SIZE, ScenariosCamera, ScenariosWindow};
 
 use crate::{
     input::{SyntheticInputPlugin, SyntheticInputSystems},
     overlay::CursorOverlayPlugin,
     player::{ExternallyDriven, ScenarioPlayerPlugin, ScenarioSystems},
+    session::{SessionHooks, SessionPlugin, SessionSystems},
 };
 
 /// How many updates a loop waits before starting again, unless configured.
@@ -131,6 +141,8 @@ pub struct GalleryPlugin {
     export_dir: PathBuf,
     /// Updates between loops.
     loop_pause: u16,
+    /// What the app plugs into **Record**.
+    session_hooks: SessionHooks,
 }
 
 impl GalleryPlugin {
@@ -143,7 +155,17 @@ impl GalleryPlugin {
             reset: None,
             export_dir: PathBuf::from("gallery-export"),
             loop_pause: DEFAULT_LOOP_PAUSE,
+            session_hooks: SessionHooks::default(),
         }
+    }
+
+    /// Sets what the app plugs into **Record**: capturing its setup, naming
+    /// targets, and reading its state. Recordings go to the export directory.
+    /// Ignored when the app added its own [`SessionPlugin`].
+    #[must_use]
+    pub fn with_session_hooks(mut self, hooks: SessionHooks) -> Self {
+        self.session_hooks = hooks;
+        self
     }
 
     /// Sets the hook that puts the app's state back before every run: despawn
@@ -181,6 +203,11 @@ impl Plugin for GalleryPlugin {
         if !app.is_plugin_added::<CursorOverlayPlugin>() {
             app.add_plugins(CursorOverlayPlugin);
         }
+        if !app.is_plugin_added::<SessionPlugin>() {
+            app.add_plugins(
+                SessionPlugin::new(self.export_dir.clone()).with_hooks(self.session_hooks.clone()),
+            );
+        }
         app.init_resource::<PointerInputSettings>()
             .init_resource::<input::ScenariosScroll>()
             .init_resource::<input::RealCursor>()
@@ -203,6 +230,11 @@ impl Plugin for GalleryPlugin {
         .configure_sets(
             PreUpdate,
             GallerySystems::Drive.in_set(ScenarioSystems::Play),
+        )
+        // Real input the gallery removed must not end up in a recording.
+        .configure_sets(
+            PreUpdate,
+            SessionSystems::Record.after(GallerySystems::Requests),
         )
         .add_systems(Startup, (ui::spawn_window, input::spawn_scenarios_pointer))
         .add_systems(

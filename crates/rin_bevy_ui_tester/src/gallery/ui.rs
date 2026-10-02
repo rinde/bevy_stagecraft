@@ -89,6 +89,8 @@ pub(super) enum Control {
     TakeOver,
     /// Export.
     Export,
+    /// Start or stop recording a session.
+    Record,
     /// A catalogue entry.
     Entry(usize),
 }
@@ -144,6 +146,12 @@ fn control_text(control: Control, state: &GalleryState) -> String {
         }
         .into(),
         Control::Export => "Export RON".into(),
+        Control::Record => if state.is_recording() {
+            "Stop recording"
+        } else {
+            "Record"
+        }
+        .into(),
         Control::Entry(_) => String::new(),
     }
 }
@@ -165,6 +173,13 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
             }
         }
         Control::Export => GalleryAction::Export,
+        Control::Record => {
+            if state.is_recording() {
+                GalleryAction::StopRecording
+            } else {
+                GalleryAction::Record
+            }
+        }
         Control::Entry(index) => GalleryAction::Select(index),
     }
 }
@@ -281,6 +296,7 @@ pub(super) fn spawn_window(
             .with_children(|row| {
                 button(row, Control::TakeOver, &state);
                 button(row, Control::Export, &state);
+                button(row, Control::Record, &state);
             });
             root.spawn((
                 StatusLine,
@@ -378,6 +394,7 @@ pub(super) fn style_controls(
             Control::Speed(speed) => state.speed() == *speed,
             Control::Loop => state.is_looping(),
             Control::TakeOver => state.is_taken_over(),
+            Control::Record => state.is_recording(),
             Control::Entry(index) => state.selected() == Some(*index),
             Control::StepFrame | Control::StepStep | Control::Restart | Control::Export => false,
         };

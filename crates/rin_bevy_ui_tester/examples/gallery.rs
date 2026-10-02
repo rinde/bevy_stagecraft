@@ -7,9 +7,29 @@
 //! The app is a counter with a "+1" button, a reset button and a switch. Its
 //! scenarios are in the **Scenarios** window; pick one to watch it play, loop,
 //! pause, step, or take over the app with the real mouse.
+//!
+//! **Record** saves what you do by hand as a `.ron` file in `recordings/`,
+//! with the counter and switch as they were when you pressed it. Files in
+//! that directory show up under "Recorded" the next time the example starts.
+//! With `--record` the session starts straight away and is saved when the app
+//! window is closed:
+//!
+//! ```text
+//! cargo run --example gallery --features gallery -- --record
+//! ```
 
-use bevy::{ecs::system::IntoObserverSystem, prelude::*, ui::px, ui_widgets::Activate};
-use rin_bevy_ui_tester::{Gallery, GalleryEntry, GalleryPlugin, Scenario, Step, Target};
+use std::{fs, path::Path};
+
+use bevy::{
+    app::AppExit, ecs::system::IntoObserverSystem, prelude::*, ui::px, ui_widgets::Activate,
+};
+use rin_bevy_ui_tester::{
+    Gallery, GalleryEntry, GalleryPlugin, Registry, Scenario, Script, SessionHooks,
+    SessionRecorder, StateProbe, Step, Target, script::Setup, session,
+};
+
+/// Where recordings are written, and read from at startup.
+const RECORDINGS: &str = "recordings";
 
 /// The size of the app's window, in logical pixels.
 const WINDOW: (u32, u32) = (640, 360);
@@ -204,7 +224,119 @@ fn gallery() -> Gallery {
         )
 }
 
+/// The app's state as text: what a recording starts from and what it checks.
+fn state_probe() -> StateProbe {
+    StateProbe::new(|world| {
+        let count = world.get_resource::<Counter>().map_or(0, |c| c.0);
+        let on = world.get_resource::<Switch>().is_some_and(|s| s.0);
+        [
+            ("count".to_owned(), count.to_string()),
+            (
+                "switch".to_owned(),
+                if on { "on" } else { "off" }.to_owned(),
+            ),
+        ]
+        .into()
+    })
+}
+
+/// What a recording needs of the app: its starting state, written next to the
+/// script as `<name>.setup.txt` ("count switch").
+fn session_hooks() -> SessionHooks {
+    SessionHooks::new()
+        .capture_setup(|world, dir, stem| {
+            let count = world.get_resource::<Counter>().map_or(0, |c| c.0);
+            let on = world.get_resource::<Switch>().is_some_and(|s| s.0);
+            let file = format!("{stem}.setup.txt");
+            fs::write(dir.join(&file), format!("{count} {on}")).map_err(|e| e.to_string())?;
+            Ok(Some(Setup::File(file)))
+        })
+        .state(state_probe())
+}
+
+/// The app set up as a recording's setup file says.
+fn setup_from(text: &str) -> impl Fn(&mut World) + Send + Sync + 'static {
+    let mut fields = text.split_whitespace();
+    let count: u32 = fields.next().and_then(|c| c.parse().ok()).unwrap_or(0);
+    let on = fields.next() == Some("true");
+    move |world| {
+        spawn_app(world);
+        world.insert_resource(Counter(count));
+        world.insert_resource(Switch(on));
+    }
+}
+
+/// Loads every recording in [`RECORDINGS`], with the app's own names resolved.
+fn recorded() -> Vec<GalleryEntry> {
+    let registry = Registry::default().with_state(state_probe());
+    let Ok(files) = fs::read_dir(RECORDINGS) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<_> = files
+        .filter_map(|file| file.ok().map(|file| file.path()))
+        .filter(|path| path.extension().is_some_and(|e| e == "ron"))
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|path| load(&path, &registry))
+        .map(|scenario| GalleryEntry::new(scenario.window_size(WINDOW.0, WINDOW.1)))
+        .collect()
+}
+
+/// One recording as a scenario, or `None` (with a warning) when it will not
+/// load.
+fn load(path: &Path, registry: &Registry) -> Option<Scenario> {
+    let loaded = fs::read_to_string(path)
+        .map_err(|error| error.to_string())
+        .and_then(|text| Script::from_ron(&text).map_err(|error| error.to_string()))
+        .and_then(|script| {
+            let setup = match &script.setup {
+                Some(Setup::File(file)) => fs::read_to_string(path.with_file_name(file))
+                    .map_err(|error| error.to_string())?,
+                _ => String::new(),
+            };
+            let scenario = Scenario::from_script(script, registry).map_err(|e| e.to_string())?;
+            Ok(scenario.setup(setup_from(&setup)))
+        });
+    match loaded {
+        Ok(scenario) => Some(scenario),
+        Err(error) => {
+            warn!("skipping {}: {error}", path.display());
+            None
+        }
+    }
+}
+
+/// With `--record`: starts a session as soon as the app is up.
+fn record_from_the_command_line(mut recorder: ResMut<SessionRecorder>) {
+    if std::env::args().any(|arg| arg == "--record") {
+        recorder.request_start("Recorded session");
+    }
+}
+
+/// Saves a session still in progress when the app is closing.
+fn save_on_exit(world: &mut World) {
+    let closing = world
+        .get_resource::<Messages<AppExit>>()
+        .is_some_and(|messages| !messages.is_empty());
+    let recording = world
+        .get_resource::<SessionRecorder>()
+        .is_some_and(SessionRecorder::is_recording);
+    if closing && recording {
+        match session::stop(world) {
+            Ok(saved) => info!("{}", saved.describe()),
+            Err(error) => error!("{error}"),
+        }
+    }
+}
+
 fn main() -> AppExit {
+    let mut gallery = gallery();
+    let recordings = recorded();
+    if !recordings.is_empty() {
+        gallery = gallery.group("Recorded", recordings);
+    }
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -217,6 +349,13 @@ fn main() -> AppExit {
         .init_resource::<Counter>()
         .init_resource::<Switch>()
         .add_systems(Update, show_state)
-        .add_plugins(GalleryPlugin::new(gallery()).with_reset(reset_app))
+        .add_systems(Startup, record_from_the_command_line)
+        .add_systems(Last, save_on_exit)
+        .add_plugins(
+            GalleryPlugin::new(gallery)
+                .with_reset(reset_app)
+                .with_export_dir(RECORDINGS)
+                .with_session_hooks(session_hooks()),
+        )
         .run()
 }

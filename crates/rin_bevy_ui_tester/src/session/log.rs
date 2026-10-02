@@ -1,0 +1,593 @@
+//! Turning a log of real input into readable steps.
+//!
+//! The log is a list of [`RecordedEvent`]s stamped with a frame number at the
+//! fixed 1/60 s, which is why playback does not depend on the frame rate the
+//! session ran at. [`steps_from_events`] is a pure function of that log, so it
+//! is tested without a window.
+
+use bevy::{
+    input::{ButtonState, keyboard::KeyCode, mouse::MouseButton},
+    math::Vec2,
+};
+
+use crate::{
+    scenario::{Modifiers, Step},
+    targets::Target,
+};
+
+/// What one piece of real input was.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecordedKind {
+    /// The cursor ended an update here.
+    Moved(Vec2),
+    /// A mouse button changed state.
+    Button {
+        /// The button.
+        button: MouseButton,
+        /// Pressed or released.
+        state: ButtonState,
+        /// Where the cursor was, in logical pixels.
+        position: Vec2,
+        /// What `position` was worked out to while the session ran: a UI
+        /// label, whatever the app's hook made of it, or the position itself.
+        target: Target,
+    },
+    /// The wheel turned, in pixels.
+    Wheel {
+        /// Horizontal amount.
+        x: f32,
+        /// Vertical amount.
+        y: f32,
+        /// Where the cursor was.
+        position: Vec2,
+    },
+    /// A key changed state.
+    Key {
+        /// The key.
+        key: KeyCode,
+        /// Pressed or released.
+        state: ButtonState,
+    },
+}
+
+/// One piece of real input and the frame it happened in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedEvent {
+    /// Frames of 1/60 s since the session began.
+    pub frame: u32,
+    /// What happened.
+    pub kind: RecordedKind,
+}
+
+/// The thresholds that decide how a log reads as steps.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StepOptions {
+    /// How far, in logical pixels, a path may stray from a straight line
+    /// before it needs a vertex of its own (Ramer-Douglas-Peucker).
+    pub path_tolerance: f32,
+    /// How far the pointer may move between a press and a release for the
+    /// two to count as a click rather than a drag, in logical pixels.
+    pub drag_distance: f32,
+    /// How many frames a press may last and still be a `Click` or `Tap`.
+    pub hold_frames: u32,
+    /// Idle time longer than this many frames is shortened.
+    pub idle_frames: u32,
+    /// What idle time is shortened to, in frames.
+    pub idle_wait: u16,
+    /// At least this many frames are left at the end, so the last input has
+    /// taken effect before the checks look.
+    pub settle_frames: u32,
+}
+
+impl Default for StepOptions {
+    fn default() -> Self {
+        Self {
+            path_tolerance: 3.0,
+            drag_distance: 4.0,
+            hold_frames: 20,
+            idle_frames: 90,
+            idle_wait: 30,
+            settle_frames: 10,
+        }
+    }
+}
+
+/// Positions closer than this are the same place.
+const SAME_PLACE: f32 = 0.5;
+
+/// Turns a log into steps. `end` is the frame the session stopped in.
+///
+/// * runs of moves become `Glide`s, one per vertex of the simplified path;
+/// * a press and release in place is a `Click`; a straight press, move and
+///   release of the left button is a `Drag`; anything else is spelt out as
+///   `Press`, glides and `Release`;
+/// * a key pressed and released on its own is a `Tap`, and a modifier held
+///   around one folds into it;
+/// * idle time beyond [`StepOptions::idle_frames`] becomes a short `Wait`.
+#[must_use]
+pub fn steps_from_events(events: &[RecordedEvent], end: u32, options: &StepOptions) -> Vec<Step> {
+    let mut out = Emitter::new(*options);
+    let mut next = 0;
+    while let Some(event) = events.get(next) {
+        next += 1;
+        match &event.kind {
+            RecordedKind::Moved(position) => out.moved(event.frame, *position),
+            RecordedKind::Button {
+                button,
+                state: ButtonState::Pressed,
+                ..
+            } => next = out.press(events, next - 1, *button),
+            RecordedKind::Button {
+                button,
+                state: ButtonState::Released,
+                position,
+                target,
+            } => out.release(event.frame, *button, *position, target),
+            RecordedKind::Wheel { x, y, position } => {
+                // One turn of the wheel often arrives as several messages.
+                let (mut x, mut y) = (*x, *y);
+                while let Some(RecordedEvent {
+                    frame,
+                    kind:
+                        RecordedKind::Wheel {
+                            x: more_x,
+                            y: more_y,
+                            ..
+                        },
+                }) = events.get(next)
+                {
+                    if *frame != event.frame {
+                        break;
+                    }
+                    x += more_x;
+                    y += more_y;
+                    next += 1;
+                }
+                out.wheel(event.frame, *position, x, y);
+            }
+            RecordedKind::Key { key, state } => next = out.key(events, next - 1, *key, *state),
+        }
+    }
+    out.flush(None);
+    let last = events.last().map_or(0, |event| event.frame);
+    out.wait_until(end.max(last.saturating_add(options.settle_frames)));
+    fold_chords(out.steps)
+}
+
+/// Builds the steps while keeping track of the script's own clock.
+struct Emitter {
+    /// The thresholds.
+    options: StepOptions,
+    /// The steps so far.
+    steps: Vec<Step>,
+    /// Where the script's clock stands, in frames.
+    clock: u32,
+    /// How many frames of idle time were cut, so recorded frames map to the
+    /// script's.
+    cut: u32,
+    /// Where the script's pointer is, once something has put it somewhere.
+    pointer: Option<Vec2>,
+    /// Moves not yet turned into glides.
+    run: Vec<(u32, Vec2)>,
+}
+
+impl Emitter {
+    /// An emitter at the start of a script.
+    const fn new(options: StepOptions) -> Self {
+        Self {
+            options,
+            steps: Vec::new(),
+            clock: 0,
+            cut: 0,
+            pointer: None,
+            run: Vec::new(),
+        }
+    }
+
+    /// Adds a step that takes `cost` frames.
+    fn emit(&mut self, step: Step, cost: u32) {
+        self.steps.push(step);
+        self.clock = self.clock.saturating_add(cost);
+    }
+
+    /// Waits until the script's clock reaches recorded frame `recorded`,
+    /// shortening a long idle stretch.
+    fn wait_until(&mut self, recorded: u32) {
+        let wanted = recorded.saturating_sub(self.cut);
+        let gap = wanted.saturating_sub(self.clock);
+        if gap == 0 {
+            return;
+        }
+        let gap = if gap > self.options.idle_frames {
+            let kept = u32::from(self.options.idle_wait);
+            self.cut = self.cut.saturating_add(gap.saturating_sub(kept));
+            kept
+        } else {
+            gap
+        };
+        self.emit(Step::Wait(frames_u16(gap)), gap);
+    }
+
+    /// Notes that the cursor was at `position` in `frame`.
+    fn moved(&mut self, frame: u32, position: Vec2) {
+        let paused = self
+            .run
+            .last()
+            .is_some_and(|(last, _)| frame.saturating_sub(*last) > self.options.idle_frames);
+        if paused {
+            self.flush(None);
+        }
+        self.run.push((frame, position));
+    }
+
+    /// Turns the moves so far into glides along the simplified path. The last
+    /// one ends at `end` when that is given, so a path that ends on a button
+    /// ends on the button's label rather than a pixel.
+    fn flush(&mut self, end: Option<Target>) {
+        let run = core::mem::take(&mut self.run);
+        let Some(&(first_frame, first_position)) = run.first() else {
+            return;
+        };
+        // The path starts where the script's pointer is, a frame before the
+        // first sample; with no pointer yet the first sample is a jump.
+        let mut path: Vec<(u32, Vec2)> = Vec::with_capacity(run.len() + 1);
+        let rest = if let Some(pointer) = self.pointer {
+            path.push((first_frame.saturating_sub(1), pointer));
+            run.as_slice()
+        } else {
+            self.wait_until(first_frame.saturating_sub(1));
+            // A jump to a place the run never leaves is the whole move.
+            let stays = run
+                .last()
+                .is_some_and(|(_, last)| last.distance(first_position) < SAME_PLACE);
+            let target = match &end {
+                Some(end) if stays => end.clone(),
+                _ => Target::screen(first_position),
+            };
+            self.emit(Step::MoveTo(target), 1);
+            self.pointer = Some(first_position);
+            path.push((first_frame, first_position));
+            run.get(1..).unwrap_or_default()
+        };
+        path.extend_from_slice(rest);
+        let positions: Vec<Vec2> = path.iter().map(|(_, position)| *position).collect();
+        let kept = simplify(&positions, self.options.path_tolerance);
+        let last = kept.last().copied();
+        let mut previous = path.first().map_or(first_frame, |(frame, _)| *frame);
+        for index in kept.into_iter().skip(1) {
+            let Some(&(frame, position)) = path.get(index) else {
+                continue;
+            };
+            let target = match (&end, Some(index) == last) {
+                (Some(end), true) => end.clone(),
+                _ => Target::screen(position),
+            };
+            let there = self
+                .pointer
+                .is_some_and(|pointer| pointer.distance(position) < SAME_PLACE);
+            if !there {
+                self.wait_until(previous);
+                let frames = frame.saturating_sub(previous).max(1);
+                self.emit(
+                    Step::Glide {
+                        target,
+                        frames: frames_u16(frames),
+                    },
+                    frames,
+                );
+                self.pointer = Some(position);
+            }
+            previous = frame;
+        }
+    }
+
+    /// Makes sure the script's pointer is where the real one was.
+    fn ensure_pointer(&mut self, frame: u32, position: Vec2, target: &Target) {
+        let there = self
+            .pointer
+            .is_some_and(|pointer| pointer.distance(position) < SAME_PLACE);
+        if !there {
+            self.wait_until(frame.saturating_sub(1));
+            self.emit(Step::MoveTo(target.clone()), 1);
+            self.pointer = Some(position);
+        }
+    }
+
+    /// A button went down at `at`. Returns the index to carry on from.
+    fn press(&mut self, events: &[RecordedEvent], at: usize, button: MouseButton) -> usize {
+        let Some(RecordedEvent {
+            frame,
+            kind: RecordedKind::Button {
+                position, target, ..
+            },
+        }) = events.get(at)
+        else {
+            return at + 1;
+        };
+        let (frame, position) = (*frame, *position);
+        let lands_here = self
+            .run
+            .last()
+            .is_some_and(|(_, last)| last.distance(position) < SAME_PLACE);
+        self.flush(lands_here.then(|| target.clone()));
+        self.ensure_pointer(frame, position, target);
+
+        let release = events.iter().enumerate().skip(at + 1).find(|(_, event)| {
+            matches!(
+                &event.kind,
+                RecordedKind::Button { button: other, state: ButtonState::Released, .. }
+                    if *other == button
+            )
+        });
+        let Some((release_at, release)) = release else {
+            self.wait_until(frame);
+            self.emit(Step::Press(button), 1);
+            return at + 1;
+        };
+        let RecordedKind::Button {
+            position: release_position,
+            target: release_target,
+            ..
+        } = &release.kind
+        else {
+            return at + 1;
+        };
+        let between = events.get(at + 1..release_at).unwrap_or_default();
+        let moves: Vec<(u32, Vec2)> = between
+            .iter()
+            .filter_map(|event| match event.kind {
+                RecordedKind::Moved(position) => Some((event.frame, position)),
+                _ => None,
+            })
+            .collect();
+        if moves.len() != between.len() {
+            // Something else happened while the button was down: keep the
+            // press and let the rest play out in order.
+            self.wait_until(frame);
+            self.emit(Step::Press(button), 1);
+            return at + 1;
+        }
+        let held = release.frame.saturating_sub(frame);
+        let mut path = vec![position];
+        path.extend(moves.iter().map(|(_, position)| *position));
+        path.push(*release_position);
+        let travelled = path
+            .iter()
+            .map(|point| point.distance(position))
+            .fold(0.0, f32::max);
+        if travelled <= self.options.drag_distance {
+            self.wait_until(frame);
+            if held <= self.options.hold_frames {
+                self.emit(Step::Click(button), 1);
+            } else {
+                self.emit(Step::Press(button), 1);
+                self.wait_until(release.frame);
+                self.emit(Step::Release(button), 1);
+            }
+        } else if button == MouseButton::Left
+            && simplify(&path, self.options.path_tolerance).len() <= 2
+        {
+            self.wait_until(frame);
+            let frames = held.saturating_sub(2).max(1);
+            self.emit(
+                Step::Drag {
+                    from: target.clone(),
+                    to: release_target.clone(),
+                    frames: frames_u16(frames),
+                },
+                frames.saturating_add(2),
+            );
+            self.pointer = Some(*release_position);
+        } else {
+            self.wait_until(frame);
+            self.emit(Step::Press(button), 1);
+            self.run.extend(moves);
+            if self
+                .run
+                .last()
+                .is_none_or(|(_, last)| last.distance(*release_position) >= SAME_PLACE)
+            {
+                self.run.push((release.frame, *release_position));
+            }
+            self.flush(Some(release_target.clone()));
+            self.wait_until(release.frame);
+            self.emit(Step::Release(button), 1);
+        }
+        release_at + 1
+    }
+
+    /// A button went up with no press the log could pair it with.
+    fn release(&mut self, frame: u32, button: MouseButton, position: Vec2, target: &Target) {
+        let lands_here = self
+            .run
+            .last()
+            .is_some_and(|(_, last)| last.distance(position) < SAME_PLACE);
+        self.flush(lands_here.then(|| target.clone()));
+        self.wait_until(frame);
+        self.emit(Step::Release(button), 1);
+    }
+
+    /// The wheel turned by `x` and `y` pixels at `position`.
+    fn wheel(&mut self, frame: u32, position: Vec2, x: f32, y: f32) {
+        self.flush(None);
+        self.ensure_pointer(frame, position, &Target::screen(position));
+        self.wait_until(frame);
+        self.emit(Step::Wheel { x, y }, 1);
+    }
+
+    /// A key changed state. Returns the index to carry on from.
+    fn key(
+        &mut self,
+        events: &[RecordedEvent],
+        at: usize,
+        key: KeyCode,
+        state: ButtonState,
+    ) -> usize {
+        let Some(event) = events.get(at) else {
+            return at + 1;
+        };
+        self.flush(None);
+        self.wait_until(event.frame);
+        if state == ButtonState::Released {
+            self.emit(
+                Step::KeyUp {
+                    key,
+                    modifiers: Modifiers::NONE,
+                },
+                1,
+            );
+            return at + 1;
+        }
+        let release = events.iter().enumerate().skip(at + 1).find(|(_, other)| {
+            matches!(
+                &other.kind,
+                RecordedKind::Key { key: other_key, state: ButtonState::Released }
+                    if *other_key == key
+            )
+        });
+        if let Some((release_at, release)) = release
+            && release_at == at + 1
+            && release.frame.saturating_sub(event.frame) <= self.options.hold_frames
+        {
+            self.emit(Step::tap(key), 1);
+            return release_at + 1;
+        }
+        self.emit(
+            Step::Key {
+                key,
+                modifiers: Modifiers::NONE,
+            },
+            1,
+        );
+        at + 1
+    }
+}
+
+/// The modifier a key is one of.
+const fn modifier_of(key: KeyCode) -> Option<Modifiers> {
+    match key {
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(Modifiers::SHIFT),
+        KeyCode::ControlLeft | KeyCode::ControlRight => Some(Modifiers::CTRL),
+        KeyCode::AltLeft | KeyCode::AltRight => Some(Modifiers::ALT),
+        KeyCode::SuperLeft | KeyCode::SuperRight => Some(Modifiers::SUPER),
+        _ => None,
+    }
+}
+
+/// How many frames of waiting may sit inside a chord and still let it fold.
+const CHORD_WAIT_FRAMES: u32 = 6;
+
+/// Folds `Key(Ctrl)`, `Tap(S)`, `KeyUp(Ctrl)` into `Tap(S, [Ctrl])`, ignoring
+/// the odd frame of waiting between them.
+fn fold_chords(steps: Vec<Step>) -> Vec<Step> {
+    let mut out: Vec<Step> = Vec::with_capacity(steps.len());
+    let mut at = 0;
+    while let Some(step) = steps.get(at) {
+        if let Some((tap, used)) = chord_at(&steps, at) {
+            out.push(tap);
+            at += used;
+        } else {
+            out.push(step.clone());
+            at += 1;
+        }
+    }
+    out
+}
+
+/// The chord starting at `at`, as the tap it folds into and how many steps it
+/// used.
+fn chord_at(steps: &[Step], at: usize) -> Option<(Step, usize)> {
+    let Some(Step::Key {
+        key,
+        modifiers: Modifiers::NONE,
+    }) = steps.get(at)
+    else {
+        return None;
+    };
+    let modifier = modifier_of(*key)?;
+    let mut waited = 0;
+    let mut tapped = None;
+    for (offset, step) in steps.iter().enumerate().skip(at + 1) {
+        match (step, tapped) {
+            (Step::Wait(frames), _) => waited += u32::from(*frames),
+            (
+                Step::Tap {
+                    key: pressed,
+                    modifiers: Modifiers::NONE,
+                },
+                None,
+            ) if modifier_of(*pressed).is_none() => tapped = Some(*pressed),
+            (
+                Step::KeyUp {
+                    key: released,
+                    modifiers: Modifiers::NONE,
+                },
+                Some(pressed),
+            ) if released == key && waited <= CHORD_WAIT_FRAMES => {
+                return Some((
+                    Step::Tap {
+                        key: pressed,
+                        modifiers: modifier,
+                    },
+                    offset + 1 - at,
+                ));
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// A frame count as the `u16` steps take; longer is not a real pause.
+fn frames_u16(frames: u32) -> u16 {
+    u16::try_from(frames).unwrap_or(u16::MAX)
+}
+
+/// The indices of `points` that stay when the path is simplified with
+/// Ramer-Douglas-Peucker: the first and last always, and any point that
+/// strays more than `tolerance` from the line between its neighbours.
+fn simplify(points: &[Vec2], tolerance: f32) -> Vec<usize> {
+    let indexed: Vec<(usize, Vec2)> = points.iter().copied().enumerate().collect();
+    let mut kept = Vec::new();
+    if let Some((first, _)) = indexed.first() {
+        kept.push(*first);
+    }
+    simplify_from(&indexed, tolerance, &mut kept);
+    kept
+}
+
+/// Adds the indices to keep after the first of `points`, up to and including
+/// the last.
+fn simplify_from(points: &[(usize, Vec2)], tolerance: f32, kept: &mut Vec<usize>) {
+    let (Some(&(_, start)), Some(&(last_index, end))) = (points.first(), points.last()) else {
+        return;
+    };
+    if points.len() < 2 {
+        return;
+    }
+    let farthest = points
+        .iter()
+        .enumerate()
+        .skip(1)
+        .take(points.len().saturating_sub(2))
+        .map(|(at, (_, point))| (at, distance_to_segment(*point, start, end)))
+        .max_by(|(_, a), (_, b)| a.total_cmp(b));
+    match farthest {
+        Some((at, distance)) if distance > tolerance => {
+            simplify_from(points.get(..=at).unwrap_or_default(), tolerance, kept);
+            simplify_from(points.get(at..).unwrap_or_default(), tolerance, kept);
+        }
+        _ => kept.push(last_index),
+    }
+}
+
+/// How far `point` is from the segment `start`-`end`.
+fn distance_to_segment(point: Vec2, start: Vec2, end: Vec2) -> f32 {
+    let along = end - start;
+    let length_squared = along.length_squared();
+    if length_squared <= f32::EPSILON {
+        return point.distance(start);
+    }
+    let t = ((point - start).dot(along) / length_squared).clamp(0.0, 1.0);
+    point.distance(start + along * t)
+}

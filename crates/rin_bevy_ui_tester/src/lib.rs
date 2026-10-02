@@ -24,6 +24,7 @@ pub mod probe;
 pub mod recorder;
 pub mod scenario;
 pub mod script;
+pub mod session;
 pub mod targets;
 
 #[cfg(feature = "record")]
@@ -53,6 +54,10 @@ pub use recorder::{
 pub use scenario::{CheckResult, IntoCheckResult, Modifiers, NamedCheck, Scenario, Step};
 pub use script::{
     CheckRegistry, ExportError, FORMAT_VERSION, HookRegistry, LoadError, Registry, Script, Setup,
-    export_ron,
+    StateProbe, export_ron,
+};
+pub use session::{
+    RecordedEvent, RecordedKind, SavedSession, SessionConfig, SessionError, SessionHooks,
+    SessionPlugin, SessionRecorder, SessionSystems, StepOptions, steps_from_events,
 };
 pub use targets::{NotUnderTest, ResolvedTarget, Target, TargetResolvers, resolve};

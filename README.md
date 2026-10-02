@@ -12,7 +12,8 @@ This is private software.
 ## Status
 
 The crate is being built up ticket by ticket (see the tickets on GitHub).
-Headless scenarios, the offscreen recorder and the gallery work today.
+Headless scenarios, the offscreen recorder, the gallery and recording a
+scenario from a real session work today.
 
 ## Headless app and synthetic input
 
@@ -197,6 +198,66 @@ the window back; **Resume script** carries on.
 Try it with `cargo run --example gallery --features gallery` (needs a display).
 The gallery feature turns on the windowing backends and the renderer that draws
 UI into a window, which a library test never needs.
+
+## Recording a scenario from a session
+
+Use the app by hand and save what you did as a `.ron` scenario. `SessionPlugin`
+(added by `GalleryPlugin` for you) logs the real mouse and keyboard of the
+primary window against a frame counter at the fixed 1/60 s, so playback is
+deterministic whatever frame rate the session ran at. Start and stop with the
+gallery's **Record** / **Stop recording** button, with
+`SessionRecorder::request_start` / `request_stop` (at the next update), or
+straight away with `session::start(world, name)` / `session::stop(world)`; a
+command-line flag is a system that calls one of them (see the example's
+`--record`).
+
+On stop the log becomes steps: runs of moves become `Glide`s along a path
+simplified with Ramer-Douglas-Peucker (3 px by default), a press and release in
+place is a `Click`, a straight press, move and release is a `Drag`, a click on
+a UI node with a label is `Target::text(..)`, idle time over 1.5 s is shortened
+to a 30 frame `Wait`, and a modifier held around a key folds into a `Tap`. The
+thresholds are `StepOptions`. The app plugs in through `SessionHooks`:
+
+- `capture_setup` runs on start and writes what the app needs to get back to
+  this state into the output directory (rails writes a save file), returning
+  the script's `setup` (`Setup::File(..)`).
+- `capture_view` names the view.
+- `resolve_target` is offered every click that hit no label (rails turns
+  ground clicks into lattice points); the rest stay `screen(..)`.
+- `state` is a `StateProbe` that reads the app's state as `key: value` text.
+  What changed between start and stop is written as `expect_state`, which the
+  person keeps, edits or deletes; set the same probe on the `Registry`
+  (`Registry::with_state`) so a loaded file checks it.
+
+```ron
+// Recorded from a session. Edit freely. ...
+(
+    format_version: 1,
+    name: "Recording",
+    window_size: (640, 360),
+    setup: File("recording.setup.txt"),
+    steps: [
+        MoveTo(Screen((22.5, 27.8))),
+        Glide(target: Text("+1"), frames: 12),
+        Click(Left),
+        Wait(26),
+        Click(Left),
+        Wait(25),
+    ],
+    expect_state: { "count": "2" },
+)
+```
+
+The file and the setup file go to the gallery's export directory (or the
+`SessionPlugin`'s). Load it like any other script: the app reads the setup file
+the script names and calls `.setup(..)` on the loaded scenario; see
+`tests/gallery.rs` and the example.
+
+Limits: only the primary window is recorded and nothing marked `NotUnderTest`
+is ever named as a target; a click on a label replays on the middle of the
+labelled node, not the exact pixel; typed text and touch are not recorded (key
+presses are). Selecting, restarting and stepping are refused in the gallery
+while recording.
 
 ## Depending on it from a private git repository
 

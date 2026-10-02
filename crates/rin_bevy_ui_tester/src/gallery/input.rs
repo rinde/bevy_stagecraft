@@ -95,7 +95,14 @@ fn sort_messages<T: Message>(
     window: impl Fn(&T) -> Entity,
     route: impl Fn(Entity) -> Route,
 ) -> Vec<T> {
-    if messages.is_empty() {
+    // Taking messages out and writing the rest back gives the rest new ids,
+    // so every reader sees them again. Only do it when something is to be
+    // removed, or messages nobody wanted gone would be replayed every update.
+    let needs_routing = messages
+        .get_cursor()
+        .read(messages)
+        .any(|message| route(window(message)) != Route::Keep);
+    if !needs_routing {
         return Vec::new();
     }
     let all: Vec<T> = messages.drain().collect();

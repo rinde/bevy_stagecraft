@@ -77,6 +77,12 @@ pub enum GalleryAction {
     Resume,
     /// Write the selected entry as RON into the export directory.
     Export,
+    /// Start recording a scenario from a session: pause the script, take the
+    /// primary window over and log what the real mouse and keyboard do there
+    /// (see [`crate::session`]).
+    Record,
+    /// Stop recording and write the scenario into the export directory.
+    StopRecording,
 }
 
 /// What the gallery is in the middle of.
@@ -110,6 +116,15 @@ pub enum PendingStep {
     },
 }
 
+/// Whether a session is being recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recording {
+    /// No.
+    Off,
+    /// Yes.
+    On,
+}
+
 /// The gallery's controls and what it remembers: selection, mode, speed and
 /// each entry's last result. Ask for things with [`Self::request`].
 #[derive(Resource, Debug, Clone)]
@@ -140,6 +155,8 @@ pub struct GalleryState {
     pub(crate) export_dir: PathBuf,
     /// The last thing worth telling the person, such as where an export went.
     pub(crate) status: String,
+    /// Whether a session is being recorded, as of the last request round.
+    pub(crate) recording: Recording,
 }
 
 impl GalleryState {
@@ -160,6 +177,7 @@ impl GalleryState {
             results: BTreeMap::new(),
             export_dir,
             status: String::new(),
+            recording: Recording::Off,
         }
     }
 
@@ -221,6 +239,12 @@ impl GalleryState {
     #[must_use]
     pub fn status(&self) -> &str {
         &self.status
+    }
+
+    /// Whether a session is being recorded.
+    #[must_use]
+    pub const fn is_recording(&self) -> bool {
+        matches!(self.recording, Recording::On)
     }
 
     /// Whether the script, not the real mouse and keyboard, has the primary

@@ -4,7 +4,7 @@
 //! scenario converts to a serialisable [`Script`] and back (see
 //! [`crate::script`]).
 
-use alloc::sync::Arc;
+use alloc::{collections::BTreeMap, sync::Arc};
 use core::{fmt, ops::BitOr};
 
 use bevy::{
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     probe::Probe,
-    script::{FORMAT_VERSION, LoadError, Registry, Script, Setup},
+    script::{FORMAT_VERSION, LoadError, Registry, Script, Setup, state_check_name},
     targets::Target,
 };
 
@@ -383,8 +383,11 @@ pub struct Scenario {
     steps: Vec<Step>,
     /// Checks that [`Step::Check`] refers to.
     checks: Vec<NamedCheck>,
-    /// Checks run once the script has finished.
+    /// Checks run once the script has finished. Those made from
+    /// `state_expects` are among them.
     expects: Vec<NamedCheck>,
+    /// The script's `expect_state` entries, kept so the script converts back.
+    state_expects: BTreeMap<String, String>,
 }
 
 impl fmt::Debug for Scenario {
@@ -399,6 +402,7 @@ impl fmt::Debug for Scenario {
             .field("steps", &self.steps)
             .field("checks", &self.checks)
             .field("expects", &self.expects)
+            .field("state_expects", &self.state_expects)
             .finish()
     }
 }
@@ -417,6 +421,7 @@ impl Scenario {
             steps: Vec::new(),
             checks: Vec::new(),
             expects: Vec::new(),
+            state_expects: BTreeMap::new(),
         }
     }
 
@@ -591,8 +596,15 @@ impl Scenario {
             expect: self
                 .expects
                 .iter()
+                .filter(|check| {
+                    !self
+                        .state_expects
+                        .iter()
+                        .any(|(key, value)| state_check_name(key, value) == check.name)
+                })
                 .map(|check| check.name.clone())
                 .collect(),
+            expect_state: self.state_expects.clone(),
         }
     }
 
@@ -654,6 +666,7 @@ impl Scenario {
             steps: script.steps,
             checks,
             expects,
+            state_expects: script.expect_state,
         }
     }
 }
