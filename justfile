@@ -55,7 +55,7 @@ features:
 
 # Run the tests that need a real or software GPU (the recorder's).
 test-gpu:
-    WGPU_BACKEND=vulkan cargo test --quiet --workspace --features record gpu
+    WGPU_BACKEND=vulkan cargo test --quiet --workspace --features record gpu -- --include-ignored
 
 # Everything CI runs.
 ci: lint test features unused-deps deny

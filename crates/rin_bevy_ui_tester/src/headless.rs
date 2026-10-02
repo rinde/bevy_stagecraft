@@ -109,7 +109,7 @@ impl PluginGroup for HeadlessPlugins {
 
 /// Adds `bevy::render::camera::CameraPlugin` and the resource it reads.
 #[derive(Debug, Default, Clone, Copy)]
-struct RenderCameraSupport;
+pub(crate) struct RenderCameraSupport;
 
 impl Plugin for RenderCameraSupport {
     fn build(&self, app: &mut App) {

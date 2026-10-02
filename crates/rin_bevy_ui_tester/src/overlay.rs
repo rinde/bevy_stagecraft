@@ -30,7 +30,7 @@ use bevy::{
     text::{FontSize, FontSource, TextColor, TextFont},
     ui::{
         AlignItems, BackgroundColor, BorderColor, BorderRadius, Display, FlexDirection,
-        GlobalZIndex, Node, PositionType, UiRect, px,
+        GlobalZIndex, Node, PositionType, UiRect, UiTargetCamera, px,
         widget::{ImageNode, Text},
     },
     window::{PrimaryWindow, Window},
@@ -69,6 +69,14 @@ pub const CAPTION_PADDING: f32 = 8.0;
 /// Stacking order of everything the overlay draws, above any app UI.
 pub const OVERLAY_Z_INDEX: i32 = i32::MAX - 16;
 
+/// Default mark before a check that passed. Plain ASCII: rendering showed the
+/// bundled font draws the dingbat check marks as empty boxes.
+pub const PASS_MARK: &str = "PASS";
+/// Default mark before a check that failed; see [`PASS_MARK`].
+pub const FAIL_MARK: &str = "FAIL";
+/// Default mark before a check that never ran.
+pub const SKIPPED_MARK: &str = "-";
+
 /// Colours and sizes of the overlay. Replace the resource to theme it.
 #[derive(Resource, Debug, Clone)]
 pub struct OverlayTheme {
@@ -94,8 +102,9 @@ pub struct OverlayTheme {
     pub fail_text: Color,
     /// Size of the caption text.
     pub font_size: f32,
-    /// Font of the caption text. The bundled default font may lack the check
-    /// marks; set a font that has them, or change the marks below.
+    /// Font of the caption text. The bundled default font only has ASCII, so
+    /// the default marks are words; to get `\u{2714}` and `\u{2718}`, set a font
+    /// that has them as well as the marks below.
     pub font: FontSource,
     /// Shown before the name of a check that passed.
     pub pass_mark: String,
@@ -120,9 +129,9 @@ impl Default for OverlayTheme {
             fail_text: Color::srgb(1.0, 0.4, 0.4),
             font_size: CAPTION_FONT_SIZE,
             font: FontSource::default(),
-            pass_mark: "\u{2714}".into(),
-            fail_mark: "\u{2718}".into(),
-            skipped_mark: "-".into(),
+            pass_mark: PASS_MARK.into(),
+            fail_mark: FAIL_MARK.into(),
+            skipped_mark: SKIPPED_MARK.into(),
         }
     }
 }
@@ -284,7 +293,7 @@ pub fn current_step_text(
     Some(describe_step(&record.step, &before, descriptions))
 }
 
-/// Each check's mark and name, such as `✔ saved  ✘ count`, in the order they
+/// Each check's mark and name, such as `PASS saved  FAIL count`, in the order they
 /// ran.
 #[must_use]
 pub fn checks_text(checks: &[CheckRecord], theme: &OverlayTheme) -> String {
@@ -346,12 +355,28 @@ pub struct OverlayStepText;
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct OverlayChecksText;
 
+/// The camera the overlay draws through, for apps that do not leave it to the
+/// default UI camera.
+///
+/// With `None` the overlay's nodes carry no `UiTargetCamera` and go to
+/// whichever camera Bevy picks by default. That is the highest-order camera
+/// that renders to the primary window; a camera rendering to an image is
+/// never the default, so an app whose cameras target images (the recorder
+/// retargets them) either marks one with `IsDefaultUiCamera` or sets this.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OverlayCamera(pub Option<Entity>);
+
+/// Every top-level node of the overlay, so one system can aim them all.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OverlayRoot;
+
 /// Where the pointer has been lately, newest first, for the trail.
 #[derive(Resource, Debug, Default)]
 struct TrailHistory(VecDeque<Vec2>);
 
 /// Draws the script's pointer and a caption strip over the app's UI.
 ///
+/// It draws through the default UI camera unless [`OverlayCamera`] names one.
 /// The cursor follows the primary window's cursor position, which
 /// `SyntheticInput` sets. The strip reads [`ScenarioReport`]. Replace
 /// [`OverlayTheme`] to restyle it and add to [`TargetDescriptions`] to word an
@@ -362,6 +387,7 @@ pub struct CursorOverlayPlugin;
 impl Plugin for CursorOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OverlayTheme>()
+            .init_resource::<OverlayCamera>()
             .init_resource::<TargetDescriptions>()
             .init_resource::<TrailHistory>()
             .init_resource::<ScenarioReport>()
@@ -369,6 +395,7 @@ impl Plugin for CursorOverlayPlugin {
             .add_systems(
                 Update,
                 (
+                    aim_overlay,
                     move_cursor,
                     spawn_rings,
                     animate_rings,
@@ -438,6 +465,7 @@ fn spawn_overlay(
     for index in 0..TRAIL_LENGTH {
         commands.spawn((
             OverlayTrailDot(index),
+            OverlayRoot,
             round_marker(TRAIL_DOT_SIZE, 0.0),
             BackgroundColor(theme.trail.with_alpha(0.0)),
             Pickable::IGNORE,
@@ -446,6 +474,7 @@ fn spawn_overlay(
     }
     commands.spawn((
         OverlayHeld,
+        OverlayRoot,
         round_marker(HELD_SIZE, RING_BORDER),
         BorderColor::all(theme.held_ring),
         Pickable::IGNORE,
@@ -454,6 +483,7 @@ fn spawn_overlay(
     ));
     commands.spawn((
         OverlayCursor,
+        OverlayRoot,
         Node {
             position_type: PositionType::Absolute,
             width: px(CURSOR_WIDTH),
@@ -477,6 +507,7 @@ fn spawn_overlay(
     commands
         .spawn((
             OverlayCaptionStrip,
+            OverlayRoot,
             Node {
                 position_type: PositionType::Absolute,
                 left: px(0),
@@ -510,6 +541,22 @@ fn spawn_overlay(
             line(LineMarker::Step, theme.step_text);
             line(LineMarker::Checks, theme.pass_text);
         });
+}
+
+/// Points every overlay root at [`OverlayCamera`], when one is named.
+fn aim_overlay(
+    mut commands: Commands,
+    camera: Res<OverlayCamera>,
+    roots: Query<(Entity, Option<&UiTargetCamera>), With<OverlayRoot>>,
+) {
+    let Some(camera) = camera.0 else {
+        return;
+    };
+    for (entity, aimed) in &roots {
+        if aimed.is_none_or(|aimed| aimed.0 != camera) {
+            commands.entity(entity).insert(UiTargetCamera(camera));
+        }
+    }
 }
 
 /// Which line of the caption strip is being spawned.
@@ -581,6 +628,7 @@ fn spawn_rings(
     windows: Query<&Window, With<PrimaryWindow>>,
     buttons: Res<ButtonInput<MouseButton>>,
     theme: Res<OverlayTheme>,
+    camera: Res<OverlayCamera>,
 ) {
     let pressed = buttons.just_pressed(MouseButton::Left)
         || buttons.just_pressed(MouseButton::Right)
@@ -588,11 +636,12 @@ fn spawn_rings(
     let Some(position) = pointer_position(&windows).filter(|_| pressed) else {
         return;
     };
-    commands.spawn((
+    let mut ring = commands.spawn((
         OverlayRing {
             age: 0,
             centre: position,
         },
+        OverlayRoot,
         Node {
             left: px(position.x - RING_START_SIZE / 2.0),
             top: px(position.y - RING_START_SIZE / 2.0),
@@ -602,6 +651,9 @@ fn spawn_rings(
         Pickable::IGNORE,
         GlobalZIndex(OVERLAY_Z_INDEX),
     ));
+    if let Some(camera) = camera.0 {
+        ring.insert(UiTargetCamera(camera));
+    }
 }
 
 /// Grows and fades the rings, and removes the ones that are done. Counts

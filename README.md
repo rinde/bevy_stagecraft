@@ -12,7 +12,7 @@ This is private software.
 ## Status
 
 The crate is being built up ticket by ticket (see the tickets on GitHub).
-Headless scenarios work today; recording and the gallery are still to come.
+Headless scenarios and the offscreen recorder work today; the gallery is still to come.
 
 ## Headless app and synthetic input
 
@@ -105,9 +105,53 @@ each check's pass or fail mark. Everything is UI with `Pickable::IGNORE`, so it
 never takes a picking hit. Only the gallery and the recorder add it; headless
 tests do not.
 
-Replace the `OverlayTheme` resource to change colours, sizes, font and marks
-(the bundled default font may lack the check marks). Add describers to
-`TargetDescriptions` to word an app's own custom targets.
+Replace the `OverlayTheme` resource to change colours, sizes, font and marks.
+The default marks are the words `PASS` and `FAIL`, because the bundled font has
+no `\u{2714}` or `\u{2718}` (they render as empty boxes); set a font that has
+them if you want the glyphs. Add describers to `TargetDescriptions` to word an
+app's own custom targets.
+
+The overlay draws through Bevy's default UI camera, which is never a camera
+that renders to an image. If your cameras have custom targets, set the
+`OverlayCamera` resource to name the one the overlay should use.
+
+## Recording for review (feature `record`)
+
+```rust
+use rin_bevy_ui_tester::Recorder;
+
+let recording = Recorder::new(|app| {
+    // Your own plugins and resources go on top of `RecorderPlugins`.
+    app.add_plugins(MyUiPlugin);
+})
+.every(10) // a picture every 10th frame, as well as at each step boundary
+.settle(|world| my_world_has_settled(world)) // optional
+.grouped("Buttons", click_pause_scenario())
+.record("target/recordings")?;
+if recording.any_failed() {
+    std::process::exit(1);
+}
+```
+
+Per scenario it writes `frame-NNNNN.png`, `filmstrip.png` (thumbnails with a
+tick or cross band and the frame number; the step and checks are in the
+pictures, drawn by the overlay) and `scenario.gif`. Overall it writes
+`index.html`, a contact sheet grouped by the groups you gave, groups with a
+failure first and failures first within each. There is no golden-image
+comparison; a failed check fails the scenario, and `any_failed()` tells the
+calling binary to exit non-zero.
+
+`RecorderPlugins` is the render set: a headless app with the real renderer and
+`bevy_ui_render`, every camera that would render to the primary window pointed
+at an offscreen `Image` of the scenario's window size, and the synthetic
+pointer aimed at that image. The primary window stays virtual and carries the
+cursor position. The camera that would have been the default UI camera is
+marked `IsDefaultUiCamera`, since Bevy never picks a camera that renders to an
+image. Do not add the player or the overlay plugin yourself.
+
+It needs a GPU, or lavapipe without one: `WGPU_BACKEND=vulkan` after
+`sudo apt-get install -y mesa-vulkan-drivers libvulkan1`. `just test-gpu` runs
+the recorder's tests.
 
 ## Depending on it from a private git repository
 

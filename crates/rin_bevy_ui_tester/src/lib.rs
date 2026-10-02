@@ -8,28 +8,41 @@
 
 extern crate alloc;
 
+#[cfg(feature = "record")]
+pub mod capture;
 pub mod files;
 pub mod headless;
+#[cfg(feature = "record")]
+pub mod index;
 pub mod input;
 pub mod overlay;
 pub mod player;
 pub mod probe;
+#[cfg(feature = "record")]
+pub mod recorder;
 pub mod scenario;
 pub mod script;
 pub mod targets;
 
+#[cfg(feature = "record")]
+pub use capture::{CaptureError, Frame};
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
 pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};
 pub use overlay::{
-    CursorOverlayPlugin, OverlaySystems, OverlayTheme, TargetDescriptions, checks_text,
-    current_step_text, describe_step, describe_target,
+    CursorOverlayPlugin, OverlayCamera, OverlaySystems, OverlayTheme, TargetDescriptions,
+    checks_text, current_step_text, describe_step, describe_target,
 };
 pub use player::{
     CheckKind, CheckRecord, Outcome, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport,
     ScenarioSystems, StepRecord,
 };
 pub use probe::Probe;
+#[cfg(feature = "record")]
+pub use recorder::{
+    Capture, CaptureMeta, Captures, RecordError, Recorder, RecorderPlugins, RecorderSystems,
+    RecorderTarget, Recording, ScenarioRecording,
+};
 pub use scenario::{CheckResult, IntoCheckResult, Modifiers, NamedCheck, Scenario, Step};
 pub use script::{
     CheckRegistry, ExportError, FORMAT_VERSION, HookRegistry, LoadError, Registry, Script, Setup,
