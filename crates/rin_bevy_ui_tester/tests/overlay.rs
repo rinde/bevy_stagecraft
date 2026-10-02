@@ -12,14 +12,14 @@ use bevy::{
     ecs::query::Or,
     input::keyboard::KeyCode,
     prelude::*,
-    ui::{px, widget::Text},
+    ui::{UiTargetCamera, px, widget::Text},
     ui_widgets::{Activate, Button},
 };
 use rin_bevy_ui_tester::{
     HeadlessPlugins, Probe, Scenario, Step, Target, TargetDescriptions, describe_step,
     overlay::{
-        CursorOverlayPlugin, OverlayCaptionStrip, OverlayChecksText, OverlayCursor, OverlayHeld,
-        OverlayRing, OverlayStepText, OverlayTrailDot,
+        CursorOverlayPlugin, OverlayCamera, OverlayCaptionStrip, OverlayChecksText, OverlayCursor,
+        OverlayHeld, OverlayRing, OverlayRoot, OverlayStepText, OverlayTheme, OverlayTrailDot,
     },
 };
 
@@ -219,7 +219,7 @@ fn the_caption_strip_names_the_step_and_marks_each_check() {
         .map(|text| text.0.clone())
         .next()
         .expect("a checks line");
-    assert_eq!(checks, "\u{2714} activated  \u{2718} never");
+    assert_eq!(checks, "PASS activated  FAIL never");
 }
 
 #[test]
@@ -252,4 +252,62 @@ fn an_app_can_override_how_its_targets_read() {
     );
     let other = Step::glide(Target::text("Rail"), 5);
     assert_eq!(describe_step(&other, &[], &words), "Glide to Rail");
+}
+
+#[test]
+fn naming_an_overlay_camera_aims_every_overlay_node_at_it() {
+    let mut app = overlay_app();
+    let scenario = Scenario::new("aimed")
+        .setup(|world| {
+            spawn_ui(world);
+            let second = world.spawn(Camera2d).id();
+            world.insert_resource(OverlayCamera(Some(second)));
+        })
+        .steps([
+            Step::move_to(Target::text("Pause")),
+            Step::click(),
+            Step::wait(2),
+        ]);
+    let report = scenario.run_in(&mut app);
+    assert!(report.passed(), "{:?}", report.failures());
+
+    let world = app.world_mut();
+    let wanted = world
+        .resource::<OverlayCamera>()
+        .0
+        .expect("the camera was named");
+    let mut roots = world.query_filtered::<(Entity, Option<&UiTargetCamera>), With<OverlayRoot>>();
+    let roots: Vec<_> = roots.iter(world).collect();
+    assert!(
+        roots.len() > 10,
+        "cursor, trail, strip and a ring: {}",
+        roots.len()
+    );
+    assert!(
+        roots
+            .iter()
+            .all(|(_, aimed)| aimed.is_some_and(|aimed| aimed.0 == wanted)),
+        "every overlay root, rings included, targets the named camera"
+    );
+}
+
+#[test]
+fn without_an_overlay_camera_the_overlay_leaves_the_target_to_bevy() {
+    let mut app = overlay_app();
+    let report = Scenario::new("default")
+        .setup(spawn_ui)
+        .step(Step::wait(2))
+        .run_in(&mut app);
+    assert!(report.passed(), "{:?}", report.failures());
+    let world = app.world_mut();
+    let mut aimed = world.query_filtered::<&UiTargetCamera, With<OverlayRoot>>();
+    assert_eq!(aimed.iter(world).count(), 0, "no explicit target");
+}
+
+#[test]
+fn the_default_check_marks_are_ascii_the_bundled_font_can_draw() {
+    let theme = OverlayTheme::default();
+    for mark in [&theme.pass_mark, &theme.fail_mark, &theme.skipped_mark] {
+        assert!(mark.is_ascii(), "{mark:?} would render as an empty box");
+    }
 }

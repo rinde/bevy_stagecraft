@@ -13,7 +13,9 @@ default = []
 record = [
     "bevy/bevy_core_pipeline",
     "bevy/bevy_ui_render",
+    "bevy/bevy_sprite_render",
     "bevy/bevy_render",
+    "dep:image",
 ]
 # A real window, used to play recordings back in the gallery.
 gallery = ["bevy/bevy_winit", "bevy/x11", "bevy/wayland"]
@@ -21,6 +23,8 @@ gallery = ["bevy/bevy_winit", "bevy/x11", "bevy/wayland"]
 [dependencies]
 ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
+# PNG and GIF encoding for the recorder; nothing else of the crate.
+image = { version = "0.25.10", default-features = false, features = ["png", "gif"], optional = true }
 # Deliberately no audio, gamepad or dynamic_linking: a library must not force
 # those on whoever depends on it.
 [dependencies.bevy]
@@ -61,3 +65,8 @@ harness = false
 
 [lints]
 workspace = true
+
+# Needs a (software) GPU: ignored by `just test`, run by `just test-gpu`.
+[[test]]
+name = "recorder"
+required-features = ["record"]

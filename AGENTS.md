@@ -58,10 +58,11 @@ lands.
 | `player`   | `ScenarioPlayerPlugin`: plays a scenario through `SyntheticInput` one frame per update into the `ScenarioReport` resource; `Scenario::run_headless` / `run_in` | done |
 | `targets`  | `Target` (screen, text, world, custom) and the `TargetResolvers` extension point | done |
 | `probe`    | `Probe` over the `World` with generic helpers (`count`, `hovered`, `resource`, `has_text`) | done |
-| `overlay`  | `CursorOverlayPlugin`: arrow cursor, press ring, held marker, trail and caption strip (`OverlayTheme`, `TargetDescriptions`); all `Pickable::IGNORE`; added only by the gallery and the recorder | done |
-| `recorder` | Offscreen recording (feature `record`)       | planned |
+| `overlay`  | `CursorOverlayPlugin`: arrow cursor, press ring, held marker, trail and caption strip (`OverlayTheme`, `TargetDescriptions`, `OverlayCamera`); all `Pickable::IGNORE`; added only by the gallery and the recorder. Default marks are ASCII (`PASS`/`FAIL`): the bundled font draws `\u{2714}`/`\u{2718}` as empty boxes | done |
+| `recorder` | `RecorderPlugins` (headless app plus the real renderer, every camera retargeted to an `Image`, the synthetic pointer aimed at it) and `Recorder` (per scenario: PNGs at step boundaries and every nth frame, filmstrip, GIF; overall `index.html`, failures first). Feature `record` | done |
+| `capture`  | `Frame` (RGBA pixels), PNG and GIF encoding, filmstrip drawing (marks and numbers drawn from shapes, no font). Feature `record` | done |
+| `index`    | The per-scenario files and `index.html`. Feature `record` | done |
 | `gallery`  | Playback in a window (feature `gallery`)     | planned |
-| `capture`  | Frame capture and image output               | planned |
 
 ## Running things
 
@@ -78,7 +79,7 @@ lands.
 | `just features`    | Check none, `record`, `gallery`, all features   | `cargo check --workspace --all-targets --no-default-features [--features ...]`    |
 | `just unused-deps` | Fail on unused dependencies                     | `cargo machete --with-metadata`                                                   |
 | `just deny`        | Licences, advisories, bans                      | `cargo deny check`                                                                |
-| `just test-gpu`    | Tests needing a (software) GPU                  | `WGPU_BACKEND=vulkan cargo test --workspace --features record gpu`                |
+| `just test-gpu`    | Tests needing a (software) GPU                  | `WGPU_BACKEND=vulkan cargo test --workspace --features record gpu -- --include-ignored` |
 | `just ci`          | Everything CI runs                              | all of the above except `test-gpu`                                                |
 
 `just test-gpu` needs a Vulkan driver. On a machine without a GPU, install
@@ -132,9 +133,17 @@ reaches behaviour (use ordered collections or sort first).
 - Test names are sentences stating the claim, for example
   `clicking_a_disabled_button_does_nothing`.
 - Tests drive a plain Bevy UI, never a game.
-- GPU tests have `gpu` in their name, need feature `record`, and run only via
-  `just test-gpu` (and CI's `gpu` job, on lavapipe). `just test` must pass on a
-  machine without a GPU.
+- GPU tests have `gpu` in their name, need feature `record`, are `#[ignore]`d,
+  and run only via `just test-gpu` (which passes `--include-ignored`; also
+  CI's `gpu` job, on lavapipe). `just test` must pass on a machine without a
+  GPU.
+- Look at what the recorder renders: the PNGs of a GPU test land in
+  `target/tmp/` (`recorder-*`). Anything drawn with text should be viewed once;
+  a glyph the bundled font lacks renders as an empty box and no assertion
+  notices.
+- Bevy builds with the dev profile are large (each test binary is over a
+  gigabyte with full debug info). On a tight disk set
+  `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, as CI does.
 
 ## Bevy-side conventions
 
