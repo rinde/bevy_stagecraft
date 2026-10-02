@@ -229,7 +229,7 @@ fn resolve_text(world: &World, text: &str) -> Result<ResolvedTarget, String> {
 }
 
 /// The nearest `Button` that is `entity` or above it.
-fn enclosing_button(world: &World, entity: Entity) -> Option<Entity> {
+pub(crate) fn enclosing_button(world: &World, entity: Entity) -> Option<Entity> {
     let mut current = entity;
     loop {
         if world.get::<Button>(current).is_some() {

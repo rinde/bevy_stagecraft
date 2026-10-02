@@ -26,8 +26,8 @@ use bevy::{
 };
 use rin_bevy_ui_tester::{
     Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState, HeadlessPlugins, Registry,
-    Scenario, ScenariosCamera, ScenariosWindow, Speed, Step, Target, overlay::OverlayRoot,
-    player::ScenarioReport,
+    Scenario, ScenariosCamera, ScenariosWindow, Script, SessionHooks, Speed, StateProbe, Step,
+    Target, overlay::OverlayRoot, player::ScenarioReport, script::Setup,
 };
 
 /// How often the "Add" button was activated.
@@ -41,6 +41,10 @@ struct Resets(u32);
 /// Marks what the app under test spawned, so its reset hook can remove it.
 #[derive(Component)]
 struct AppRoot;
+
+/// How many real mouse button messages the app's own systems have read.
+#[derive(Resource, Default)]
+struct SeenPresses(u32);
 
 /// The cursor position the app saw during `Update`.
 #[derive(Resource, Default)]
@@ -747,4 +751,220 @@ fn export_writes_the_selected_scenario_as_ron_that_loads_again() {
             .contains("add_2.ron"),
         "the status says where it went"
     );
+}
+
+/// Counts the real mouse button messages the app reads, press and release.
+fn count_presses(mut reader: MessageReader<MouseButtonInput>, mut seen: ResMut<SeenPresses>) {
+    seen.0 += u32::try_from(reader.read().count()).unwrap_or(u32::MAX);
+}
+
+#[test]
+fn a_real_click_reaches_the_app_once_and_is_not_replayed_every_update() {
+    let mut app = gallery_app();
+    app.init_resource::<SeenPresses>()
+        .add_systems(Update, count_presses);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    ask(&mut app, GalleryAction::TakeOver);
+    app.update();
+    let window = primary(&mut app);
+    let add = centre_of_button_with(&mut app, "Add");
+    real_move(&mut app, window, add);
+    app.update();
+    real_click(&mut app, window);
+    for _ in 0..10 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<SeenPresses>().0,
+        2,
+        "one press and one release, each seen once"
+    );
+}
+
+/// The gallery with recording hooks that write into `dir`.
+fn recording_app(dir: &std::path::Path) -> App {
+    let hooks = SessionHooks::new()
+        .capture_setup(|world, dir, stem| {
+            let file = format!("{stem}.setup.txt");
+            std::fs::write(dir.join(&file), world.resource::<Count>().0.to_string())
+                .map_err(|error| error.to_string())?;
+            Ok(Some(Setup::File(file)))
+        })
+        .state(count_probe());
+    app_with(
+        GalleryPlugin::new(gallery())
+            .with_reset(reset_app)
+            .with_export_dir(dir)
+            .with_session_hooks(hooks),
+    )
+}
+
+/// The app's state as a recording sees it.
+fn count_probe() -> StateProbe {
+    StateProbe::new(|world| [("count".to_owned(), world.resource::<Count>().0.to_string())].into())
+}
+
+/// A fresh directory for one test.
+fn fresh_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    drop(std::fs::remove_dir_all(&dir));
+    dir
+}
+
+#[test]
+fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
+    let dir = fresh_dir("gallery-record");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    ask(&mut app, GalleryAction::Record);
+    {
+        let state = app.world().resource::<GalleryState>();
+        assert!(state.is_recording());
+        assert!(state.is_taken_over(), "the script lets go of the window");
+    }
+    app.update();
+    app.update();
+
+    // Use the app by hand: three clicks on "Add".
+    let window = primary(&mut app);
+    let add = centre_of_button_with(&mut app, "Add");
+    for step in 1..=8_u8 {
+        let t = f32::from(step) / 8.0;
+        real_move(&mut app, window, Vec2::new(20.0, 20.0).lerp(add, t));
+        app.update();
+    }
+    for _ in 0..3 {
+        real_click(&mut app, window);
+        for _ in 0..10 {
+            app.update();
+        }
+    }
+    assert_eq!(count(app.world()), 3, "the real clicks reached the app");
+
+    // Using the gallery's own window meanwhile is not part of the session.
+    let second = scenarios_window(&mut app);
+    let restart = centre_of_button_with(&mut app, "Step frame");
+    real_move(&mut app, second, restart);
+    app.update();
+    app.update();
+    real_click(&mut app, second);
+    app.update();
+    assert_eq!(
+        app.world().resource::<Resets>().0,
+        1,
+        "nothing resets the app while recording"
+    );
+    assert!(
+        app.world()
+            .resource::<GalleryState>()
+            .status()
+            .contains("Stop recording first")
+    );
+
+    ask(&mut app, GalleryAction::StopRecording);
+    let status = app.world().resource::<GalleryState>().status().to_owned();
+    assert!(status.starts_with("Saved"), "{status}");
+    assert!(!app.world().resource::<GalleryState>().is_recording());
+
+    let path = dir.join("recording.ron");
+    let text = std::fs::read_to_string(&path).expect("the file was written");
+    let script = Script::from_ron(&text).expect("it reads back");
+    assert_eq!(
+        script.setup,
+        Some(Setup::File("recording.setup.txt".into()))
+    );
+    assert_eq!(script.window_size, Some((640, 480)));
+    let clicks = script.steps.iter().filter(|s| **s == Step::click()).count();
+    assert_eq!(clicks, 3, "{text}");
+    assert!(
+        script.steps.iter().any(|step| matches!(
+            step,
+            Step::Glide { target: Target::Text(label), .. } | Step::MoveTo(Target::Text(label))
+                if label == "Add"
+        )),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Step frame"),
+        "nothing of the gallery's window is in the script: {text}"
+    );
+    assert_eq!(
+        script.expect_state.get("count").map(String::as_str),
+        Some("3")
+    );
+
+    // The file runs like any other: load it, give it the app's setup, play it.
+    let start: u32 = std::fs::read_to_string(dir.join("recording.setup.txt"))
+        .expect("the setup was captured")
+        .parse()
+        .expect("a number");
+    let registry = Registry::default().with_state(count_probe());
+    let scenario = Scenario::from_script(script, &registry)
+        .expect("the names resolve")
+        .setup(move |world| {
+            world.spawn(Camera2d);
+            world.insert_resource(Count(start));
+            spawn_app(world);
+        });
+    let mut played = scenario.headless_app();
+    played.insert_resource(Resets::default());
+    let report = scenario.run_in(&mut played);
+    assert!(report.passed(), "{:?}", report.failures());
+    assert_eq!(played.world().resource::<Count>().0, 3);
+}
+
+#[test]
+fn the_gallerys_buttons_are_never_named_as_targets_in_a_recording() {
+    let dir = fresh_dir("gallery-record-tooling");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Record);
+    app.update();
+    app.update();
+    // The app has no UI yet; click where the gallery's button would be if its
+    // window were the primary one.
+    let window = primary(&mut app);
+    real_move(&mut app, window, Vec2::new(30.0, 30.0));
+    app.update();
+    real_click(&mut app, window);
+    ask(&mut app, GalleryAction::StopRecording);
+    let text = std::fs::read_to_string(dir.join("recording.ron")).expect("written");
+    assert!(!text.contains("Text("), "{text}");
+}
+
+#[test]
+fn recording_can_be_started_and_stopped_without_the_buttons_and_reports_where_it_went() {
+    let dir = fresh_dir("gallery-record-twice");
+    let mut app = recording_app(&dir);
+    for round in 1..=2 {
+        ask(&mut app, GalleryAction::Record);
+        ask(&mut app, GalleryAction::StopRecording);
+        let status = app.world().resource::<GalleryState>().status().to_owned();
+        let name = if round == 1 {
+            "recording.ron".to_owned()
+        } else {
+            "recording-2.ron".to_owned()
+        };
+        assert!(status.contains(&name), "{status}");
+    }
+}
+
+#[test]
+fn a_failing_capture_leaves_the_gallery_as_it_was() {
+    let dir = fresh_dir("gallery-record-fails");
+    let hooks = SessionHooks::new().capture_setup(|_, _, _| Err("no way to save this app".into()));
+    let mut app = app_with(
+        GalleryPlugin::new(gallery())
+            .with_reset(reset_app)
+            .with_export_dir(&dir)
+            .with_session_hooks(hooks),
+    );
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    ask(&mut app, GalleryAction::Record);
+    let state = app.world().resource::<GalleryState>();
+    assert!(!state.is_recording());
+    assert!(state.is_playing(), "the script carries on");
+    assert!(state.status().contains("no way to save this app"));
 }

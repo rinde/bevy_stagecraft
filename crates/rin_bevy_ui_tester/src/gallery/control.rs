@@ -11,12 +11,17 @@ use bevy::{
 use super::{
     GalleryReset,
     catalogue::Gallery,
-    state::{GalleryAction, GalleryPhase, GalleryState, PendingStep},
+    state::{GalleryAction, GalleryPhase, GalleryState, PendingStep, Recording},
 };
 use crate::{
     input::SyntheticInput,
     player::{ScenarioPlayer, ScenarioReport, advance_world},
+    session::{self, SessionRecorder},
 };
+
+/// What a scenario recorded in the gallery is called until the person renames
+/// the file.
+const RECORDING_NAME: &str = "Recording";
 
 /// Updates between the app being set up and the script starting, so layout
 /// and picking have seen the new UI. The headless runner settles for the same
@@ -138,9 +143,63 @@ fn export(world: &World, state: &mut GalleryState) {
     };
 }
 
+/// Starts recording a session from what is on screen now.
+fn record(world: &mut World, state: &mut GalleryState) {
+    let (taken_over, playing) = (state.taken_over, state.playing);
+    // The script lets go of the window first, so the real input reaches the
+    // app, and so the state captured is the one the person sees.
+    if state.selected.is_some() {
+        state.taken_over = true;
+        state.playing = false;
+        state.step = None;
+        release_held(world);
+    }
+    match session::start(world, RECORDING_NAME) {
+        Ok(()) => {
+            state.status = "Recording: use the app, then press Stop recording".into();
+        }
+        Err(error) => {
+            state.taken_over = taken_over;
+            state.playing = playing;
+            state.status = format!("Cannot record: {error}");
+        }
+    }
+}
+
+/// Stops recording and says where the file went.
+fn stop_recording(world: &mut World, state: &mut GalleryState) {
+    state.status = match session::stop(world) {
+        Ok(saved) => saved.describe(),
+        Err(error) => format!("Cannot save the recording: {error}"),
+    };
+}
+
 /// Carries out one request.
 fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
+    let recording = world
+        .get_resource::<SessionRecorder>()
+        .is_some_and(SessionRecorder::is_recording);
+    // These take the primary window back from the person or reset the app,
+    // which would spoil what is being recorded.
+    if recording
+        && matches!(
+            action,
+            GalleryAction::Select(_)
+                | GalleryAction::Restart
+                | GalleryAction::TogglePlay
+                | GalleryAction::StepFrame
+                | GalleryAction::StepStep
+                | GalleryAction::Resume
+                | GalleryAction::TakeOver
+                | GalleryAction::Record
+        )
+    {
+        "Stop recording first".clone_into(&mut state.status);
+        return;
+    }
     match action {
+        GalleryAction::Record => record(world, state),
+        GalleryAction::StopRecording => stop_recording(world, state),
         GalleryAction::Select(index) => select(world, state, index),
         GalleryAction::Restart => {
             if let Some(index) = state.selected {
@@ -204,6 +263,14 @@ pub(super) fn apply_requests(world: &mut World) {
     for action in core::mem::take(&mut state.pending) {
         apply(world, &mut state, action);
     }
+    state.recording = if world
+        .get_resource::<SessionRecorder>()
+        .is_some_and(SessionRecorder::is_recording)
+    {
+        Recording::On
+    } else {
+        Recording::Off
+    };
     world.insert_resource(state);
 }
 
