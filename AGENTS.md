@@ -58,8 +58,8 @@ lands.
 | `player`   | `ScenarioPlayerPlugin`: plays a scenario through `SyntheticInput` one frame per update into the `ScenarioReport` resource; `Scenario::run_headless` / `run_in` | done |
 | `targets`  | `Target` (screen, text, world, custom) and the `TargetResolvers` extension point | done |
 | `probe`    | `Probe` over the `World` with generic helpers (`count`, `hovered`, `resource`, `has_text`) | done |
+| `overlay`  | `CursorOverlayPlugin`: arrow cursor, press ring, held marker, trail and caption strip (`OverlayTheme`, `TargetDescriptions`); all `Pickable::IGNORE`; added only by the gallery and the recorder | done |
 | `recorder` | Offscreen recording (feature `record`)       | planned |
-| `overlay`  | Pointer and step overlay drawn on frames     | planned |
 | `gallery`  | Playback in a window (feature `gallery`)     | planned |
 | `capture`  | Frame capture and image output               | planned |
 

@@ -11,6 +11,7 @@ extern crate alloc;
 pub mod files;
 pub mod headless;
 pub mod input;
+pub mod overlay;
 pub mod player;
 pub mod probe;
 pub mod scenario;
@@ -20,6 +21,10 @@ pub mod targets;
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
 pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};
+pub use overlay::{
+    CursorOverlayPlugin, OverlaySystems, OverlayTheme, TargetDescriptions, checks_text,
+    current_step_text, describe_step, describe_target,
+};
 pub use player::{
     CheckKind, CheckRecord, Outcome, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport,
     ScenarioSystems, StepRecord,

@@ -95,6 +95,20 @@ let scenario = Scenario::from_ron_with(include_str!("x.ron"), &registry)?
 with `harness = false` calling `run_ron_tests(dir, &registry, run)` turns
 every `.ron` file in a directory into one test named after the file.
 
+## Seeing what the script does
+
+`CursorOverlayPlugin` draws the script's pointer for people watching: an arrow
+at the cursor, a ring that expands and fades on each press, a held marker
+while a button is down, a short fading trail, and a caption strip along the
+bottom naming the current step ("Click: Rail", "Glide to (5, 0)", "Tap =") and
+each check's pass or fail mark. Everything is UI with `Pickable::IGNORE`, so it
+never takes a picking hit. Only the gallery and the recorder add it; headless
+tests do not.
+
+Replace the `OverlayTheme` resource to change colours, sizes, font and marks
+(the bundled default font may lack the check marks). Add describers to
+`TargetDescriptions` to word an app's own custom targets.
+
 ## Depending on it from a private git repository
 
 In the Bevy app's `Cargo.toml`, as a dev-dependency, pinned to a revision (the
