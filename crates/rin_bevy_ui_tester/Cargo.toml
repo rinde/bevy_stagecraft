@@ -54,7 +54,7 @@ features = [
     "bevy_log",
 ]
 
-# Plays every .ron file in tests/scenarios, one test per file.
+# Plays every .ron file in tests/ron, one test per file.
 [[test]]
 name = "ron_scenarios"
 harness = false

@@ -6,8 +6,6 @@
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;
 
-use serde::{Deserialize, Serialize};
-
 use bevy::{
     camera::Camera,
     ecs::{entity::Entity, hierarchy::ChildOf, resource::Resource, world::World},
@@ -16,6 +14,7 @@ use bevy::{
     ui::{ComputedNode, UiGlobalTransform, widget::Text},
     ui_widgets::Button,
 };
+use serde::{Deserialize, Serialize};
 
 /// Where a step acts.
 ///

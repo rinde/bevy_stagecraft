@@ -7,13 +7,12 @@
 use alloc::sync::Arc;
 use core::{fmt, ops::BitOr};
 
-use serde::{Deserialize, Serialize};
-
 use bevy::{
     ecs::world::World,
     input::{keyboard::KeyCode, mouse::MouseButton},
     math::Vec2,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     probe::Probe,
@@ -104,12 +103,8 @@ impl Modifiers {
 }
 
 /// For serde: leave the modifiers out of a file when there are none.
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde calls skip_serializing_if with a reference"
-)]
-const fn no_modifiers(modifiers: &Modifiers) -> bool {
-    modifiers.is_empty()
+fn no_modifiers<T: Default + PartialEq>(modifiers: &T) -> bool {
+    *modifiers == T::default()
 }
 
 /// One modifier key, the readable serialised form of a [`Modifiers`] set.

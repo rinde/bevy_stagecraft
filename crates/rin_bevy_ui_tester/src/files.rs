@@ -22,6 +22,7 @@
 
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -133,6 +134,13 @@ pub fn run_ron_files(
         .collect())
 }
 
+/// Write a line to standard output; a closed pipe is not worth failing over.
+macro_rules! say {
+    ($($arg:tt)*) => {
+        writeln!(std::io::stdout().lock(), $($arg)*).ok()
+    };
+}
+
 /// The `main` of a `harness = false` test target.
 ///
 /// Plays every `.ron` file in `dir`, prints one line per file in the style of
@@ -140,11 +148,6 @@ pub fn run_ron_files(
 /// words that do not start with `-` filter by file name, as with
 /// `cargo test <filter>`.
 #[must_use]
-#[expect(
-    clippy::print_stdout,
-    clippy::print_stderr,
-    reason = "this is a test harness: its output is the test report"
-)]
 pub fn run_ron_tests(
     dir: impl AsRef<Path>,
     registry: &Registry,
@@ -157,13 +160,13 @@ pub fn run_ron_tests(
     let results = match run_ron_files(dir, registry, &filter, run) {
         Ok(results) => results,
         Err(error) => {
-            eprintln!("{error}");
+            writeln!(std::io::stderr().lock(), "{error}").ok();
             return ExitCode::FAILURE;
         }
     };
-    println!("\nrunning {} tests", results.len());
+    say!("\nrunning {} tests", results.len());
     for result in &results {
-        println!(
+        say!(
             "test {} ... {}",
             result.name,
             if result.passed() { "ok" } else { "FAILED" }
@@ -171,12 +174,12 @@ pub fn run_ron_tests(
     }
     let failed: Vec<_> = results.iter().filter(|result| !result.passed()).collect();
     for result in &failed {
-        println!("\n---- {} ({}) ----", result.name, result.path.display());
+        say!("\n---- {} ({}) ----", result.name, result.path.display());
         for line in result.failures() {
-            println!("{line}");
+            say!("{line}");
         }
     }
-    println!(
+    say!(
         "\ntest result: {}. {} passed; {} failed\n",
         if failed.is_empty() { "ok" } else { "FAILED" },
         results.len() - failed.len(),

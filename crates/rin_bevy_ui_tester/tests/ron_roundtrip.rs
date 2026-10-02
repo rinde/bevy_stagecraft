@@ -64,25 +64,43 @@ fn modifiers_read_as_a_list_in_ron() {
     assert!(!ron.contains("Some("), "{ron}");
 }
 
+/// The same scenario as [`in_rust`] without the drag step, written out in
+/// Rust with its own inline closures and no registry.
+fn in_rust_playable() -> Scenario {
+    Scenario::new("click pause")
+        .window_size(800, 600)
+        .setup_named("plain_ui", spawn_ui)
+        .steps([
+            Step::glide(Target::text("Pause"), 20),
+            Step::click(),
+            Step::wait(1),
+            Step::check("activated once"),
+            Step::tap_with(KeyCode::KeyP, Modifiers::CTRL | Modifiers::SHIFT),
+            Step::caption("done"),
+        ])
+        .check("activated once", |probe| {
+            probe
+                .resource::<Activations>()
+                .is_some_and(|count| count.0 == 1)
+        })
+        .expect("activated once", |probe| {
+            probe
+                .resource::<Activations>()
+                .is_some_and(|count| count.0 == 1)
+        })
+}
+
 #[test]
 fn both_spellings_play_identically() {
-    let ron = in_rust().to_ron().unwrap();
-    let mut from_rust = in_rust();
-    let mut from_file = Scenario::from_ron_with(&ron, &registry()).unwrap();
-    // The drag target is only for the round trip; drop it to play.
-    let strip = |scenario: Scenario| {
-        let mut script = scenario.to_script();
-        script
-            .steps
-            .retain(|step| !matches!(step, Step::Drag { .. }));
-        Scenario::from_script(script, &registry()).unwrap()
-    };
-    from_rust = strip(from_rust);
-    from_file = strip(from_file);
-    let a = from_rust.run_headless();
-    let b = from_file.run_headless();
-    assert!(a.passed(), "{:?}", a.failures());
-    assert_eq!(a, b);
+    // Played directly, with the closures written inline.
+    let from_rust = in_rust_playable().run_headless();
+    // Exported to RON and loaded back through the registry.
+    let ron = in_rust_playable().to_ron().unwrap();
+    let from_file = Scenario::from_ron_with(&ron, &registry())
+        .unwrap()
+        .run_headless();
+    assert!(from_rust.passed(), "{:?}", from_rust.failures());
+    assert_eq!(from_rust, from_file);
 }
 
 #[test]
