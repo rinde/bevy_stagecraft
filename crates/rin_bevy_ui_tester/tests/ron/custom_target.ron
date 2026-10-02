@@ -1,0 +1,11 @@
+(
+    format_version: 1,
+    name: "custom target",
+    setup: Some(Named("plain_ui")),
+    steps: [
+        MoveTo(Custom(resolver: "pause_button", argument: "")),
+        Click(Left),
+        Wait(1),
+    ],
+    expect: ["activated once"],
+)

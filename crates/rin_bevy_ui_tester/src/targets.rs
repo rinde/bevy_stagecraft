@@ -14,9 +14,13 @@ use bevy::{
     ui::{ComputedNode, UiGlobalTransform, widget::Text},
     ui_widgets::Button,
 };
+use serde::{Deserialize, Serialize};
 
 /// Where a step acts.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// App-defined targets are [`Target::Custom`]: a resolver name (the tag) and a
+/// string payload, which survive a round trip through RON unchanged.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Target {
     /// A logical pixel position in the window.
@@ -101,7 +105,7 @@ type ResolverFn = dyn Fn(&World, &str) -> Result<ResolvedTarget, String> + Send 
 
 /// App-defined target resolvers: the extension point for targets this crate
 /// knows nothing about, such as a lattice point or a panel action.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct TargetResolvers {
     /// Resolvers by name, ordered so nothing depends on hash order.
     resolvers: BTreeMap<String, Arc<ResolverFn>>,
@@ -121,6 +125,24 @@ impl TargetResolvers {
         resolver: impl Fn(&World, &str) -> Result<ResolvedTarget, String> + Send + Sync + 'static,
     ) {
         self.resolvers.insert(name.into(), Arc::new(resolver));
+    }
+}
+
+impl TargetResolvers {
+    /// Whether a resolver is registered under `name`.
+    #[must_use]
+    pub fn contains(&self, name: &str) -> bool {
+        self.resolvers.contains_key(name)
+    }
+
+    /// Adds every resolver of `other`, replacing those with the same name.
+    pub fn extend_from(&mut self, other: &Self) {
+        self.resolvers.extend(
+            other
+                .resolvers
+                .iter()
+                .map(|(name, resolver)| (name.clone(), Arc::clone(resolver))),
+        );
     }
 }
 

@@ -60,6 +60,41 @@ registered in `TargetResolvers`. After moving onto a widget target the player
 checks that the widget, or a descendant, is under the pointer, and otherwise
 fails naming what covers it. A failed step skips the rest of the script.
 
+## Scenarios as RON
+
+`Scenario::to_script()` gives a `Script`, plain serde data (format version,
+name, window size, setup, view, steps, expect list), and `Scenario::from_ron`
+reads one back, so a scenario can be written in Rust or as a file and
+converted either way. Closures cannot be serialised, so a script names its
+checks, setups, views and custom targets, and a `Registry` maps the names to
+code (the generic checks `pointer_over_ui` and `pointer_over_nothing` are
+built in). A file naming something nobody registered, or written in a newer
+`format_version`, is rejected when it loads.
+
+```ron
+(
+    format_version: 1,
+    name: "click pause",
+    setup: Named("plain_ui"),
+    steps: [
+        Glide(target: Text("Pause"), frames: 20),
+        Click(Left),
+        Tap(key: KeyP, modifiers: [Ctrl, Shift]),
+        Check("activated once"),
+    ],
+    expect: ["activated once"],
+)
+```
+
+```rust,ignore
+let scenario = Scenario::from_ron_with(include_str!("x.ron"), &registry)?
+    .expect("also true in Rust", |probe| probe.has_text("1"));
+```
+
+`scenario.to_ron()` / `export_ron(&script)` write pretty RON. A test target
+with `harness = false` calling `run_ron_tests(dir, &registry, run)` turns
+every `.ron` file in a directory into one test named after the file.
+
 ## Depending on it from a private git repository
 
 In the Bevy app's `Cargo.toml`, as a dev-dependency, pinned to a revision (the

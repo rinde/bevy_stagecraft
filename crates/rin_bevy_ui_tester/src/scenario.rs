@@ -1,7 +1,8 @@
 //! Scenario definition: setup, view, steps and checks.
 //!
 //! Steps and targets are plain data and checks are referenced by name, so a
-//! serialised form can be added later without reshaping any of it.
+//! scenario converts to a serialisable [`Script`] and back (see
+//! [`crate::script`]).
 
 use alloc::sync::Arc;
 use core::{fmt, ops::BitOr};
@@ -11,8 +12,13 @@ use bevy::{
     input::{keyboard::KeyCode, mouse::MouseButton},
     math::Vec2,
 };
+use serde::{Deserialize, Serialize};
 
-use crate::{probe::Probe, targets::Target};
+use crate::{
+    probe::Probe,
+    script::{FORMAT_VERSION, LoadError, Registry, Script, Setup},
+    targets::Target,
+};
 
 /// Whether a check passed; the error says what was wrong.
 pub type CheckResult = Result<(), String>;
@@ -75,6 +81,12 @@ impl Modifiers {
         self.bits & other.bits == other.bits
     }
 
+    /// Whether no modifier is in the set.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.bits == 0
+    }
+
     /// The keys to hold, in a fixed order.
     #[must_use]
     pub fn keys(self) -> Vec<KeyCode> {
@@ -87,6 +99,62 @@ impl Modifiers {
         .into_iter()
         .filter_map(|(modifier, key)| self.contains(modifier).then_some(key))
         .collect()
+    }
+}
+
+/// For serde: leave the modifiers out of a file when there are none.
+fn no_modifiers<T: Default + PartialEq>(modifiers: &T) -> bool {
+    *modifiers == T::default()
+}
+
+/// One modifier key, the readable serialised form of a [`Modifiers`] set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum Modifier {
+    /// Shift.
+    Shift,
+    /// Control.
+    Ctrl,
+    /// Alt.
+    Alt,
+    /// The logo key.
+    Super,
+}
+
+impl Modifier {
+    /// Every modifier, in the order sets list them.
+    const ALL: [(Self, Modifiers); 4] = [
+        (Self::Shift, Modifiers::SHIFT),
+        (Self::Ctrl, Modifiers::CTRL),
+        (Self::Alt, Modifiers::ALT),
+        (Self::Super, Modifiers::SUPER),
+    ];
+}
+
+/// Written as a list such as `[Ctrl, Shift]`, never as the raw bits, so a
+/// file stays easy to edit by hand.
+impl Serialize for Modifiers {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let list: Vec<Modifier> = Modifier::ALL
+            .iter()
+            .filter(|(_, set)| self.contains(*set))
+            .map(|(modifier, _)| *modifier)
+            .collect();
+        list.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Modifiers {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let list = Vec::<Modifier>::deserialize(deserializer)?;
+        Ok(list
+            .into_iter()
+            .filter_map(|modifier| {
+                Modifier::ALL
+                    .iter()
+                    .find(|(candidate, _)| *candidate == modifier)
+                    .map(|(_, set)| *set)
+            })
+            .fold(Self::NONE, |all, one| all | one))
     }
 }
 
@@ -104,7 +172,7 @@ impl BitOr for Modifiers {
 ///
 /// Every step that touches input takes one frame, except where it says
 /// otherwise; [`Step::Check`] and [`Step::Caption`] take none.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Step {
     /// Jump the pointer to the target.
@@ -145,6 +213,7 @@ pub enum Step {
         /// The key.
         key: KeyCode,
         /// The modifiers held with it.
+        #[serde(default, skip_serializing_if = "no_modifiers")]
         modifiers: Modifiers,
     },
     /// Release the key, then the modifiers.
@@ -152,6 +221,7 @@ pub enum Step {
         /// The key.
         key: KeyCode,
         /// The modifiers to let go of with it.
+        #[serde(default, skip_serializing_if = "no_modifiers")]
         modifiers: Modifiers,
     },
     /// Press and release the key, with the modifiers held around it, all in
@@ -160,6 +230,7 @@ pub enum Step {
         /// The key.
         key: KeyCode,
         /// The modifiers held around it.
+        #[serde(default, skip_serializing_if = "no_modifiers")]
         modifiers: Modifiers,
     },
     /// Do nothing for this many frames.
@@ -249,7 +320,7 @@ impl Step {
 }
 
 /// What a hook does to the world.
-type HookFn = dyn Fn(&mut World) + Send + Sync;
+pub(crate) type HookFn = dyn Fn(&mut World) + Send + Sync;
 
 /// What a check does with a probe.
 type CheckFn = dyn Fn(&Probe<'_>) -> CheckResult + Send + Sync;
@@ -260,7 +331,7 @@ pub struct NamedCheck {
     /// The name steps and reports refer to it by.
     pub name: String,
     /// The check itself.
-    run: Arc<CheckFn>,
+    pub(crate) run: Arc<CheckFn>,
 }
 
 impl fmt::Debug for NamedCheck {
@@ -302,6 +373,12 @@ pub struct Scenario {
     /// Arranges how the world is shown (camera, window); the recorder and the
     /// gallery decide what that means.
     view: Option<Arc<HookFn>>,
+    /// The size of the window the scenario wants, in logical pixels.
+    window: Option<(u32, u32)>,
+    /// The setup as the script refers to it, for the app to resolve.
+    setup_ref: Option<Setup>,
+    /// The name the view hook is referred to by in a script.
+    view_ref: Option<String>,
     /// The script.
     steps: Vec<Step>,
     /// Checks that [`Step::Check`] refers to.
@@ -316,6 +393,9 @@ impl fmt::Debug for Scenario {
             .field("name", &self.name)
             .field("setup", &self.setup.is_some())
             .field("view", &self.view.is_some())
+            .field("window", &self.window)
+            .field("setup_ref", &self.setup_ref)
+            .field("view_ref", &self.view_ref)
             .field("steps", &self.steps)
             .field("checks", &self.checks)
             .field("expects", &self.expects)
@@ -331,6 +411,9 @@ impl Scenario {
             name: name.into(),
             setup: None,
             view: None,
+            window: None,
+            setup_ref: None,
+            view_ref: None,
             steps: Vec::new(),
             checks: Vec::new(),
             expects: Vec::new(),
@@ -349,6 +432,48 @@ impl Scenario {
     #[must_use]
     pub fn view(mut self, hook: impl Fn(&mut World) + Send + Sync + 'static) -> Self {
         self.view = Some(Arc::new(hook));
+        self
+    }
+
+    /// Sets the setup hook and gives it a name, so an exported script refers
+    /// to it as [`Setup::Named`] and an app that registers a hook of that name
+    /// gets the same setup when it loads the file.
+    #[must_use]
+    pub fn setup_named(
+        mut self,
+        name: impl Into<String>,
+        hook: impl Fn(&mut World) + Send + Sync + 'static,
+    ) -> Self {
+        self.setup = Some(Arc::new(hook));
+        self.setup_ref = Some(Setup::Named(name.into()));
+        self
+    }
+
+    /// Sets the view hook and gives it a name, like [`Scenario::setup_named`].
+    #[must_use]
+    pub fn view_named(
+        mut self,
+        name: impl Into<String>,
+        hook: impl Fn(&mut World) + Send + Sync + 'static,
+    ) -> Self {
+        self.view = Some(Arc::new(hook));
+        self.view_ref = Some(name.into());
+        self
+    }
+
+    /// Refers to a setup the app resolves itself, for example
+    /// `Setup::File("saves/start.ron".into())`. The crate only stores it; no
+    /// setup hook is set.
+    #[must_use]
+    pub fn setup_ref(mut self, setup: Setup) -> Self {
+        self.setup_ref = Some(setup);
+        self
+    }
+
+    /// Sets the window size the scenario wants, in logical pixels.
+    #[must_use]
+    pub const fn window_size(mut self, width: u32, height: u32) -> Self {
+        self.window = Some((width, height));
         self
     }
 
@@ -394,6 +519,24 @@ impl Scenario {
         &self.name
     }
 
+    /// The window size the scenario wants, if it says.
+    #[must_use]
+    pub const fn window(&self) -> Option<(u32, u32)> {
+        self.window
+    }
+
+    /// The setup reference the script carries, if any.
+    #[must_use]
+    pub const fn setup_reference(&self) -> Option<&Setup> {
+        self.setup_ref.as_ref()
+    }
+
+    /// The name of the view hook the script carries, if any.
+    #[must_use]
+    pub fn view_reference(&self) -> Option<&str> {
+        self.view_ref.as_deref()
+    }
+
     /// The script.
     #[must_use]
     pub fn script(&self) -> &[Step] {
@@ -429,8 +572,94 @@ impl Scenario {
     }
 }
 
+impl Scenario {
+    /// The serialisable form of this scenario. Closures cannot be written
+    /// out, so only names survive: the hooks set with
+    /// [`Scenario::setup_named`] and [`Scenario::view_named`], the checks
+    /// that [`Step::Check`] steps name, and the names of the `expect` checks.
+    /// Anything set with the plain [`Scenario::setup`] or [`Scenario::view`]
+    /// is not part of the script.
+    #[must_use]
+    pub fn to_script(&self) -> Script {
+        Script {
+            format_version: FORMAT_VERSION,
+            name: self.name.clone(),
+            window_size: self.window,
+            setup: self.setup_ref.clone(),
+            view: self.view_ref.clone(),
+            steps: self.steps.clone(),
+            expect: self
+                .expects
+                .iter()
+                .map(|check| check.name.clone())
+                .collect(),
+        }
+    }
+
+    /// Builds a scenario from `script`, finding every named check, setup,
+    /// view and target resolver in `registry`.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError`] when the format version is not the one this crate reads,
+    /// or when the script names a check, setup, view or target that
+    /// `registry` does not have. Nothing is ever skipped.
+    pub fn from_script(script: Script, registry: &Registry) -> Result<Self, LoadError> {
+        crate::script::build_scenario(script, registry)
+    }
+
+    /// Reads a scenario from RON text, with the generic checks only. Chain
+    /// `.expect(..)` to add Rust assertions to a recorded file.
+    ///
+    /// # Errors
+    ///
+    /// See [`Scenario::from_script`]; also a syntax error in the text.
+    pub fn from_ron(text: &str) -> Result<Self, LoadError> {
+        Self::from_ron_with(text, &Registry::default())
+    }
+
+    /// Reads a scenario from RON text, resolving names in `registry`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Scenario::from_script`]; also a syntax error in the text.
+    pub fn from_ron_with(text: &str, registry: &Registry) -> Result<Self, LoadError> {
+        Self::from_script(Script::from_ron(text)?, registry)
+    }
+
+    /// The scenario as pretty RON; see [`Scenario::to_script`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::script::ExportError`] if serialisation fails.
+    pub fn to_ron(&self) -> Result<String, crate::script::ExportError> {
+        crate::script::export_ron(&self.to_script())
+    }
+
+    /// Puts a scenario together from a script and what the loader resolved.
+    pub(crate) fn assemble(
+        script: Script,
+        setup: Option<Arc<HookFn>>,
+        view: Option<Arc<HookFn>>,
+        checks: Vec<NamedCheck>,
+        expects: Vec<NamedCheck>,
+    ) -> Self {
+        Self {
+            name: script.name,
+            setup,
+            view,
+            window: script.window_size,
+            setup_ref: script.setup,
+            view_ref: script.view,
+            steps: script.steps,
+            checks,
+            expects,
+        }
+    }
+}
+
 /// Wraps a check closure with its name.
-fn named<R: IntoCheckResult>(
+pub(crate) fn named<R: IntoCheckResult>(
     name: impl Into<String>,
     check: impl Fn(&Probe<'_>) -> R + Send + Sync + 'static,
 ) -> NamedCheck {
