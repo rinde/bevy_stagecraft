@@ -633,10 +633,21 @@ impl Scenario {
     /// report.
     #[must_use]
     pub fn run_headless(&self) -> ScenarioReport {
+        self.run_in(&mut self.headless_app())
+    }
+
+    /// A finished [`HeadlessPlugins`] app with the scenario's window size, or
+    /// the default one. Use it to add what the scenario needs (for example
+    /// [`crate::script::Registry::install`]) before [`Scenario::run_in`].
+    pub fn headless_app(&self) -> App {
+        let mut plugins = HeadlessPlugins::default();
+        if let Some((width, height)) = self.window() {
+            plugins = plugins.with_window_size(width, height);
+        }
         let mut app = App::new();
-        app.add_plugins(HeadlessPlugins::default());
+        app.add_plugins(plugins);
         app.finish();
         app.cleanup();
-        self.run_in(&mut app)
+        app
     }
 }

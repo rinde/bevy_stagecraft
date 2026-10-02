@@ -19,6 +19,8 @@ record = [
 gallery = ["bevy/bevy_winit", "bevy/x11", "bevy/wayland"]
 
 [dependencies]
+ron = "0.12.2"
+serde = { version = "1.0.229", features = ["derive"] }
 # Deliberately no audio, gamepad or dynamic_linking: a library must not force
 # those on whoever depends on it.
 [dependencies.bevy]
@@ -46,9 +48,16 @@ features = [
     "bevy_image",
     "bevy_mesh",
     "bevy_gizmos",
+    # Serde for vectors, keys and mouse buttons, so scripts can be written out.
+    "serialize",
     # Warnings from the synthetic input systems.
     "bevy_log",
 ]
+
+# Plays every .ron file in tests/scenarios, one test per file.
+[[test]]
+name = "ron_scenarios"
+harness = false
 
 [lints]
 workspace = true
