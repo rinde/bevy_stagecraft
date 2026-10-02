@@ -8,7 +8,9 @@ use core::fmt;
 
 use bevy::{
     camera::Camera,
-    ecs::{entity::Entity, hierarchy::ChildOf, resource::Resource, world::World},
+    ecs::{
+        component::Component, entity::Entity, hierarchy::ChildOf, resource::Resource, world::World,
+    },
     math::{Vec2, Vec3},
     transform::components::GlobalTransform,
     ui::{ComputedNode, UiGlobalTransform, widget::Text},
@@ -100,6 +102,29 @@ impl ResolvedTarget {
     }
 }
 
+/// Marks UI and cameras that belong to the tooling (the cursor overlay, the
+/// gallery's window), not to the app under test.
+///
+/// Target lookups, [`crate::Probe::has_text`] and the world-target camera skip
+/// anything that carries it or sits below something that does, so a script
+/// that clicks "Reset" never lands on a gallery button of the same name.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct NotUnderTest;
+
+/// Whether `entity` is, or lies below, something marked [`NotUnderTest`].
+pub(crate) fn is_tooling(world: &World, entity: Entity) -> bool {
+    let mut current = entity;
+    loop {
+        if world.get::<NotUnderTest>(current).is_some() {
+            return true;
+        }
+        match world.get::<ChildOf>(current) {
+            Some(parent) => current = parent.parent(),
+            None => return false,
+        }
+    }
+}
+
 /// What an app-defined resolver is: the world and an argument in, a pixel out.
 type ResolverFn = dyn Fn(&World, &str) -> Result<ResolvedTarget, String> + Send + Sync;
 
@@ -173,7 +198,7 @@ fn resolve_text(world: &World, text: &str) -> Result<ResolvedTarget, String> {
         .map(|query| {
             query
                 .iter_manual(world)
-                .filter(|(_, shown)| shown.0 == text)
+                .filter(|(entity, shown)| shown.0 == text && !is_tooling(world, *entity))
                 .map(|(entity, _)| entity)
                 .collect()
         })
@@ -221,7 +246,7 @@ fn resolve_world(world: &World, position: Vec3) -> Result<ResolvedTarget, String
         .map(|query| {
             query
                 .iter_manual(world)
-                .filter(|(_, camera, _)| camera.is_active)
+                .filter(|(entity, camera, _)| camera.is_active && !is_tooling(world, *entity))
                 .map(|(entity, camera, transform)| (camera.order, entity, camera, *transform))
                 .collect()
         })

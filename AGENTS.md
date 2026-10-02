@@ -62,7 +62,7 @@ lands.
 | `recorder` | `RecorderPlugins` (headless app plus the real renderer, every camera retargeted to an `Image`, the synthetic pointer aimed at it) and `Recorder` (per scenario: PNGs at step boundaries and every nth frame, filmstrip, GIF; overall `index.html`, failures first). Feature `record` | done |
 | `capture`  | `Frame` (RGBA pixels), PNG and GIF encoding, filmstrip drawing (marks and numbers drawn from shapes, no font). Feature `record` | done |
 | `index`    | The per-scenario files and `index.html`. Feature `record` | done |
-| `gallery`  | Playback in a window (feature `gallery`)     | planned |
+| `gallery`  | `GalleryPlugin` (feature `gallery`): the app in the primary window, a second `Scenarios` window with its own UI camera (catalogue, play/pause, step frame/step, restart, speed, loop, Take over, Export, live checks). Submodules: `catalogue` (`Gallery`), `state` (`GalleryState`, `GalleryAction`, `Speed`), `control` (requests and pacing, drives the player through `advance_world`), `input` (drains real input aimed at the primary window while a script plays, bridges the Scenarios window to its own pointer, asserts and restores the cursor), `ui`. `NotUnderTest` (in `targets`) hides gallery and overlay UI from target lookups | done |
 
 ## Running things
 

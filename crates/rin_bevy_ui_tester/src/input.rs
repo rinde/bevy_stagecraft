@@ -68,6 +68,8 @@ pub struct SyntheticInput {
     /// The render target pointer locations refer to; the primary window when
     /// `None`. An offscreen image when recording.
     target: Option<NormalizedRenderTarget>,
+    /// Where the last drained [`SyntheticEvent::MoveCursor`] put the cursor.
+    cursor: Option<Vec2>,
 }
 
 impl SyntheticInput {
@@ -125,6 +127,18 @@ impl SyntheticInput {
     /// primary window.
     pub fn set_target(&mut self, target: Option<NormalizedRenderTarget>) {
         self.target = target;
+    }
+
+    /// Where the script last moved the cursor, or `None` if it has not since
+    /// the start or the last [`Self::forget_cursor`].
+    #[must_use]
+    pub const fn cursor(&self) -> Option<Vec2> {
+        self.cursor
+    }
+
+    /// Forgets where the cursor was, as a fresh scenario starts without one.
+    pub const fn forget_cursor(&mut self) {
+        self.cursor = None;
     }
 
     /// Whether nothing is waiting to be drained.
@@ -199,6 +213,7 @@ fn drain_synthetic_input(
             SyntheticEvent::MoveCursor(position) => {
                 let delta = position - *last_position;
                 *last_position = position;
+                input.cursor = Some(position);
                 window.set_cursor_position(Some(position));
                 cursor_moved.write(CursorMoved {
                     window: window_entity,

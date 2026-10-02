@@ -11,6 +11,8 @@ extern crate alloc;
 #[cfg(feature = "record")]
 pub mod capture;
 pub mod files;
+#[cfg(feature = "gallery")]
+pub mod gallery;
 pub mod headless;
 #[cfg(feature = "record")]
 pub mod index;
@@ -27,6 +29,11 @@ pub mod targets;
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
+#[cfg(feature = "gallery")]
+pub use gallery::{
+    Gallery, GalleryAction, GalleryEntry, GalleryGroup, GalleryPlugin, GalleryState,
+    GallerySystems, ScenariosCamera, ScenariosWindow, Speed,
+};
 pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};
 pub use overlay::{
@@ -48,4 +55,4 @@ pub use script::{
     CheckRegistry, ExportError, FORMAT_VERSION, HookRegistry, LoadError, Registry, Script, Setup,
     export_ron,
 };
-pub use targets::{ResolvedTarget, Target, TargetResolvers, resolve};
+pub use targets::{NotUnderTest, ResolvedTarget, Target, TargetResolvers, resolve};

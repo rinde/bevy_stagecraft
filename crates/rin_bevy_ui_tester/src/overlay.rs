@@ -39,7 +39,7 @@ use bevy::{
 use crate::{
     player::{CheckRecord, Outcome, ScenarioReport},
     scenario::{Modifiers, Step},
-    targets::Target,
+    targets::{NotUnderTest, Target},
 };
 
 /// Width of the cursor bitmap, in pixels.
@@ -466,6 +466,7 @@ fn spawn_overlay(
         commands.spawn((
             OverlayTrailDot(index),
             OverlayRoot,
+            NotUnderTest,
             round_marker(TRAIL_DOT_SIZE, 0.0),
             BackgroundColor(theme.trail.with_alpha(0.0)),
             Pickable::IGNORE,
@@ -475,6 +476,7 @@ fn spawn_overlay(
     commands.spawn((
         OverlayHeld,
         OverlayRoot,
+        NotUnderTest,
         round_marker(HELD_SIZE, RING_BORDER),
         BorderColor::all(theme.held_ring),
         Pickable::IGNORE,
@@ -484,6 +486,7 @@ fn spawn_overlay(
     commands.spawn((
         OverlayCursor,
         OverlayRoot,
+        NotUnderTest,
         Node {
             position_type: PositionType::Absolute,
             width: px(CURSOR_WIDTH),
@@ -508,6 +511,7 @@ fn spawn_overlay(
         .spawn((
             OverlayCaptionStrip,
             OverlayRoot,
+            NotUnderTest,
             Node {
                 position_type: PositionType::Absolute,
                 left: px(0),
@@ -642,6 +646,7 @@ fn spawn_rings(
             centre: position,
         },
         OverlayRoot,
+        NotUnderTest,
         Node {
             left: px(position.x - RING_START_SIZE / 2.0),
             top: px(position.y - RING_START_SIZE / 2.0),

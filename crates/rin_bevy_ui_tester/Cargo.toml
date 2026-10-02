@@ -17,8 +17,16 @@ record = [
     "bevy/bevy_render",
     "dep:image",
 ]
-# A real window, used to play recordings back in the gallery.
-gallery = ["bevy/bevy_winit", "bevy/x11", "bevy/wayland"]
+# Real windows, used to play scenarios back in the gallery: the windowing
+# backends and the renderer that draws UI into them.
+gallery = [
+    "bevy/bevy_winit",
+    "bevy/x11",
+    "bevy/wayland",
+    "bevy/bevy_core_pipeline",
+    "bevy/bevy_ui_render",
+    "bevy/bevy_sprite_render",
+]
 
 [dependencies]
 ron = "0.12.2"
@@ -70,3 +78,13 @@ workspace = true
 [[test]]
 name = "recorder"
 required-features = ["record"]
+
+# Plays against two headless windows; no GPU needed.
+[[test]]
+name = "gallery"
+required-features = ["gallery"]
+
+# A small plain-UI app in the gallery. Needs a display.
+[[example]]
+name = "gallery"
+required-features = ["gallery"]
