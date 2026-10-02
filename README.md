@@ -12,7 +12,7 @@ This is private software.
 ## Status
 
 The crate is being built up ticket by ticket (see the tickets on GitHub).
-Headless scenarios and the offscreen recorder work today; the gallery is still to come.
+Headless scenarios, the offscreen recorder and the gallery work today.
 
 ## Headless app and synthetic input
 
@@ -153,6 +153,51 @@ It needs a GPU, or lavapipe without one: `WGPU_BACKEND=vulkan` after
 `sudo apt-get install -y mesa-vulkan-drivers libvulkan1`. `just test-gpu` runs
 the recorder's tests.
 
+## The gallery (feature `gallery`)
+
+Watch scenarios play in a real app, in a loop. `GalleryPlugin` goes into an
+ordinary windowed app (for example `DefaultPlugins`) next to the app's own
+plugins. The app under test runs untouched in the primary window; a second OS
+window, **Scenarios**, with its own UI camera, holds the catalogue (grouped,
+with descriptions and each entry's last result), play and pause, step one
+frame, step to the next step, restart, speed (1/4x, 1/2x, 1x, 2x), loop on and
+off, **Take over**, **Export RON**, and the live list of the selected scenario's
+checks. Space plays and pauses, Right steps a frame, Down steps to the next
+step and Left restarts, read from the Scenarios window only.
+
+```rust,ignore
+App::new()
+    .add_plugins(DefaultPlugins)
+    .add_plugins(
+        GalleryPlugin::new(
+            Gallery::new().group("Counter", [GalleryEntry::new(scenario).described("Press +1")]),
+        )
+        .with_reset(|world| { /* despawn the app's UI, reset its resources */ }),
+    )
+    .run();
+```
+
+Picking a scenario calls the app's reset hook, then the scenario's setup and
+view, resizes the primary window to the scenario's window size and plays it
+with the cursor overlay. The reset hook must only put the app's own state back:
+it must not despawn the gallery's, the overlay's or the Scenarios window's
+entities. Everything the gallery spawns carries `NotUnderTest`, which target
+lookups and `Probe::has_text` skip, so a script that clicks "Reset" never finds
+a gallery button.
+
+While a scenario plays the script owns the primary window: the real mouse,
+keyboard and touch messages aimed at it are removed before Bevy reads them,
+Bevy's own mouse picking is off, and the script's cursor position is put on the
+window for each update and the real one put back afterwards (so the operating
+system's pointer is never moved; an app reading `Window::cursor_position` in
+`First` or `Last` sees the real one). The Scenarios window keeps working: its
+mouse drives a pointer of its own. **Take over** pauses the script and hands
+the window back; **Resume script** carries on.
+
+Try it with `cargo run --example gallery --features gallery` (needs a display).
+The gallery feature turns on the windowing backends and the renderer that draws
+UI into a window, which a library test never needs.
+
 ## Depending on it from a private git repository
 
 In the Bevy app's `Cargo.toml`, as a dev-dependency, pinned to a revision (the
@@ -173,7 +218,7 @@ your credential helper or SSH agent).
 1. **Headless**: `run_headless()` inside `cargo test`. No window, no GPU.
 2. **Recorded**: enable feature `record` to render a scenario offscreen and
    save frames for review. Needs a GPU, or lavapipe on a machine without one.
-3. **Gallery**: enable feature `gallery` to play scenarios back in a window.
+3. **Gallery**: enable feature `gallery` to play scenarios back in a real window, in a loop.
 
 Scenarios use fixed 1/60 s steps, so all three runners produce the same frames.
 

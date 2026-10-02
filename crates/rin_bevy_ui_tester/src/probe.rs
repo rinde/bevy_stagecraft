@@ -61,8 +61,12 @@ impl<'w> Probe<'w> {
     #[must_use]
     pub fn has_text(&self, text: &str) -> bool {
         self.world
-            .try_query::<&Text>()
-            .is_some_and(|query| query.iter_manual(self.world).any(|shown| shown.0 == text))
+            .try_query::<(Entity, &Text)>()
+            .is_some_and(|query| {
+                query.iter_manual(self.world).any(|(entity, shown)| {
+                    shown.0 == text && !crate::targets::is_tooling(self.world, entity)
+                })
+            })
     }
 }
 

@@ -1,0 +1,750 @@
+//! The gallery over a plain Bevy UI, with two headless windows.
+//!
+//! Real input is imitated by writing the messages `bevy_winit` would: the
+//! typed ones (`CursorMoved`, `MouseButtonInput`, `KeyboardInput`) and the
+//! `WindowEvent` wrapper Bevy's own mouse picking reads. Nothing here opens a
+//! real window; see the example for that.
+
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::disallowed_methods,
+    reason = "tests may panic on a broken setup"
+)]
+
+use bevy::{
+    input::{
+        ButtonInput, ButtonState,
+        keyboard::{Key, KeyCode, KeyboardInput, NativeKey},
+        mouse::{MouseButton, MouseButtonInput},
+    },
+    picking::input::PointerInputSettings,
+    prelude::*,
+    ui::{ComputedNode, ComputedUiTargetCamera, UiGlobalTransform, px},
+    ui_widgets::{Activate, Button},
+    window::{CursorMoved, PrimaryWindow, WindowEvent},
+};
+use rin_bevy_ui_tester::{
+    Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState, HeadlessPlugins, Registry,
+    Scenario, ScenariosCamera, ScenariosWindow, Speed, Step, Target, overlay::OverlayRoot,
+    player::ScenarioReport,
+};
+
+/// How often the "Add" button was activated.
+#[derive(Resource, Default)]
+struct Count(u32);
+
+/// How often the reset hook ran.
+#[derive(Resource, Default)]
+struct Resets(u32);
+
+/// Marks what the app under test spawned, so its reset hook can remove it.
+#[derive(Component)]
+struct AppRoot;
+
+/// The cursor position the app saw during `Update`.
+#[derive(Resource, Default)]
+struct SeenCursor(Option<Vec2>);
+
+/// Spawns the app: a camera, an "Add" button and a button named like one of
+/// the gallery's own.
+fn spawn_app(world: &mut World) {
+    for (label, left) in [("Add", 100), ("Restart", 300)] {
+        world
+            .spawn((
+                AppRoot,
+                Button,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(left),
+                    top: px(100),
+                    width: px(120),
+                    height: px(60),
+                    ..Node::default()
+                },
+                BackgroundColor(Color::WHITE),
+                children![Text::new(label)],
+            ))
+            .observe(|_: On<Activate>, mut count: ResMut<Count>| count.0 += 1);
+    }
+}
+
+/// Puts the app's state back.
+fn reset_app(world: &mut World) {
+    let roots: Vec<Entity> = world
+        .query_filtered::<Entity, With<AppRoot>>()
+        .iter(world)
+        .collect();
+    for root in roots {
+        world.despawn(root);
+    }
+    world.insert_resource(Count(0));
+    world.resource_mut::<Resets>().0 += 1;
+}
+
+/// Clicks "Add" the given number of times.
+fn adds(times: u32) -> Scenario {
+    let mut steps = vec![Step::glide(Target::text("Add"), 10)];
+    for _ in 0..times {
+        steps.push(Step::click());
+        steps.push(Step::wait(2));
+    }
+    steps.push(Step::check("count"));
+    Scenario::new(format!("add {times}"))
+        .setup(spawn_app)
+        .window_size(640, 480)
+        .steps(steps)
+        .check("count", move |probe| {
+            probe
+                .resource::<Count>()
+                .is_some_and(|count| count.0 == times)
+        })
+        .expect("count is right", move |probe| {
+            probe
+                .resource::<Count>()
+                .is_some_and(|count| count.0 == times)
+        })
+}
+
+/// Clicks the app's button named "Restart", which the gallery also has one of.
+fn restart_the_app_button() -> Scenario {
+    Scenario::new("restart button")
+        .setup(spawn_app)
+        .steps([Step::glide(Target::text("Restart"), 5), Step::click()])
+        .expect("clicked once", |probe| {
+            probe.resource::<Count>().is_some_and(|count| count.0 == 1)
+        })
+}
+
+/// A catalogue of three scenarios.
+fn gallery() -> Gallery {
+    Gallery::new()
+        .group(
+            "Counting",
+            [
+                GalleryEntry::new(adds(2)).described("Two clicks"),
+                GalleryEntry::new(adds(3)),
+            ],
+        )
+        .group("Names", [restart_the_app_button()])
+}
+
+/// A finished app with the gallery on top of headless windows.
+fn app_with(plugin: GalleryPlugin) -> App {
+    let mut app = App::new();
+    app.add_plugins((HeadlessPlugins::default(), plugin))
+        .init_resource::<Count>()
+        .init_resource::<Resets>()
+        .init_resource::<SeenCursor>()
+        // The app's camera lives as long as the app: headless apps have no
+        // render world to sync a despawned camera to, so the reset hook must
+        // not despawn cameras (a real renderer copes).
+        .add_systems(Startup, |mut commands: Commands| {
+            commands.spawn(Camera2d);
+        })
+        .add_systems(
+            Update,
+            |windows: Query<&Window, With<PrimaryWindow>>, mut seen: ResMut<SeenCursor>| {
+                seen.0 = windows.iter().next().and_then(Window::cursor_position);
+            },
+        );
+    app.finish();
+    app.cleanup();
+    app.update();
+    app
+}
+
+/// The usual app: loops with a pause of two updates.
+fn gallery_app() -> App {
+    app_with(
+        GalleryPlugin::new(gallery())
+            .with_reset(reset_app)
+            .with_loop_pause(2),
+    )
+}
+
+/// Asks the gallery for something and lets one update carry it out.
+fn ask(app: &mut App, action: GalleryAction) {
+    app.world_mut()
+        .resource_mut::<GalleryState>()
+        .request(action);
+    app.update();
+}
+
+/// Updates until `done`, failing after `limit`.
+fn run_until(app: &mut App, limit: usize, done: impl Fn(&World) -> bool) {
+    for _ in 0..limit {
+        if done(app.world()) {
+            return;
+        }
+        app.update();
+    }
+    assert!(done(app.world()), "gave up after {limit} updates");
+}
+
+fn finished(world: &World) -> bool {
+    world.resource::<ScenarioReport>().finished
+}
+
+fn count(world: &World) -> u32 {
+    world.resource::<Count>().0
+}
+
+fn frames(world: &World) -> u32 {
+    world.resource::<ScenarioReport>().frames
+}
+
+fn primary(app: &mut App) -> Entity {
+    app.world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("a primary window")
+}
+
+fn scenarios_window(app: &mut App) -> Entity {
+    app.world_mut()
+        .query_filtered::<Entity, With<ScenariosWindow>>()
+        .single(app.world())
+        .expect("a Scenarios window")
+}
+
+/// What `bevy_winit` does for a moved real mouse.
+fn real_move(app: &mut App, window: Entity, position: Vec2) {
+    if let Some(mut window) = app.world_mut().get_mut::<Window>(window) {
+        window.set_cursor_position(Some(position));
+    }
+    let moved = CursorMoved {
+        window,
+        position,
+        delta: None,
+    };
+    app.world_mut()
+        .write_message(WindowEvent::from(moved.clone()));
+    app.world_mut().write_message(moved);
+}
+
+/// What `bevy_winit` does for a real click: a press and a release.
+fn real_click(app: &mut App, window: Entity) {
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        let input = MouseButtonInput {
+            button: MouseButton::Left,
+            state,
+            window,
+        };
+        app.world_mut().write_message(WindowEvent::from(input));
+        app.world_mut().write_message(input);
+        app.update();
+    }
+}
+
+fn real_key(app: &mut App, window: Entity, key_code: KeyCode) {
+    let input = KeyboardInput {
+        key_code,
+        logical_key: Key::Unidentified(NativeKey::Unidentified),
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window,
+    };
+    app.world_mut()
+        .write_message(WindowEvent::from(input.clone()));
+    app.world_mut().write_message(input);
+}
+
+/// The middle of the button showing `text` (logical pixels), found by hand
+/// because the gallery's own nodes are hidden from target lookups.
+fn centre_of_button_with(app: &mut App, text: &str) -> Vec2 {
+    let world = app.world_mut();
+    let label = world
+        .query::<(Entity, &Text)>()
+        .iter(world)
+        .find(|(_, shown)| shown.0 == text)
+        .expect("a node shows the text")
+        .0;
+    let button = world.get::<ChildOf>(label).expect("a button").parent();
+    let node = world.get::<ComputedNode>(button).expect("laid out");
+    let transform = world.get::<UiGlobalTransform>(button).expect("positioned");
+    transform.affine().translation * node.inverse_scale_factor
+}
+
+#[test]
+fn picking_a_scenario_resets_the_app_and_plays_it_to_a_passing_result() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 400, finished);
+    assert_eq!(count(app.world()), 2);
+    assert!(app.world().resource::<ScenarioReport>().passed());
+    let state = app.world().resource::<GalleryState>();
+    assert_eq!(state.result(0), Some(true));
+    assert_eq!(state.result(1), None, "the other entry has not run");
+    assert_eq!(app.world().resource::<Resets>().0, 1);
+}
+
+#[test]
+fn a_failing_scenario_records_a_failing_result() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(1));
+    // `adds(3)` clicks three times; pause is irrelevant, it passes. Break it
+    // by taking a click away from the app between steps.
+    run_until(&mut app, 400, |world| frames(world) > 12);
+    app.world_mut().insert_resource(Count(100));
+    run_until(&mut app, 400, finished);
+    let state = app.world().resource::<GalleryState>();
+    assert_eq!(state.result(1), Some(false));
+}
+
+#[test]
+fn the_window_takes_the_scenarios_size() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    let window = primary(&mut app);
+    let size = app
+        .world()
+        .get::<Window>(window)
+        .expect("window")
+        .resolution
+        .size();
+    assert_eq!(size, Vec2::new(640.0, 480.0));
+}
+
+#[test]
+fn pause_holds_the_script_and_step_frame_runs_exactly_one_frame() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 5);
+    ask(&mut app, GalleryAction::TogglePlay);
+    let held = frames(app.world());
+    for _ in 0..10 {
+        app.update();
+    }
+    assert_eq!(frames(app.world()), held, "paused");
+    assert!(!app.world().resource::<GalleryState>().is_playing());
+    ask(&mut app, GalleryAction::StepFrame);
+    assert_eq!(frames(app.world()), held + 1, "one frame");
+    app.update();
+    assert_eq!(frames(app.world()), held + 1, "and then paused again");
+    ask(&mut app, GalleryAction::TogglePlay);
+    run_until(&mut app, 400, finished);
+    assert_eq!(count(app.world()), 2, "playing on from where it stopped");
+}
+
+#[test]
+fn step_to_next_step_runs_to_a_step_boundary_and_pauses() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 3);
+    ask(&mut app, GalleryAction::StepStep);
+    for _ in 0..30 {
+        app.update();
+    }
+    // The first step is a ten-frame glide, so the stop is at the end of it,
+    // before the click.
+    assert_eq!(frames(app.world()), 10, "the glide is over");
+    assert_eq!(count(app.world()), 0, "the click has not happened");
+    ask(&mut app, GalleryAction::StepStep);
+    for _ in 0..30 {
+        app.update();
+    }
+    assert_eq!(
+        frames(app.world()),
+        11,
+        "the click is one step of one frame"
+    );
+    assert_eq!(count(app.world()), 1);
+}
+
+#[test]
+fn slower_speeds_play_fewer_frames_per_update_and_faster_ones_more_without_stale_checks() {
+    let frames_after = |speed: Speed, updates: usize| {
+        let mut app = gallery_app();
+        ask(&mut app, GalleryAction::ToggleLoop);
+        ask(&mut app, GalleryAction::SetSpeed(speed));
+        ask(&mut app, GalleryAction::Select(0));
+        // Past the settling updates, then a fixed number of playing ones.
+        for _ in 0..(updates + 3) {
+            app.update();
+        }
+        frames(app.world())
+    };
+    let quarter = frames_after(Speed::Quarter, 7);
+    let half = frames_after(Speed::Half, 7);
+    let normal = frames_after(Speed::Normal, 7);
+    let double = frames_after(Speed::Double, 7);
+    assert!(
+        quarter < half && half < normal && normal < double,
+        "{quarter} {half} {normal} {double}"
+    );
+    assert!(double <= normal * 2);
+
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::SetSpeed(Speed::Double));
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 400, finished);
+    assert!(
+        app.world().resource::<ScenarioReport>().passed(),
+        "{:?}",
+        app.world().resource::<ScenarioReport>().failures()
+    );
+}
+
+#[test]
+fn a_looping_gallery_resets_and_plays_again_after_a_pause() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 400, finished);
+    assert_eq!(app.world().resource::<Resets>().0, 1);
+    run_until(&mut app, 100, |world| world.resource::<Resets>().0 == 2);
+    assert_eq!(
+        count(app.world()),
+        0,
+        "the second run starts from a fresh app"
+    );
+    run_until(&mut app, 400, |world| finished(world) && count(world) == 2);
+}
+
+#[test]
+fn without_looping_a_finished_scenario_stays_finished_until_asked_again() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::ToggleLoop);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 400, finished);
+    for _ in 0..30 {
+        app.update();
+    }
+    assert_eq!(app.world().resource::<Resets>().0, 1, "no second run");
+    assert!(app.world().resource::<GalleryState>().is_finished());
+    ask(&mut app, GalleryAction::TogglePlay);
+    assert_eq!(app.world().resource::<Resets>().0, 2, "play runs it again");
+}
+
+#[test]
+fn restart_resets_the_app_and_starts_over() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 400, |world| count(world) == 1);
+    ask(&mut app, GalleryAction::Restart);
+    assert_eq!(count(app.world()), 0);
+    assert_eq!(app.world().resource::<Resets>().0, 2);
+    run_until(&mut app, 400, finished);
+    assert_eq!(count(app.world()), 2);
+}
+
+#[test]
+fn moving_and_clicking_the_real_mouse_over_the_app_changes_nothing_during_playback() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    // Play to just before the glide ends, so the script cursor is moving.
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    assert!(
+        !app.world()
+            .resource::<PointerInputSettings>()
+            .is_mouse_enabled,
+        "Bevy's own mouse picking is off while the script plays"
+    );
+    let window = primary(&mut app);
+    let script_cursor = app
+        .world()
+        .get::<Window>(window)
+        .and_then(Window::cursor_position);
+    let _ = script_cursor;
+    // The real mouse goes to "Add" and clicks.
+    let add = centre_of_button_with(&mut app, "Add");
+    real_move(&mut app, window, add);
+    real_click(&mut app, window);
+    real_key(&mut app, window, KeyCode::KeyA);
+    app.update();
+    assert_eq!(
+        count(app.world()),
+        0,
+        "the real click did not reach the app"
+    );
+    assert!(
+        !app.world()
+            .resource::<ButtonInput<KeyCode>>()
+            .pressed(KeyCode::KeyA)
+    );
+    assert!(
+        !app.world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Left),
+    );
+    // What the app saw in Update is the script's cursor, not the real one.
+    let seen = app.world().resource::<SeenCursor>().0.expect("a cursor");
+    assert!(
+        seen.distance(add) > 1.0 || frames(app.world()) > 10,
+        "the script's, not the mouse's: {seen} vs {add}"
+    );
+    // And the script still passes.
+    run_until(&mut app, 400, finished);
+    assert!(
+        app.world().resource::<ScenarioReport>().passed(),
+        "{:?}",
+        app.world().resource::<ScenarioReport>().failures()
+    );
+    assert_eq!(count(app.world()), 2);
+}
+
+#[test]
+fn the_real_cursor_position_is_put_back_after_the_script_cursor_was_shown() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 6);
+    let window = primary(&mut app);
+    real_move(&mut app, window, Vec2::new(500.0, 400.0));
+    app.update();
+    // After the whole update the window holds the real position again, which
+    // is what keeps `bevy_winit` from moving the operating system's pointer.
+    let after = app
+        .world()
+        .get::<Window>(window)
+        .and_then(Window::cursor_position);
+    assert_eq!(after, Some(Vec2::new(500.0, 400.0)));
+    let seen = app.world().resource::<SeenCursor>().0.expect("a cursor");
+    assert!(seen.distance(Vec2::new(500.0, 400.0)) > 1.0, "{seen}");
+}
+
+#[test]
+fn take_over_pauses_the_script_and_gives_the_app_back_to_the_real_mouse() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    ask(&mut app, GalleryAction::TakeOver);
+    assert!(app.world().resource::<GalleryState>().is_taken_over());
+    app.update();
+    assert!(
+        app.world()
+            .resource::<PointerInputSettings>()
+            .is_mouse_enabled
+    );
+    let held = frames(app.world());
+    for _ in 0..10 {
+        app.update();
+    }
+    assert_eq!(frames(app.world()), held, "the script is paused");
+    // Let layout settle, then use the real mouse on the real button.
+    let window = primary(&mut app);
+    let add = centre_of_button_with(&mut app, "Add");
+    real_move(&mut app, window, add);
+    app.update();
+    app.update();
+    real_click(&mut app, window);
+    app.update();
+    assert_eq!(count(app.world()), 1, "the real click reached the app");
+    let seen = app.world().resource::<SeenCursor>().0.expect("a cursor");
+    assert!(seen.distance(add) < 1.0, "the real cursor is back: {seen}");
+
+    ask(&mut app, GalleryAction::Resume);
+    app.update();
+    assert!(
+        !app.world()
+            .resource::<PointerInputSettings>()
+            .is_mouse_enabled
+    );
+    assert!(app.world().resource::<GalleryState>().is_playing());
+    run_until(&mut app, 400, |world| frames(world) > held);
+}
+
+#[test]
+fn taking_over_releases_what_the_script_was_holding() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 12);
+    app.world_mut()
+        .resource_mut::<rin_bevy_ui_tester::SyntheticInput>()
+        .press_button(MouseButton::Left);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Left)
+    );
+    ask(&mut app, GalleryAction::TakeOver);
+    app.update();
+    assert!(
+        !app.world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Left)
+    );
+}
+
+#[test]
+fn a_script_clicking_a_label_the_gallery_also_uses_finds_only_the_apps() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(2));
+    run_until(&mut app, 400, finished);
+    let report = app.world().resource::<ScenarioReport>();
+    assert!(report.passed(), "{:?}", report.failures());
+    assert_eq!(count(app.world()), 1);
+}
+
+#[test]
+fn the_scenarios_window_has_its_own_camera_and_the_overlay_stays_with_the_app() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 6);
+    let world = app.world_mut();
+    let scenarios_camera = world
+        .query_filtered::<Entity, With<ScenariosCamera>>()
+        .single(world)
+        .expect("one Scenarios camera");
+    let app_camera = world
+        .query_filtered::<Entity, (With<Camera2d>, Without<ScenariosCamera>)>()
+        .single(world)
+        .expect("the app's camera");
+    let overlay: Vec<_> = world
+        .query_filtered::<&ComputedUiTargetCamera, With<OverlayRoot>>()
+        .iter(world)
+        .map(ComputedUiTargetCamera::get)
+        .collect();
+    assert!(!overlay.is_empty());
+    assert!(
+        overlay.iter().all(|camera| *camera == Some(app_camera)),
+        "the overlay is drawn by the app's camera, not the Scenarios one"
+    );
+    let on_scenarios_camera = world
+        .query::<&ComputedUiTargetCamera>()
+        .iter(world)
+        .filter(|camera| camera.get() == Some(scenarios_camera))
+        .count();
+    assert!(
+        on_scenarios_camera > 10,
+        "the Scenarios UI is on its own camera"
+    );
+}
+
+#[test]
+fn the_scenarios_window_is_a_second_window_with_a_catalogue_of_results() {
+    let mut app = gallery_app();
+    let primary = primary(&mut app);
+    let second = scenarios_window(&mut app);
+    assert_ne!(primary, second);
+    let title = &app.world().get::<Window>(second).expect("window").title;
+    assert_eq!(title, "Scenarios");
+    for name in [
+        "add 2",
+        "add 3",
+        "restart button",
+        "Counting",
+        "Names",
+        "Two clicks",
+    ] {
+        let shown = app
+            .world_mut()
+            .query::<&Text>()
+            .iter(app.world())
+            .any(|text| text.0 == name);
+        assert!(shown, "the window lists {name}");
+    }
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 400, finished);
+    app.update();
+    app.update();
+    let marks: Vec<String> = app
+        .world_mut()
+        .query::<&Text>()
+        .iter(app.world())
+        .map(|text| text.0.clone())
+        .collect();
+    assert!(marks.iter().any(|text| text == "PASS"), "{marks:?}");
+    assert!(
+        marks.iter().any(|text| text == "PASS count"),
+        "the live list shows each check with its mark: {marks:?}"
+    );
+}
+
+#[test]
+fn real_clicks_on_the_scenarios_windows_buttons_work_during_playback() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    app.update();
+    app.update();
+    let second = scenarios_window(&mut app);
+    let pause = centre_of_button_with(&mut app, "Pause");
+    real_move(&mut app, second, pause);
+    app.update();
+    app.update();
+    real_click(&mut app, second);
+    app.update();
+    assert!(
+        !app.world().resource::<GalleryState>().is_playing(),
+        "the Pause button was clicked with the real mouse"
+    );
+    assert!(
+        !app.world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Left),
+        "and the app saw no mouse button"
+    );
+}
+
+#[test]
+fn space_and_arrow_keys_in_the_scenarios_window_drive_the_gallery_but_never_reach_the_app() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    let second = scenarios_window(&mut app);
+    real_key(&mut app, second, KeyCode::Space);
+    app.update();
+    assert!(
+        !app.world().resource::<GalleryState>().is_playing(),
+        "Space pauses"
+    );
+    assert!(
+        !app.world()
+            .resource::<ButtonInput<KeyCode>>()
+            .pressed(KeyCode::Space)
+    );
+    let held = frames(app.world());
+    real_key(&mut app, second, KeyCode::ArrowRight);
+    app.update();
+    assert_eq!(frames(app.world()), held + 1, "Right steps a frame");
+    real_key(&mut app, second, KeyCode::Space);
+    app.update();
+    assert!(
+        app.world().resource::<GalleryState>().is_playing(),
+        "Space plays"
+    );
+
+    // The same key in the primary window goes nowhere while the script plays.
+    let first = primary(&mut app);
+    real_key(&mut app, first, KeyCode::Space);
+    app.update();
+    assert!(app.world().resource::<GalleryState>().is_playing());
+}
+
+#[test]
+fn export_writes_the_selected_scenario_as_ron_that_loads_again() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("gallery-export-test");
+    drop(std::fs::remove_dir_all(&dir));
+    let mut app = app_with(
+        GalleryPlugin::new(gallery())
+            .with_reset(reset_app)
+            .with_export_dir(&dir),
+    );
+    ask(&mut app, GalleryAction::Export);
+    assert!(
+        app.world()
+            .resource::<GalleryState>()
+            .status()
+            .contains("Select"),
+        "nothing to export before a pick"
+    );
+    ask(&mut app, GalleryAction::Select(0));
+    ask(&mut app, GalleryAction::Export);
+    let path = dir.join("add_2.ron");
+    let text = std::fs::read_to_string(&path).expect("the file was written");
+    let mut registry = Registry::default();
+    registry.checks.register("count", |_probe| true);
+    registry.checks.register("count is right", |_probe| true);
+    let loaded = Scenario::from_ron_with(&text, &registry).expect("the file loads again");
+    assert_eq!(loaded.name(), "add 2");
+    assert_eq!(loaded.script(), adds(2).script(), "{text}");
+    assert!(
+        app.world()
+            .resource::<GalleryState>()
+            .status()
+            .contains("add_2.ron"),
+        "the status says where it went"
+    );
+}

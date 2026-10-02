@@ -7,6 +7,7 @@ use bevy::{
     ecs::{
         entity::Entity,
         resource::Resource,
+        schedule::common_conditions::{not, resource_exists},
         schedule::{IntoScheduleConfigs, SystemSet},
         world::World,
     },
@@ -151,10 +152,16 @@ impl Plugin for ScenarioPlayerPlugin {
             .add_systems(
                 PreUpdate,
                 play.in_set(ScenarioSystems::Play)
+                    .run_if(not(resource_exists::<ExternallyDriven>))
                     .before(SyntheticInputSystems::Drain),
             );
     }
 }
+
+/// Present when something other than [`ScenarioPlayerPlugin`]'s own system
+/// advances the script, such as the gallery, which paces it.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub(crate) struct ExternallyDriven;
 
 /// One frame's worth of work, or a zero-frame action between frames.
 #[derive(Debug)]
@@ -213,10 +220,42 @@ impl ScenarioPlayer {
     pub const fn is_active(&self) -> bool {
         self.pending.is_some() || self.running.is_some()
     }
+
+    /// Drops the scenario being played or waiting to begin, if any.
+    pub fn stop(&mut self) {
+        self.pending = None;
+        self.running = None;
+    }
+
+    /// How many steps have begun, which is also the index of the next one.
+    #[must_use]
+    pub fn steps_started(&self) -> usize {
+        self.running.as_ref().map_or(0, |run| run.next_step)
+    }
+
+    /// Whether the player is between steps: no frame of the last one is left.
+    /// What may remain are checks and captions, which take no frame. A player
+    /// with no scenario counts as between steps.
+    #[must_use]
+    pub fn at_step_boundary(&self) -> bool {
+        self.running
+            .as_ref()
+            .is_none_or(|run| run.ops.iter().all(|op| !matches!(op, Op::Frame(..))))
+    }
 }
 
 /// The player system: advances the script one frame.
 fn play(world: &mut World) {
+    advance_world(world, true);
+}
+
+/// Advances the script by one frame, if one is playing.
+///
+/// With `settled` false the call does only what needs no fresh picking or
+/// layout: it moves on only when the next operation is a frame of input. A
+/// caller that runs several frames in one update uses this for all but the
+/// first, so a hover check or a target lookup never sees stale state.
+pub(crate) fn advance_world(world: &mut World, settled: bool) {
     let Some(mut player) = world.remove_resource::<ScenarioPlayer>() else {
         return;
     };
@@ -224,7 +263,7 @@ fn play(world: &mut World) {
         let mut report = world
             .remove_resource::<ScenarioReport>()
             .unwrap_or_default();
-        player.advance(world, &mut report);
+        player.advance(world, &mut report, settled);
         world.insert_resource(report);
     }
     world.insert_resource(player);
@@ -253,7 +292,7 @@ fn record_check(report: &mut ScenarioReport, name: &str, kind: CheckKind, outcom
 
 impl ScenarioPlayer {
     /// Does the work of one frame.
-    fn advance(&mut self, world: &mut World, report: &mut ScenarioReport) {
+    fn advance(&mut self, world: &mut World, report: &mut ScenarioReport, settled: bool) {
         if let Some(scenario) = self.pending.take() {
             *report = ScenarioReport {
                 name: scenario.name().into(),
@@ -268,11 +307,18 @@ impl ScenarioPlayer {
                     .collect(),
                 ..ScenarioReport::default()
             };
+            // What the script last did beats where a real window thinks the
+            // cursor is, so a gallery restart does not depend on the mouse.
             let cursor = world
-                .query_filtered::<&Window, bevy::ecs::query::With<PrimaryWindow>>()
-                .iter(world)
-                .next()
-                .and_then(Window::cursor_position)
+                .get_resource::<SyntheticInput>()
+                .and_then(SyntheticInput::cursor)
+                .or_else(|| {
+                    world
+                        .query_filtered::<&Window, bevy::ecs::query::With<PrimaryWindow>>()
+                        .iter(world)
+                        .next()
+                        .and_then(Window::cursor_position)
+                })
                 .unwrap_or(ORIGIN);
             self.running = Some(Running {
                 scenario,
@@ -285,6 +331,9 @@ impl ScenarioPlayer {
         let Some(run) = self.running.as_mut() else {
             return;
         };
+        if !settled && !matches!(run.ops.front(), Some(Op::Frame(..))) {
+            return;
+        }
         report.frames += 1;
         loop {
             let Some(op) = run.ops.pop_front() else {
