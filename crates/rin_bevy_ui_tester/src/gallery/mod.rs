@@ -252,6 +252,7 @@ impl Plugin for GalleryPlugin {
             Update,
             (
                 input::exit_with_primary,
+                ui::place_scenarios_window,
                 ui::scroll_catalogue,
                 ui::style_controls,
                 ui::update_labels,

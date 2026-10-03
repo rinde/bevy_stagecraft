@@ -9,7 +9,7 @@ use bevy::{
         entity::Entity,
         hierarchy::ChildSpawnerCommands,
         query::{With, Without},
-        system::{Commands, Query, Res, ResMut},
+        system::{Commands, Local, Query, Res, ResMut},
     },
     math::Vec2,
     picking::{
@@ -22,7 +22,7 @@ use bevy::{
         AlignItems, BackgroundColor, BorderRadius, FlexDirection, FlexWrap, Node, Overflow,
         ScrollPosition, UiRect, UiTargetCamera, Val, px, widget::Text,
     },
-    window::{Window, WindowRef, WindowResolution},
+    window::{PrimaryWindow, Window, WindowPosition, WindowRef, WindowResolution},
 };
 
 use super::{
@@ -37,6 +37,8 @@ use crate::{
 
 /// Default size of the Scenarios window, in logical pixels.
 pub const SCENARIOS_WINDOW_SIZE: (u32, u32) = (460, 760);
+/// Gap between the app window and the Scenarios window, in physical pixels.
+const WINDOW_GAP: i32 = 8;
 /// Font size of the Scenarios window's text, in logical pixels.
 const FONT_SIZE: f32 = 15.0;
 /// Padding inside buttons and around panels, in logical pixels.
@@ -228,6 +230,34 @@ fn row(parent: &mut ChildSpawnerCommands<'_>, fill: impl FnOnce(&mut ChildSpawne
             },
         ))
         .with_children(fill);
+}
+
+/// Puts the Scenarios window to the right of the app window, once.
+///
+/// Both windows are placed explicitly so a window manager that would
+/// otherwise stack or tab them (macOS with "prefer tabs") has no reason to
+/// merge them. It waits until the platform has reported the app window's
+/// position; where it never does (Wayland), the window manager decides.
+pub(super) fn place_scenarios_window(
+    mut done: Local<bool>,
+    primary: Query<&Window, (With<PrimaryWindow>, Without<ScenariosWindow>)>,
+    mut scenarios: Query<&mut Window, With<ScenariosWindow>>,
+) {
+    if *done {
+        return;
+    }
+    let (Some(primary), Some(mut scenarios)) = (primary.iter().next(), scenarios.iter_mut().next())
+    else {
+        return;
+    };
+    let WindowPosition::At(origin) = primary.position else {
+        return;
+    };
+    let width = i32::try_from(primary.physical_width()).unwrap_or(i32::MAX);
+    scenarios.position = WindowPosition::At(
+        origin.saturating_add(bevy::math::IVec2::new(width.saturating_add(WINDOW_GAP), 0)),
+    );
+    *done = true;
 }
 
 /// Spawns the Scenarios window, its camera and everything in it.
@@ -505,7 +535,7 @@ pub(super) fn update_details(
     gallery: Res<Gallery>,
     theme: Res<OverlayTheme>,
     details: Query<Entity, With<Details>>,
-    mut shown: bevy::ecs::system::Local<Option<(Option<usize>, ScenarioReport)>>,
+    mut shown: Local<Option<(Option<usize>, ScenarioReport)>>,
 ) {
     let key = (state.selected(), report.clone());
     if shown.as_ref() == Some(&key) {
