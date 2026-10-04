@@ -1,0 +1,198 @@
+//! What a target's widget is doing: disabled, checked, pressed, focused,
+//! visible, and the text it shows.
+//!
+//! These read the components Bevy's own widgets keep (`bevy_ui_widgets`) and
+//! the interaction components of `bevy_ui`, so they work for any toolkit that
+//! uses them.
+
+use crate::{
+    probe::{describe_entity, is_within},
+    targets::{Target, resolve, text_node},
+};
+use bevy::{
+    camera::visibility::InheritedVisibility,
+    ecs::{entity::Entity, hierarchy::ChildOf, hierarchy::Children, world::World},
+    input_focus::InputFocus,
+    text::TextSpan,
+    ui::{
+        Checkable, Checked, ComputedNode, Interaction, InteractionDisabled, Pressed, Selectable,
+        widget::Text,
+    },
+    ui_widgets::{Button, MenuButton, MenuItem, Slider},
+};
+
+/// A state a widget can be in, as Bevy's widgets record it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WidgetState {
+    /// Carries `InteractionDisabled`.
+    Disabled,
+    /// Carries `Checked`.
+    Checked,
+    /// Carries `Pressed`, or its `Interaction` is `Pressed`.
+    Pressed,
+    /// Has input focus, or something below it has.
+    Focused,
+    /// Visible in the hierarchy and taking up room on screen.
+    Visible,
+    /// Can be found at all.
+    Exists,
+}
+
+impl WidgetState {
+    /// The state in words, after the target: `is disabled`.
+    pub(super) const fn words(self) -> &'static str {
+        match self {
+            Self::Disabled => "is disabled",
+            Self::Checked => "is checked",
+            Self::Pressed => "is pressed",
+            Self::Focused => "has focus",
+            Self::Visible => "is visible",
+            Self::Exists => "exists",
+        }
+    }
+}
+
+/// What looking a target up came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Lookup {
+    /// The node the target names.
+    Found(Entity),
+    /// Nothing is there right now; it may be later.
+    Missing(String),
+    /// The target can never name a node: it is a position.
+    NotANode(String),
+}
+
+/// The node `target` names: for a text target, the node showing the text;
+/// for a custom one, the widget its resolver reports.
+pub(super) fn node(world: &World, target: &Target) -> Lookup {
+    match target {
+        Target::Text(text) => match text_node(world, text) {
+            Ok(entity) => Lookup::Found(entity),
+            Err(message) => Lookup::Missing(message),
+        },
+        Target::Custom { .. } => match resolve(world, target) {
+            Ok(resolved) => resolved.widget.map_or_else(
+                || Lookup::NotANode(format!("{target:?} is a position, not a widget")),
+                Lookup::Found,
+            ),
+            Err(message) => Lookup::Missing(message),
+        },
+        Target::Screen(_) | Target::World(_) => {
+            Lookup::NotANode(format!("{target:?} is a position, not a widget"))
+        }
+    }
+}
+
+/// The widget `node` belongs to: the nearest widget that is `node` or above
+/// it, as a label belongs to its button; otherwise `node` itself.
+pub(super) fn widget(world: &World, node: Entity) -> Entity {
+    let mut current = node;
+    loop {
+        if is_widget(world, current) {
+            return current;
+        }
+        match world.get::<ChildOf>(current) {
+            Some(parent) => current = parent.parent(),
+            None => return node,
+        }
+    }
+}
+
+/// Whether `entity` is a widget of `bevy_ui_widgets`, or a `bevy_ui` node
+/// that tracks interaction.
+fn is_widget(world: &World, entity: Entity) -> bool {
+    let Ok(entity) = world.get_entity(entity) else {
+        return false;
+    };
+    entity.contains::<Button>()
+        || entity.contains::<Checkable>()
+        || entity.contains::<Selectable>()
+        || entity.contains::<Slider>()
+        || entity.contains::<MenuItem>()
+        || entity.contains::<MenuButton>()
+        || entity.contains::<Interaction>()
+}
+
+/// Whether `widget` is in `state`; the error says what it is instead.
+pub(super) fn in_state(
+    world: &World,
+    widget: Entity,
+    state: WidgetState,
+    label: &str,
+) -> Result<(), String> {
+    let holds = |held: bool, otherwise: &str| {
+        if held {
+            Ok(())
+        } else {
+            Err(format!("{label} {otherwise}"))
+        }
+    };
+    match state {
+        WidgetState::Disabled => holds(
+            world.get::<InteractionDisabled>(widget).is_some(),
+            "is not disabled",
+        ),
+        WidgetState::Checked => holds(world.get::<Checked>(widget).is_some(), "is not checked"),
+        WidgetState::Pressed => holds(
+            world.get::<Pressed>(widget).is_some()
+                || world.get::<Interaction>(widget) == Some(&Interaction::Pressed),
+            "is not pressed",
+        ),
+        WidgetState::Focused => {
+            match world.get_resource::<InputFocus>().and_then(InputFocus::get) {
+                Some(focus) if is_within(world, focus, widget) => Ok(()),
+                Some(focus) => Err(format!(
+                    "{label} does not have focus: {} has",
+                    describe_entity(world, focus)
+                )),
+                None => Err(format!("{label} does not have focus: nothing has")),
+            }
+        }
+        WidgetState::Visible => visible(world, widget, label),
+        WidgetState::Exists => Ok(()),
+    }
+}
+
+/// Whether `widget` is visible in the hierarchy and has a size.
+fn visible(world: &World, widget: Entity, label: &str) -> Result<(), String> {
+    if world
+        .get::<InheritedVisibility>(widget)
+        .is_some_and(|visibility| !visibility.get())
+    {
+        return Err(format!("{label} is hidden"));
+    }
+    if world
+        .get::<ComputedNode>(widget)
+        .is_some_and(|node| node.size().cmple(bevy::math::Vec2::ZERO).any())
+    {
+        return Err(format!("{label} takes up no room on screen"));
+    }
+    Ok(())
+}
+
+/// The text `widget` shows: each text node at or below it, in hierarchy
+/// order, with its spans, joined by single spaces.
+pub(super) fn text_of(world: &World, widget: Entity) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    collect_text(world, widget, &mut blocks);
+    blocks.join(" ")
+}
+
+/// Adds the text of `entity` and of everything below it to `blocks`.
+fn collect_text(world: &World, entity: Entity, blocks: &mut Vec<String>) {
+    if let Some(text) = world.get::<Text>(entity) {
+        blocks.push(text.0.clone());
+    } else if let Some(span) = world.get::<TextSpan>(entity) {
+        // A span continues the text it sits below.
+        match blocks.last_mut() {
+            Some(last) => last.push_str(&span.0),
+            None => blocks.push(span.0.clone()),
+        }
+    }
+    if let Some(children) = world.get::<Children>(entity) {
+        for child in children {
+            collect_text(world, *child, blocks);
+        }
+    }
+}

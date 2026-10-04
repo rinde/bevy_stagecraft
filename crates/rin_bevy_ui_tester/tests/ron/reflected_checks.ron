@@ -1,0 +1,22 @@
+#![enable(implicit_some)]
+(
+    format_version: 3,
+    name: "reflected checks",
+    window_size: (800, 600),
+    setup: Named("plain_ui"),
+    steps: [
+        Check(Count(with: ["Button"], is: Eq(1))),
+        Check(Resource(path: "Activations.0", is: Eq(0))),
+        Check(Exists(Text("Pause"))),
+        Check(Not(Disabled(Text("Pause")))),
+        Glide(target: Text("Pause"), frames: 10),
+        Click(Left),
+        // No guessed Wait: the check waits up to five frames for the click.
+        Check(Within(5, Resource(path: "Activations.0", is: Eq(1)))),
+        Check(All([Visible(Text("Pause")), TextOf(Text("Pause"), Exact("Pause"))])),
+    ],
+    expect: [
+        Resource(path: "Activations.0", is: Between(1, 1)),
+        Any([Shows("Resume"), Shows("Pause")]),
+    ],
+)

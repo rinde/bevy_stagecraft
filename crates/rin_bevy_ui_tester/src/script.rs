@@ -10,12 +10,26 @@
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;
 
-use bevy::ecs::world::World;
+use bevy::{
+    ecs::{
+        reflect::{AppTypeRegistry, ReflectComponent, ReflectResource},
+        world::World,
+    },
+    reflect::{
+        FromReflect, GetTypeRegistration, ReflectDeserialize, ReflectFromReflect, ReflectSerialize,
+        TypeData, TypeRegistration, TypeRegistry, TypeRegistryArc, Typed,
+        std_traits::ReflectDefault,
+    },
+    state::{
+        reflect::ReflectState,
+        state::{State, States},
+    },
+};
 use ron::{Options, extensions::Extensions, ser::PrettyConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    check::Check,
+    check::{Check, Problem, did_you_mean},
     probe::Probe,
     scenario::{
         CheckResult, CustomCheck, HookFn, IntoCheckResult, NamedCheck, Scenario, Step, custom,
@@ -28,9 +42,11 @@ use crate::{
 /// [`OLDEST_FORMAT_VERSION`] or newer than this is refused rather than
 /// guessed at.
 ///
-/// Version 2 added checks spelled out as data ([`Check`]); every version 1
-/// file is also a version 2 file.
-pub const FORMAT_VERSION: u32 = 2;
+/// Version 2 added checks spelled out as data ([`Check`]); version 3 added
+/// the built-in checks that read the world through reflection (counts,
+/// resources, components, states, widget states, text) and `All`, `Any` and
+/// `Within`. Every file of an older version is also a file of a newer one.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.
 pub const OLDEST_FORMAT_VERSION: u32 = 1;
@@ -113,7 +129,7 @@ impl Script {
     pub fn from_ron(text: &str) -> Result<Self, LoadError> {
         /// Just the version, so a file from a newer format is refused as such
         /// even when the rest of it would not parse.
-        #[derive(Deserialize)]
+        #[derive(Debug, Deserialize)]
         struct Version {
             /// The file's format version.
             format_version: u32,
@@ -139,7 +155,7 @@ impl Script {
 }
 
 /// How RON is read: optional fields may omit `Some(..)`.
-fn ron_options() -> Options {
+pub(crate) fn ron_options() -> Options {
     Options::default().with_default_extension(Extensions::IMPLICIT_SOME)
 }
 
@@ -173,7 +189,9 @@ impl core::error::Error for ExportError {}
 #[non_exhaustive]
 pub enum LoadError {
     /// The text is not valid RON for a [`Script`]; the message has the
-    /// position.
+    /// position. For a mistake inside a spelled out [`Check`] that is the
+    /// position where the whole check ends, as a check is read whole before
+    /// it is parsed.
     Syntax(String),
     /// The file is of a format version this crate does not read.
     UnsupportedVersion {
@@ -203,6 +221,44 @@ pub enum LoadError {
     /// The script checks the app's state ([`Check::State`] or
     /// `expect_state`) but no state probe is registered to read it with.
     NoStateProbe,
+    /// A check names a type that is not in [`Registry::types`], or that is
+    /// not the kind of type the check needs.
+    UnknownType {
+        /// The type as written.
+        name: String,
+        /// Where it was named, for example `step 3`.
+        used_by: String,
+        /// Registered types with close names, closest first.
+        suggestions: Vec<String>,
+    },
+    /// A check names a field its type does not have.
+    UnknownPath {
+        /// The path as written, type included.
+        path: String,
+        /// Where it was named, for example `step 3`.
+        used_by: String,
+        /// What is wrong with it.
+        message: String,
+        /// Fields with close names, closest first.
+        suggestions: Vec<String>,
+    },
+    /// A value in a check does not fit the type it is compared with.
+    BadValue {
+        /// The value as written.
+        value: String,
+        /// Where it was written, for example `step 3`.
+        used_by: String,
+        /// Why it does not fit.
+        message: String,
+    },
+    /// A check cannot run for another reason, such as a type that is
+    /// registered but not as a resource.
+    BadCheck {
+        /// Where the check is, for example `step 3`.
+        used_by: String,
+        /// What is wrong.
+        message: String,
+    },
     /// A file could not be read.
     Io {
         /// The file.
@@ -241,6 +297,27 @@ impl fmt::Display for LoadError {
                 "the script checks the app's state, but no state probe is registered"
             ),
             Self::Io { path, message } => write!(f, "cannot read {path}: {message}"),
+            Self::UnknownType {
+                name,
+                used_by,
+                suggestions,
+            } => write!(
+                f,
+                "{used_by} names type `{name}`, which is not registered{}",
+                did_you_mean(suggestions)
+            ),
+            Self::UnknownPath {
+                used_by,
+                message,
+                suggestions,
+                ..
+            } => write!(f, "{used_by}: {message}{}", did_you_mean(suggestions)),
+            Self::BadValue {
+                value,
+                used_by,
+                message,
+            } => write!(f, "{used_by}: `{value}` does not fit: {message}"),
+            Self::BadCheck { used_by, message } => write!(f, "{used_by}: {message}"),
         }
     }
 }
@@ -430,6 +507,12 @@ pub struct Registry {
     /// Reads the app's state, for [`Check::State`] and
     /// [`Script::expect_state`].
     pub state: Option<StateProbe>,
+    /// The types checks may name, such as [`Check::Count`] and
+    /// [`Check::Resource`]: a script is checked against them when it loads.
+    /// Starts with the primitive types; add the app's with
+    /// [`Registry::register_type`], or share the app's own registry with
+    /// [`Registry::with_types_of`].
+    pub types: TypeRegistryArc,
 }
 
 impl Default for Registry {
@@ -440,6 +523,7 @@ impl Default for Registry {
             views: HookRegistry::default(),
             targets: TargetResolvers::default(),
             state: None,
+            types: TypeRegistryArc::default(),
         }
     }
 }
@@ -453,13 +537,79 @@ impl Registry {
         self
     }
 
+    /// Registers `T`, and the types of its fields, for checks to name.
+    pub fn register_type<T: GetTypeRegistration>(&mut self) {
+        self.types.write().register::<T>();
+    }
+
+    /// Registers the state type `S`, `State<S>` and the type data that lets
+    /// [`Check::InState`] read it, as `app.register_type_state::<S>()` does.
+    pub fn register_state<S: States + FromReflect + GetTypeRegistration + Typed>(&mut self) {
+        let mut types = self.types.write();
+        types.register::<S>();
+        types.register::<State<S>>();
+        types.register_type_data::<S, ReflectState>();
+    }
+
+    /// Uses the type registry of `world`'s app, shared rather than copied,
+    /// so every type the app registers can be named by a script.
+    #[must_use]
+    pub fn with_types_of(mut self, world: &World) -> Self {
+        if let Some(types) = world.get_resource::<AppTypeRegistry>() {
+            self.types = types.0.clone();
+        }
+        self
+    }
+
     /// Makes the registered target resolvers available in `world`, where the
-    /// player looks for them.
+    /// player looks for them, and adds the registered types the app's type
+    /// registry lacks, where the checks look for them. A type the app has
+    /// already registered keeps its registration and gains the type data the
+    /// checks need (such as [`ReflectState`]) that it lacks.
     pub fn install(&self, world: &mut World) {
         world
             .get_resource_or_insert_with(TargetResolvers::default)
             .extend_from(&self.targets);
+        let app = world.get_resource_or_init::<AppTypeRegistry>();
+        // Sharing one registry, the app already has every type; locking it
+        // twice would deadlock.
+        if !Arc::ptr_eq(&app.0.internal, &self.types.internal) {
+            let ours = self.types.read();
+            let mut theirs = app.write();
+            for registration in ours.iter() {
+                if let Some(existing) = theirs.get_mut(registration.type_id()) {
+                    fill_type_data(existing, registration);
+                } else {
+                    theirs.add_registration(registration.clone());
+                }
+            }
+        }
     }
+}
+
+/// Copies into `theirs` the type data the checks read that `ours` has and
+/// `theirs` lacks, keeping whatever `theirs` already holds.
+///
+/// The app may have registered a type itself (Bevy registers many on its
+/// own) without, say, [`ReflectState`]; a check on it would then load and
+/// still fail when it runs. Type data can only be copied by its concrete
+/// type, so this names the kinds the checks look up.
+fn fill_type_data(theirs: &mut TypeRegistration, ours: &TypeRegistration) {
+    /// Copies one kind of type data, if `theirs` lacks it.
+    fn fill<T: TypeData + Clone>(theirs: &mut TypeRegistration, ours: &TypeRegistration) {
+        if !theirs.contains::<T>()
+            && let Some(data) = ours.data::<T>()
+        {
+            theirs.insert(data.clone());
+        }
+    }
+    fill::<ReflectState>(theirs, ours);
+    fill::<ReflectComponent>(theirs, ours);
+    fill::<ReflectResource>(theirs, ours);
+    fill::<ReflectFromReflect>(theirs, ours);
+    fill::<ReflectDeserialize>(theirs, ours);
+    fill::<ReflectSerialize>(theirs, ours);
+    fill::<ReflectDefault>(theirs, ours);
 }
 
 /// Resolves every name in `script` against `registry`.
@@ -483,6 +633,7 @@ pub(crate) fn build_scenario(script: Script, registry: &Registry) -> Result<Scen
         ),
         None => None,
     };
+    let types = registry.types.read();
     let mut resolved = Resolved::default();
     for (index, step) in script.steps.iter().enumerate() {
         let used_by = format!("step {index}");
@@ -490,12 +641,13 @@ pub(crate) fn build_scenario(script: Script, registry: &Registry) -> Result<Scen
             require_resolver(registry, target, &used_by)?;
         }
         if let Step::Check(check) = step {
-            resolved.add(registry, check, &used_by)?;
+            resolved.add(registry, &types, check, &used_by)?;
         }
     }
     for check in &script.expect {
-        resolved.add(registry, check, "the expect list")?;
+        resolved.add(registry, &types, check, "the expect list")?;
     }
+    drop(types);
     if !script.expect_state.is_empty() {
         resolved.reads_state = true;
     }
@@ -526,7 +678,13 @@ struct Resolved {
 
 impl Resolved {
     /// Finds what `check`, and every check inside it, refers to.
-    fn add(&mut self, registry: &Registry, check: &Check, used_by: &str) -> Result<(), LoadError> {
+    fn add(
+        &mut self,
+        registry: &Registry,
+        types: &TypeRegistry,
+        check: &Check,
+        used_by: &str,
+    ) -> Result<(), LoadError> {
         let unknown = |name: &str| LoadError::UnknownCheck {
             name: name.to_owned(),
             used_by: used_by.to_owned(),
@@ -548,12 +706,44 @@ impl Resolved {
                         self.custom.push(found.clone());
                     }
                 }
-                Check::Hovered(target) => require_resolver(registry, target, used_by)?,
                 Check::State { .. } => self.reads_state = true,
-                Check::Shows(_) | Check::Not(_) => {}
+                _ => {}
             }
+            if let Some(target) = part.target() {
+                require_resolver(registry, target, used_by)?;
+            }
+            part.problem(types)
+                .map_err(|problem| load_error(problem, used_by))?;
         }
         Ok(())
+    }
+}
+
+/// The load error for a check that cannot run, naming where it is.
+fn load_error(problem: Problem, used_by: &str) -> LoadError {
+    let used_by = used_by.to_owned();
+    match problem {
+        Problem::UnknownType { name, suggestions } => LoadError::UnknownType {
+            name,
+            used_by,
+            suggestions,
+        },
+        Problem::UnknownPath {
+            path,
+            message,
+            suggestions,
+        } => LoadError::UnknownPath {
+            path,
+            used_by,
+            message,
+            suggestions,
+        },
+        Problem::BadValue { value, message } => LoadError::BadValue {
+            value,
+            used_by,
+            message,
+        },
+        Problem::Other(message) => LoadError::BadCheck { used_by, message },
     }
 }
 
