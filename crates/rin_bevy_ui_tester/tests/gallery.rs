@@ -16,11 +16,12 @@ use bevy::{
     input::{
         ButtonInput, ButtonState,
         keyboard::{Key, KeyCode, KeyboardInput, NativeKey},
-        mouse::{MouseButton, MouseButtonInput},
+        mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
+        touch::TouchPhase,
     },
     picking::input::PointerInputSettings,
     prelude::*,
-    ui::{ComputedNode, ComputedUiTargetCamera, UiGlobalTransform, px},
+    ui::{ComputedNode, ComputedUiTargetCamera, ScrollPosition, UiGlobalTransform, px},
     ui_widgets::{Activate, Button},
     window::{CursorMoved, PrimaryWindow, WindowEvent},
 };
@@ -679,6 +680,50 @@ fn real_clicks_on_the_scenarios_windows_buttons_work_during_playback() {
             .resource::<ButtonInput<MouseButton>>()
             .pressed(MouseButton::Left),
         "and the app saw no mouse button"
+    );
+}
+
+/// The catalogue's scroll offset down the list, in logical pixels.
+fn catalogue_scroll(app: &mut App) -> f32 {
+    app.world_mut()
+        .query::<&ScrollPosition>()
+        .iter(app.world())
+        .map(|position| position.0.y)
+        .fold(0.0, f32::max)
+}
+
+/// What `bevy_winit` does for a real wheel turned one line down.
+fn real_wheel_down(app: &mut App, window: Entity) {
+    let turn = MouseWheel {
+        unit: MouseScrollUnit::Line,
+        x: 0.0,
+        y: -1.0,
+        phase: TouchPhase::Moved,
+        window,
+    };
+    app.world_mut().write_message(WindowEvent::from(turn));
+    app.world_mut().write_message(turn);
+    app.update();
+}
+
+#[test]
+fn the_wheel_scrolls_the_catalogue_before_any_scenario_is_selected() {
+    let many = (0..40).map(|index| {
+        GalleryEntry::new(Scenario::new(format!("scenario {index}")).setup(spawn_app))
+    });
+    let mut app =
+        app_with(GalleryPlugin::new(Gallery::new().group("Many", many)).with_reset(reset_app));
+    app.update();
+    assert!(
+        !app.world().resource::<GalleryState>().input_is_scripted(),
+        "nothing is selected yet"
+    );
+    let second = scenarios_window(&mut app);
+    real_wheel_down(&mut app, second);
+    app.update();
+    assert!(
+        catalogue_scroll(&mut app) > 0.0,
+        "the list moved down with the wheel"
     );
 }
 
