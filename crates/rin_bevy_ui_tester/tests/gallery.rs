@@ -26,13 +26,14 @@ use bevy::{
     window::{CursorMoved, PrimaryWindow, WindowEvent},
 };
 use rin_bevy_ui_tester::{
-    Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState, HeadlessPlugins, Registry,
-    Scenario, ScenariosCamera, ScenariosWindow, Script, SessionHooks, Speed, StateProbe, Step,
-    Target, overlay::OverlayRoot, player::ScenarioReport, script::Setup,
+    Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState, HeadlessPlugins,
+    Registry, Scenario, ScenariosCamera, ScenariosWindow, Script, SessionHooks, Speed, StateProbe,
+    Step, Target, overlay::OverlayRoot, player::ScenarioReport, script::Setup,
 };
 
 /// How often the "Add" button was activated.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 struct Count(u32);
 
 /// How often the reset hook ran.
@@ -94,21 +95,12 @@ fn adds(times: u32) -> Scenario {
         steps.push(Step::click());
         steps.push(Step::wait(2));
     }
-    steps.push(Step::check("count"));
+    steps.push(Step::check(Check::resource::<Count>(".0").eq(times)));
     Scenario::new(format!("add {times}"))
         .setup(spawn_app)
         .window_size(640, 480)
         .steps(steps)
-        .check("count", move |probe| {
-            probe
-                .resource::<Count>()
-                .is_some_and(|count| count.0 == times)
-        })
-        .expect("count is right", move |probe| {
-            probe
-                .resource::<Count>()
-                .is_some_and(|count| count.0 == times)
-        })
+        .expect_check(Check::resource::<Count>(".0").eq(times))
 }
 
 /// Clicks the app's button named "Restart", which the gallery also has one of.
@@ -652,7 +644,7 @@ fn the_scenarios_window_is_a_second_window_with_a_catalogue_of_results() {
         .collect();
     assert!(marks.iter().any(|text| text == "PASS"), "{marks:?}");
     assert!(
-        marks.iter().any(|text| text == "PASS count"),
+        marks.iter().any(|text| text == "PASS `Count.0` is 2"),
         "the live list shows each check with its mark: {marks:?}"
     );
 }
@@ -805,9 +797,7 @@ fn export_writes_the_selected_scenario_as_ron_that_loads_again() {
     ask(&mut app, GalleryAction::Export);
     let path = dir.join("add_2.ron");
     let text = std::fs::read_to_string(&path).expect("the file was written");
-    let mut registry = Registry::default();
-    registry.checks.register("count", |_probe| true);
-    registry.checks.register("count is right", |_probe| true);
+    let registry = Registry::default();
     let loaded = Scenario::from_ron_with(&text, &registry).expect("the file loads again");
     assert_eq!(loaded.name(), "add 2");
     assert_eq!(loaded.script(), adds(2).script(), "{text}");

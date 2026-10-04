@@ -24,8 +24,9 @@ use bevy::{
     app::AppExit, ecs::system::IntoObserverSystem, prelude::*, ui::px, ui_widgets::Activate,
 };
 use rin_bevy_ui_tester::{
-    Gallery, GalleryEntry, GalleryPlugin, Registry, Scenario, Script, SessionHooks,
-    SessionRecorder, StateProbe, Step, Target, script::Setup, session,
+    AppCheck, Check, CheckResult, Gallery, GalleryEntry, GalleryPlugin, Probe, ReflectAppCheck,
+    Registry, Scenario, Script, SessionHooks, SessionRecorder, StateProbe, Step, Target,
+    script::Setup, session,
 };
 
 /// Where recordings are written, and read from at startup.
@@ -41,6 +42,36 @@ struct Counter(u32);
 /// The switch.
 #[derive(Resource, Default)]
 struct Switch(bool);
+
+/// The app's own checks. Bevy finds the type by itself, and a scenario that
+/// uses them can be exported as RON and loaded again.
+#[derive(Reflect, Debug, Clone)]
+#[reflect(AppCheck)]
+enum CounterCheck {
+    /// The counter is at this value.
+    CounterIs(u32),
+    /// The switch is on.
+    SwitchOn,
+}
+
+impl AppCheck for CounterCheck {
+    fn run(&self, probe: &Probe) -> CheckResult {
+        match self {
+            Self::CounterIs(wanted) => match probe.resource::<Counter>() {
+                Some(counter) if counter.0 == *wanted => Ok(()),
+                Some(counter) => Err(format!("the counter is at {}", counter.0)),
+                None => Err("there is no counter".into()),
+            },
+            Self::SwitchOn => {
+                if probe.resource::<Switch>().is_some_and(|switch| switch.0) {
+                    Ok(())
+                } else {
+                    Err("the switch is off".into())
+                }
+            }
+        }
+    }
+}
 
 /// Marks everything the app spawned, so the reset hook can remove it.
 #[derive(Component)]
@@ -177,12 +208,9 @@ fn gallery() -> Gallery {
             Step::wait(20),
             Step::click(),
             Step::wait(20),
-            Step::check("three"),
+            Step::check(Check::shows("Count: 3")),
         ])
-        .check("three", |probe| probe.has_text("Count: 3"))
-        .expect("the counter says three", |probe| {
-            probe.resource::<Counter>().is_some_and(|c| c.0 == 3)
-        });
+        .expect_check(Check::app(CounterCheck::CounterIs(3)));
     let reset = scenario("Count, then reset")
         .steps([
             Step::caption("Two presses, then Reset counter"),
@@ -196,9 +224,7 @@ fn gallery() -> Gallery {
             Step::click(),
             Step::wait(20),
         ])
-        .expect("the counter is back to zero", |probe| {
-            probe.resource::<Counter>().is_some_and(|c| c.0 == 0)
-        });
+        .expect_check(Check::app(CounterCheck::CounterIs(0)));
     let switch = scenario("Flip the switch")
         .steps([
             Step::caption("The switch turns on"),
@@ -207,9 +233,7 @@ fn gallery() -> Gallery {
             Step::click(),
             Step::wait(30),
         ])
-        .expect("the switch is on", |probe| {
-            probe.resource::<Switch>().is_some_and(|s| s.0)
-        });
+        .expect_check(Check::app(CounterCheck::SwitchOn));
     Gallery::new()
         .group(
             "Counter",

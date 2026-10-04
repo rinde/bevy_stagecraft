@@ -5,7 +5,8 @@
     window_size: (800, 600),
     setup: Named("plain_ui"),
     steps: [
-        Check(Count(with: ["Button"], is: Eq(1))),
+        // Bevy UI has a `Button` too, so the short name is ambiguous.
+        Check(Count(with: ["bevy_ui_widgets::button::Button"], is: Eq(1))),
         Check(Resource(path: "Activations.0", is: Eq(0))),
         Check(Exists(Text("Pause"))),
         Check(Not(Disabled(Text("Pause")))),

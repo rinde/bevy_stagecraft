@@ -17,8 +17,8 @@ use bevy::{
     ui_widgets::{Activate, Button, Checkbox},
 };
 use rin_bevy_ui_tester::{
-    Check, Comparison, HeadlessPlugins, LoadError, Outcome, Probe, Registry, Scenario,
-    ScenarioReport, Step, Target, TextMatch, Value,
+    Check, Comparison, HeadlessPlugins, LoadError, Outcome, Registry, Scenario, ScenarioReport,
+    Step, Target, TextMatch, Value,
 };
 
 /// A ghost, to be counted.
@@ -480,7 +480,7 @@ fn every_kind() -> Scenario {
             TextMatch::starts_with("Score"),
         )),
         Step::check(Check::all([Check::shows("Lay"), !Check::shows("Error")])),
-        Step::check(Check::any(["saved", "done"])),
+        Step::check(Check::any([Check::shows("saved"), Check::shows("done")])),
         Step::check(Check::within(30, Check::shows("Saved"))),
         Step::check(Check::count::<Ghost>().is(Comparison::Ne(Value::from_ron("3").unwrap()))),
     ])
@@ -502,14 +502,12 @@ fn every_reflected_check_round_trips_through_ron_and_exports_stably() {
         "Check(Disabled(Text(\"Save\")))",
         "Check(TextOf(Text(\"Score: 3\"), StartsWith(\"Score\")))",
         "Check(Within(30, Shows(\"Saved\")))",
-        "Check(Any([\n            \"saved\",\n            \"done\",\n        ]))",
+        "Check(Any([\n            Shows(\"saved\"),\n            Shows(\"done\"),\n        ]))",
         "is: Ne(3)",
     ] {
         assert!(ron.contains(written), "{written} in {ron}");
     }
-    let mut registry = registry();
-    registry.checks.register("saved", |_: &Probe<'_>| true);
-    registry.checks.register("done", |_: &Probe<'_>| true);
+    let registry = registry();
     let loaded = Scenario::from_ron_with(&ron, &registry).unwrap();
     assert_eq!(loaded.to_script(), every_kind().to_script());
     assert_eq!(loaded.to_ron().unwrap(), ron, "export is stable");
@@ -526,17 +524,21 @@ fn load(steps: &str) -> Result<Scenario, LoadError> {
 #[test]
 fn an_unknown_type_is_a_load_error_naming_the_step_and_close_names() {
     let error = load("Check(Count(with: [\"Gost\"], is: Eq(1)))").unwrap_err();
-    assert_eq!(
-        error,
-        LoadError::UnknownType {
-            name: "Gost".into(),
-            used_by: "step 1".into(),
-            suggestions: vec!["Ghost".into()],
-        }
+    // The app registers every type that derives `Reflect`, Bevy's own
+    // among them, so other close names may follow; the closest comes first.
+    assert!(
+        matches!(
+            &error,
+            LoadError::UnknownType { name, used_by, suggestions }
+                if name == "Gost" && used_by == "step 1" && suggestions.first().is_some_and(|first| first == "Ghost")
+        ),
+        "{error:?}"
     );
-    assert_eq!(
-        error.to_string(),
-        "step 1 names type `Gost`, which is not registered; did you mean `Ghost`?"
+    assert!(
+        error
+            .to_string()
+            .starts_with("step 1 names type `Gost`, which is not registered; did you mean `Ghost`"),
+        "{error}"
     );
 }
 
@@ -580,8 +582,9 @@ fn a_type_of_the_wrong_kind_is_a_load_error() {
 
 #[test]
 fn a_type_the_app_never_registered_fails_when_the_check_runs() {
-    /// Never registered anywhere.
+    /// Never registered anywhere, not even by itself.
     #[derive(Component, Reflect, Debug)]
+    #[reflect(no_auto_register)]
     struct Unregistered;
     let report = run(&Scenario::new("unregistered")
         .setup(spawn)

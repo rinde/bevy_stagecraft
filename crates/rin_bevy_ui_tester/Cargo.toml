@@ -70,6 +70,10 @@ features = [
     "bevy_gizmos",
     # App states, so a check can ask which state the app is in.
     "bevy_state",
+    # Types that derive Reflect register themselves, so the app's check type
+    # (`#[reflect(AppCheck)]`) is found with no registration call. Part of
+    # Bevy's default app features anyway.
+    "reflect_auto_register",
     # Serde for vectors, keys and mouse buttons, so scripts can be written out.
     "serialize",
     # Warnings from the synthetic input systems.

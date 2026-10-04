@@ -1,0 +1,20 @@
+#![enable(implicit_some)]
+(
+    format_version: 3,
+    name: "app checks",
+    window_size: (800, 600),
+    setup: Named("plain_ui"),
+    steps: [
+        // The app's own checks: values of its `#[reflect(AppCheck)]` enum.
+        Check(App(Activated(0))),
+        Check(App(Found(Text("Pause")))),
+        Check(Not(App(Found(Text("Resume"))))),
+        Glide(target: Text("Pause"), frames: 10),
+        Click(Left),
+        Check(Within(5, App(ActivatedOnce))),
+    ],
+    expect: [
+        App(ActivatedBetween(at_least: 1, at_most: 2)),
+        All([App(Activated(1)), Shows("Pause")]),
+    ],
+)

@@ -1,6 +1,6 @@
 #![enable(implicit_some)]
 (
-    format_version: 1,
+    format_version: 3,
     name: "click pause",
     window_size: (800, 600),
     setup: Named("plain_ui"),
@@ -8,8 +8,8 @@
         Glide(target: Text("Pause"), frames: 20),
         Click(Left),
         Wait(1),
-        Check("activated once"),
+        Check(App(ActivatedOnce)),
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
     ],
-    expect: ["activated once"],
+    expect: [App(ActivatedOnce)],
 )
