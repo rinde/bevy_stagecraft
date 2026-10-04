@@ -1,5 +1,5 @@
-//! Checks spelled out as data: text, hover, state, negation and checks that
-//! take an argument, as steps and as expectations.
+//! Checks spelled out as data: text, hover, state, negation and the app's
+//! own checks, as steps and as expectations.
 
 #![allow(
     clippy::expect_used,
@@ -11,7 +11,7 @@
 mod common;
 
 use bevy::math::Vec2;
-use common::{activated, registry, spawn_ui, state_probe};
+use common::{UiCheck, registry, spawn_ui, state_probe};
 use rin_bevy_ui_tester::{
     Check, CheckKind, FORMAT_VERSION, LoadError, Outcome, Registry, Scenario, ScenarioReport, Step,
     Target,
@@ -108,19 +108,18 @@ fn not_fails_when_the_check_inside_holds_and_says_which() {
 }
 
 #[test]
-fn a_custom_check_gets_its_argument() {
-    let report = Scenario::new("custom")
+fn an_app_check_gets_its_argument() {
+    let report = Scenario::new("app")
         .setup(spawn_ui)
-        .custom_check("activated", activated)
         .steps([
-            Step::check(Check::custom("activated", "0")),
+            Step::check(Check::app(UiCheck::Activated(0))),
             Step::move_to(pause()),
             Step::click(),
             Step::wait(1),
-            Step::check(Check::custom("activated", "1")),
-            Step::check(Check::custom("activated", "2")),
+            Step::check(Check::app(UiCheck::Activated(1))),
+            Step::check(Check::app(UiCheck::Activated(2))),
         ])
-        .expect_check(!Check::custom("activated", "2"))
+        .expect_check(!Check::app(UiCheck::Activated(2)))
         .run_headless();
     assert_eq!(
         step_outcomes(&report)[3..],
@@ -130,7 +129,7 @@ fn a_custom_check_gets_its_argument() {
             Outcome::Fail("activated 1 times, not 2".into())
         ]
     );
-    assert_eq!(report.checks[1].name, "activated \"1\"");
+    assert_eq!(report.checks[1].name, "Activated(1)");
     assert_eq!(report.checks.last().unwrap().outcome, Outcome::Pass);
 }
 
@@ -188,25 +187,25 @@ fn every_kind() -> Scenario {
     Scenario::new("every kind")
         .setup_named("plain_ui", spawn_ui)
         .steps([
-            Step::check("activated once"),
+            Step::check(Check::app(UiCheck::ActivatedOnce)),
             Step::check(Check::shows("Pause")),
             Step::check(!Check::hovered(Target::text("Pause"))),
             Step::check(Check::state("activations", "0")),
-            Step::check(Check::custom("activated", "0")),
-            Step::check(!Check::named("activated once")),
+            Step::check(Check::app(UiCheck::Activated(0))),
+            Step::check(!Check::app(UiCheck::ActivatedOnce)),
         ])
         .expect_check(Check::hovered(Target::custom("pause_button", "")))
 }
 
 #[test]
-fn checks_round_trip_through_ron_and_a_named_check_stays_a_bare_name() {
+fn checks_round_trip_through_ron_and_an_app_check_is_written_inside_app() {
     let ron = every_kind().to_ron().unwrap();
     for written in [
-        "Check(\"activated once\")",
+        "Check(App(ActivatedOnce))",
         "Check(Shows(\"Pause\"))",
         "Check(Not(Hovered(Text(\"Pause\"))))",
-        "Check(Not(\"activated once\"))",
-        "Custom(\n",
+        "Check(App(Activated(0)))",
+        "Check(Not(App(ActivatedOnce)))",
         "State(\n",
     ] {
         assert!(ron.contains(written), "{written} in {ron}");
@@ -219,9 +218,32 @@ fn checks_round_trip_through_ron_and_a_named_check_stays_a_bare_name() {
 #[test]
 fn a_version_1_file_loads_and_is_written_back_as_the_current_version() {
     let scenario =
-        Scenario::from_ron_with(include_str!("ron/click_pause.ron"), &registry()).unwrap();
-    assert_eq!(scenario.expects(), [Check::named("activated once")]);
+        Scenario::from_ron("(format_version: 1, name: \"old\", steps: [Click(Left), Wait(1)])")
+            .unwrap();
+    assert_eq!(scenario.script().len(), 2);
     assert_eq!(scenario.to_script().format_version, FORMAT_VERSION);
+}
+
+#[test]
+fn an_older_file_that_names_a_check_is_refused_saying_what_to_write_instead() {
+    for (version, check) in [
+        (1, "\"activated once\""),
+        (2, "Not(\"activated once\")"),
+        (2, "Custom(check: \"activated\", argument: \"1\")"),
+        (2, "Named(\"activated once\")"),
+    ] {
+        let error = Scenario::from_ron_with(
+            &format!("(format_version: {version}, name: \"x\", steps: [Check({check})])"),
+            &registry(),
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(error, LoadError::Syntax(_)), "{message}");
+        assert!(
+            message.contains("no longer looked up by name") && message.contains("App(.."),
+            "{check}: {message}"
+        );
+    }
 }
 
 #[test]
@@ -259,12 +281,12 @@ fn names_inside_checks_are_resolved_when_the_file_loads() {
         .unwrap_err()
     };
     assert!(matches!(
-        load("steps: [Wait(1), Check(Not(\"nope\"))]"),
-        LoadError::UnknownCheck { ref name, ref used_by } if name == "nope" && used_by == "step 1"
+        load("steps: [Wait(1), Check(Not(App(Activated(\"one\"))))]"),
+        LoadError::BadAppCheck { ref used_by, .. } if used_by == "step 1"
     ));
     assert!(matches!(
-        load("steps: [], expect: [Custom(check: \"nope\", argument: \"\")]"),
-        LoadError::UnknownCheck { ref used_by, .. } if used_by == "the expect list"
+        load("steps: [], expect: [App(Actvated(1))]"),
+        LoadError::BadAppCheck { ref used_by, .. } if used_by == "the expect list"
     ));
     assert!(matches!(
         load("steps: [Check(Hovered(Custom(resolver: \"nope\", argument: \"\")))]"),

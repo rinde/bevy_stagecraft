@@ -48,9 +48,9 @@ fn clicking_the_button_increments_the_counter() {
             Step::click(),
             Step::wait(1),
             Step::check(Check::shows("1")),
-            Step::check("counter is 1"),         // a check defined in Rust
+            // `CounterCheck` is the app's own `#[reflect(AppCheck)]` enum (see below)
+            Step::check(Check::app(CounterCheck::Is(1))),
         ])
-        .check("counter is 1", |probe| probe.resource::<Counter>().is_some_and(|c| c.0 == 1))
         .expect_check(!Check::shows("Error"))   // at the end
         .run_headless();
     assert!(report.passed(), "{:?}", report.failures());
@@ -59,17 +59,69 @@ fn clicking_the_button_increments_the_counter() {
 
 A `Check` is one of:
 
-- a name (`Check::named`, or just a `&str`): a check defined in Rust with
-  `Scenario::check` or `Scenario::expect`;
-- `Check::custom(name, argument)`: a check defined in Rust that takes an
-  argument (`Scenario::custom_check`);
+- `Check::app(value)`: one of the app's own checks (see below);
 - `Check::shows(text)`: some UI node of the app shows exactly this text;
 - `Check::hovered(target)`: the target's widget, or something below it, is
   under the pointer;
 - `Check::state(key, value)`: the app's `StateProbe` (`Scenario::with_state`)
   reports this value;
 - `!check`: the check does not hold. A check that cannot run at all, such as
-  a name nobody defined, still fails.
+  a name nobody defined, still fails;
+- a label (`Check::named`, or just a `&str`) for a closure defined on the
+  scenario with `Scenario::check` or `Scenario::expect`. The label is never
+  looked up from a file, and exporting a scenario that uses one is an error
+  naming it.
+
+### The app's own checks
+
+An app declares its checks as one enum that derives `Reflect` and carries
+`#[reflect(AppCheck)]`, and implements `AppCheck` for it. Bevy's type registry
+finds the enum by itself: there is no registration call and no generic
+parameter.
+
+```rust,ignore
+use rin_bevy_ui_tester::{AppCheck, CheckResult, Probe, ReflectAppCheck, Target};
+
+#[derive(Reflect, Debug, Clone)]
+#[reflect(AppCheck)]
+enum RailCheck {
+    TrackRaisedOnBridge,
+    StationNamed(String),
+    Joined { from: Target, to: Target },
+}
+
+impl AppCheck for RailCheck {
+    fn run(&self, probe: &Probe) -> CheckResult {
+        match self { /* .. */ }
+    }
+}
+
+Step::check(Check::app(RailCheck::StationNamed("Alpha".into())))
+```
+
+A file writes the value inside `App(..)`: `Check(App(StationNamed("Alpha")))`.
+The payload is kept untouched when the file is read, then read as the app's
+type with Bevy's `TypedReflectDeserializer` when the scenario loads, and
+written back with `TypedReflectSerializer`. So a misspelt variant or a wrong
+argument is a load error that names the step and lists the variants with their
+field types:
+
+```text
+step 2: `StationNamd("Alpha")` is not a `RailCheck`: unknown variant `StationNamd`,
+expected one of `TrackRaisedOnBridge`, `StationNamed`, `Joined`; `RailCheck` is one
+of `TrackRaisedOnBridge`, `StationNamed(String)`, `Joined(from: Target, to: Target)`
+```
+
+- Every field type must be `Reflect`; primitives, `String` and `Target` read
+  best in a file.
+- One app check type per app: a second type with `#[reflect(AppCheck)]` is a
+  load error naming both.
+- `Registry::app_check_type()` (or `app_check_type(&types)`) lists the type's
+  variants and their field types, for offering app checks with a form.
+- Automatic registration needs Bevy's `reflect_auto_register` feature, which
+  is part of Bevy's default features and which this crate turns on. A type
+  that is not found that way can still be added with
+  `registry.register_type::<T>()`.
 
 Most questions about plain Bevy data are built in, typed in Rust and found
 through Bevy's type registry (`AppTypeRegistry`), so writing app code for a
@@ -95,6 +147,9 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
   registered in the app (`app.register_type::<T>()`, or Bevy's automatic
   registration); `Resource` and `Component` need `#[reflect(Resource)]` or
   `#[reflect(Component)]`, and `InState` needs `app.register_type_state::<S>()`.
+- A short name that two registered types share (Bevy has two `Button`s) is
+  refused, listing their full type paths; write the full path instead, such as
+  `bevy_ui_widgets::button::Button`.
 - `Component` reads the component on the target's node or, failing that, the
   nearest node above it that has one, so a label finds the widget it sits in.
 - The widget states read the components Bevy's widgets keep:
@@ -124,12 +179,11 @@ fails naming what covers it. A failed step skips the rest of the script.
 name, window size, setup, view, steps, expect list), and `Scenario::from_ron`
 reads one back, so a scenario can be written in Rust or as a file and
 converted either way. Closures cannot be serialised, so a script names its
-checks defined in Rust, setups, views and custom targets, and a `Registry`
-maps the names to code: `registry.checks.register(..)` for named checks,
-`register_custom(..)` for checks that take an argument (the generic checks
-`pointer_over_ui` and `pointer_over_nothing` are built in), and
-`Registry::with_state` for `State` checks. Types that checks name are looked
-up in `Registry::types`: share the app's own registry with
+setups, views and custom targets, and a `Registry` maps the names to code,
+with `Registry::with_state` for `State` checks. Types that checks name, and
+the app's check type, are looked up in `Registry::types`, so a whole file is
+checked when it loads, with no world at hand. It starts with every type that
+derives `Reflect`; share the app's own registry instead with
 `Registry::default().with_types_of(app.world())`, or add types one by one with
 `register_type::<T>()` and `register_state::<S>()` (`Registry::install` then
 adds them to the app too). A file naming something nobody registered, or
@@ -139,8 +193,11 @@ step and suggests close names) and a value that does not fit its field: values
 are read with Bevy's `TypedReflectDeserializer` against the field's type.
 
 The current format is version 3. Versions 1 and 2 are still read: version 2
-added checks spelled out as data, version 3 the built-in checks below, and an
-older file is also a newer one.
+added checks spelled out as data, version 3 the built-in checks below and the
+app's own checks as `App(..)`. Version 3 also dropped checks looked up by name
+(a bare `"name"`, `Named(..)` and `Custom(..)`): an older file that uses one is
+refused with a load error saying to write `App(..)` instead. Any other older
+file is also a newer one.
 
 ```ron
 (
@@ -153,8 +210,8 @@ older file is also a newer one.
         Check(Hovered(Text("Pause"))),
         Click(Left),
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
-        Check("activated once"),                 // a check defined in Rust
-        Check(Custom(check: "activated", argument: "1")),
+        Check(App(ActivatedOnce)),               // the app's own checks
+        Check(App(Activated(1))),
         Check(State(key: "activations", value: "1")),
         Check(Count(with: ["Ghost"], is: Eq(1))),
         Check(Resource(path: "Editor.tool", is: Eq(Lay))),
@@ -165,7 +222,7 @@ older file is also a newer one.
         Check(Within(30, Shows("Saved"))),
     ],
     expect: [
-        "activated once",
+        App(ActivatedOnce),
         Shows("Resume"),
         All([Not(Shows("Error")), Exists(Text("Pause"))]),
     ],
@@ -177,8 +234,8 @@ Types are written as short type paths, followed by a reflect path for a field
 field's type, so `Eq(Lay)` is the variant `Lay` of whatever enum the field
 holds.
 
-A check defined in Rust is written as just its name. A mistake in a spelled
-out check is reported as a syntax error, listing the forms a check can take.
+A mistake in the form of a check is reported as a syntax error, listing the
+forms a check can take.
 The check is read whole before it is parsed, so the position given is where
 the whole check ends, not where the mistake is: in a check spread over several
 lines, look at the lines before the one reported.

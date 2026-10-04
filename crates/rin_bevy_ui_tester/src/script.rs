@@ -2,10 +2,12 @@
 //! its names meaning, and reading and writing RON.
 //!
 //! A scenario written in Rust and a `.ron` file are two spellings of the same
-//! [`Script`]. Closures cannot be serialised, so a script refers to checks
-//! defined in Rust, setups, views and app-defined targets by name, and a
-//! [`Registry`] maps those names to code. Loading a script that names
-//! something the registry lacks is an error, never a silent skip.
+//! [`Script`]. Closures cannot be serialised, so a script refers to setups,
+//! views and app-defined targets by name, and a [`Registry`] maps those
+//! names to code. The app's own checks are values of its reflected check
+//! type (see [`crate::AppCheck`]), read against the registry's types. Loading
+//! a script that names something the registry lacks is an error, never a
+//! silent skip.
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;
@@ -29,12 +31,11 @@ use ron::{Options, extensions::Extensions, ser::PrettyConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    check::{Check, Problem, did_you_mean},
-    probe::Probe,
-    scenario::{
-        CheckResult, CustomCheck, HookFn, IntoCheckResult, NamedCheck, Scenario, Step, custom,
-        named,
+    check::{
+        AppCheckType, Check, Problem, SeveralAppCheckTypes, app_check_type, bad_app_check,
+        did_you_mean,
     },
+    scenario::{HookFn, Scenario, Step},
     targets::{Target, TargetResolvers},
 };
 
@@ -44,8 +45,11 @@ use crate::{
 ///
 /// Version 2 added checks spelled out as data ([`Check`]); version 3 added
 /// the built-in checks that read the world through reflection (counts,
-/// resources, components, states, widget states, text) and `All`, `Any` and
-/// `Within`. Every file of an older version is also a file of a newer one.
+/// resources, components, states, widget states, text), `All`, `Any` and
+/// `Within`, and the app's own checks as `App(..)`. Version 3 also dropped
+/// checks referred to by name (a bare `"name"`, `Named(..)` and
+/// `Custom(..)`): an older file that uses them is refused with a load error
+/// that says what to write instead. Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.
@@ -200,13 +204,6 @@ pub enum LoadError {
         /// The newest version this crate reads, [`FORMAT_VERSION`].
         supported: u32,
     },
-    /// A check is named that nobody registered.
-    UnknownCheck {
-        /// The check's name.
-        name: String,
-        /// Where it was named, for example `step 3`.
-        used_by: String,
-    },
     /// A setup is named that nobody registered.
     UnknownSetup(String),
     /// A view is named that nobody registered.
@@ -251,8 +248,32 @@ pub enum LoadError {
         /// Why it does not fit.
         message: String,
     },
+    /// More than one type in [`Registry::types`] carries
+    /// `#[reflect(AppCheck)]`, and an app check cannot tell which it is.
+    SeveralAppCheckTypes {
+        /// Where the app check is, for example `step 3`.
+        used_by: String,
+        /// The full type paths of every such type, in order.
+        types: Vec<String>,
+    },
+    /// An app check does not read as the app's check type: a misspelt
+    /// variant, or a wrong argument.
+    BadAppCheck {
+        /// Where it was written, for example `step 3`.
+        used_by: String,
+        /// The check as written.
+        check: String,
+        /// The app's check type.
+        type_name: String,
+        /// Why it does not read.
+        message: String,
+        /// The type's variants with the types of their fields, as a file
+        /// writes them, such as `StationNamed(String)`.
+        variants: Vec<String>,
+    },
     /// A check cannot run for another reason, such as a type that is
-    /// registered but not as a resource.
+    /// registered but not as a resource, or an app check when no type is
+    /// one.
     BadCheck {
         /// Where the check is, for example `step 3`.
         used_by: String,
@@ -276,9 +297,6 @@ impl fmt::Display for LoadError {
                 f,
                 "script format version {found} is not supported; this crate reads versions {OLDEST_FORMAT_VERSION} to {supported}"
             ),
-            Self::UnknownCheck { name, used_by } => {
-                write!(f, "{used_by} names check `{name}`, which is not registered")
-            }
             Self::UnknownSetup(name) => {
                 write!(
                     f,
@@ -317,101 +335,26 @@ impl fmt::Display for LoadError {
                 used_by,
                 message,
             } => write!(f, "{used_by}: `{value}` does not fit: {message}"),
+            Self::SeveralAppCheckTypes { used_by, types } => {
+                write!(f, "{used_by}: {}", SeveralAppCheckTypes(types.clone()))
+            }
+            Self::BadAppCheck {
+                used_by,
+                check,
+                type_name,
+                message,
+                variants,
+            } => write!(
+                f,
+                "{used_by}: {}",
+                bad_app_check(check, type_name, message, variants)
+            ),
             Self::BadCheck { used_by, message } => write!(f, "{used_by}: {message}"),
         }
     }
 }
 
 impl core::error::Error for LoadError {}
-
-/// Checks over a [`Probe`] defined in Rust, by name: what [`Check::Named`]
-/// and [`Check::Custom`] in a script refer to.
-#[derive(Clone, Default)]
-pub struct CheckRegistry {
-    /// Checks by name, ordered so nothing depends on hash order.
-    checks: BTreeMap<String, NamedCheck>,
-    /// Checks that take an argument, by name.
-    custom: BTreeMap<String, CustomCheck>,
-}
-
-impl fmt::Debug for CheckRegistry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CheckRegistry")
-            .field("checks", &self.checks.keys().collect::<Vec<_>>())
-            .field("custom", &self.custom.keys().collect::<Vec<_>>())
-            .finish()
-    }
-}
-
-impl CheckRegistry {
-    /// Registers `check` under `name`, replacing any earlier one.
-    pub fn register<R: IntoCheckResult>(
-        &mut self,
-        name: impl Into<String>,
-        check: impl Fn(&Probe<'_>) -> R + Send + Sync + 'static,
-    ) {
-        let check = named(name, check);
-        self.checks.insert(check.name.clone(), check);
-    }
-
-    /// Registers `check`, which takes an argument, under `name`, replacing
-    /// any earlier one. A script runs it as
-    /// `Custom(check: "name", argument: "...")`.
-    pub fn register_custom<R: IntoCheckResult>(
-        &mut self,
-        name: impl Into<String>,
-        check: impl Fn(&Probe<'_>, &str) -> R + Send + Sync + 'static,
-    ) {
-        let check = custom(name, check);
-        self.custom.insert(check.name.clone(), check);
-    }
-
-    /// The check called `name`.
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<&NamedCheck> {
-        self.checks.get(name)
-    }
-
-    /// The check that takes an argument called `name`.
-    #[must_use]
-    pub fn get_custom(&self, name: &str) -> Option<&CustomCheck> {
-        self.custom.get(name)
-    }
-
-    /// Whether a check is registered under `name`.
-    #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
-        self.checks.contains_key(name)
-    }
-
-    /// The registered names, in order.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.checks.keys().map(String::as_str)
-    }
-
-    /// The checks this crate provides, which need no arguments:
-    /// `pointer_over_ui` (some node is under the pointer) and
-    /// `pointer_over_nothing` (none is).
-    #[must_use]
-    pub fn generic() -> Self {
-        let mut registry = Self::default();
-        registry.register("pointer_over_ui", |probe: &Probe<'_>| -> CheckResult {
-            if probe.hovered().is_empty() {
-                Err("nothing is under the pointer".into())
-            } else {
-                Ok(())
-            }
-        });
-        registry.register("pointer_over_nothing", |probe: &Probe<'_>| -> CheckResult {
-            if probe.hovered().is_empty() {
-                Ok(())
-            } else {
-                Err("something is under the pointer".into())
-            }
-        });
-        registry
-    }
-}
 
 /// What the app's state looks like as plain text: named values.
 ///
@@ -488,16 +431,18 @@ impl HookRegistry {
     }
 }
 
-/// Everything a script's names are resolved against when it loads.
+/// Everything a script's names and types are resolved against when it loads.
 ///
-/// The default holds the [generic checks](CheckRegistry::generic). An app adds
-/// its own checks, setups, views and target resolvers, then loads files with
+/// An app adds its setups, views and target resolvers, then loads files with
 /// [`Scenario::from_ron_with`] and installs the resolvers into the world it
 /// plays in with [`Registry::install`].
+///
+/// The registry carries the types, so a script is checked whole when it
+/// loads, with no world at hand: a misspelt type, field, value or app check
+/// is a [`LoadError`] rather than a failure part way through a run. The
+/// app's check type (see [`crate::AppCheck`]) is found there too.
 #[derive(Debug, Clone)]
 pub struct Registry {
-    /// Named checks.
-    pub checks: CheckRegistry,
     /// Named setups, for [`Setup::Named`].
     pub setups: HookRegistry,
     /// Named views.
@@ -508,22 +453,28 @@ pub struct Registry {
     /// [`Script::expect_state`].
     pub state: Option<StateProbe>,
     /// The types checks may name, such as [`Check::Count`] and
-    /// [`Check::Resource`]: a script is checked against them when it loads.
-    /// Starts with the primitive types; add the app's with
-    /// [`Registry::register_type`], or share the app's own registry with
-    /// [`Registry::with_types_of`].
+    /// [`Check::Resource`], and the app's check type that [`Check::App`]
+    /// is read as: a script is checked against them when it loads.
+    ///
+    /// Starts with every type that derives `Reflect`, as Bevy registers them
+    /// by itself (an `App` does the same with Bevy's `reflect_auto_register`
+    /// feature, which is on by default), so the app's check type needs no
+    /// registration call. Add a type that is not found that way (a generic
+    /// one, say) with [`Registry::register_type`], or share the app's own
+    /// registry with [`Registry::with_types_of`].
     pub types: TypeRegistryArc,
 }
 
 impl Default for Registry {
     fn default() -> Self {
+        let types = TypeRegistryArc::default();
+        types.write().register_derived_types();
         Self {
-            checks: CheckRegistry::generic(),
             setups: HookRegistry::default(),
             views: HookRegistry::default(),
             targets: TargetResolvers::default(),
             state: None,
-            types: TypeRegistryArc::default(),
+            types,
         }
     }
 }
@@ -549,6 +500,17 @@ impl Registry {
         types.register::<S>();
         types.register::<State<S>>();
         types.register_type_data::<S, ReflectState>();
+    }
+
+    /// The app's check type in [`Registry::types`], with its variants and
+    /// the types of their fields, for offering app checks with a form; `None`
+    /// when no type carries `#[reflect(AppCheck)]`.
+    ///
+    /// # Errors
+    ///
+    /// [`SeveralAppCheckTypes`] when more than one does.
+    pub fn app_check_type(&self) -> Result<Option<AppCheckType>, SeveralAppCheckTypes> {
+        app_check_type(&self.types.read())
     }
 
     /// Uses the type registry of `world`'s app, shared rather than copied,
@@ -612,8 +574,12 @@ fn fill_type_data(theirs: &mut TypeRegistration, ours: &TypeRegistration) {
     fill::<ReflectDefault>(theirs, ours);
 }
 
-/// Resolves every name in `script` against `registry`.
-pub(crate) fn build_scenario(script: Script, registry: &Registry) -> Result<Scenario, LoadError> {
+/// Resolves every name in `script` against `registry`, and reads its app
+/// checks as the app's check type.
+pub(crate) fn build_scenario(
+    mut script: Script,
+    registry: &Registry,
+) -> Result<Scenario, LoadError> {
     check_version(script.format_version)?;
     let setup = match &script.setup {
         Some(Setup::Named(name)) => Some(
@@ -634,89 +600,60 @@ pub(crate) fn build_scenario(script: Script, registry: &Registry) -> Result<Scen
         None => None,
     };
     let types = registry.types.read();
-    let mut resolved = Resolved::default();
-    for (index, step) in script.steps.iter().enumerate() {
+    let mut reads_state = !script.expect_state.is_empty();
+    for (index, step) in script.steps.iter_mut().enumerate() {
         let used_by = format!("step {index}");
         for target in step_targets(step) {
             require_resolver(registry, target, &used_by)?;
         }
         if let Step::Check(check) = step {
-            resolved.add(registry, &types, check, &used_by)?;
+            reads_state |= resolve_check(registry, &types, check, &used_by)?;
         }
     }
-    for check in &script.expect {
-        resolved.add(registry, &types, check, "the expect list")?;
+    for check in &mut script.expect {
+        reads_state |= resolve_check(registry, &types, check, "the expect list")?;
     }
     drop(types);
-    if !script.expect_state.is_empty() {
-        resolved.reads_state = true;
-    }
-    let state = match (&registry.state, resolved.reads_state) {
+    let state = match (&registry.state, reads_state) {
         (None, true) => return Err(LoadError::NoStateProbe),
         (state, _) => state.clone(),
     };
-    Ok(Scenario::assemble(
-        script,
-        setup,
-        view,
-        resolved.checks,
-        resolved.custom,
-        state,
-    ))
+    Ok(Scenario::assemble(script, setup, view, state))
 }
 
-/// What a script's checks refer to, found in the registry.
-#[derive(Debug, Default)]
-struct Resolved {
-    /// The named checks, one per name.
-    checks: Vec<NamedCheck>,
-    /// The checks that take an argument, one per name.
-    custom: Vec<CustomCheck>,
-    /// Whether some check reads the app's state.
-    reads_state: bool,
-}
-
-impl Resolved {
-    /// Finds what `check`, and every check inside it, refers to.
-    fn add(
-        &mut self,
-        registry: &Registry,
-        types: &TypeRegistry,
-        check: &Check,
-        used_by: &str,
-    ) -> Result<(), LoadError> {
-        let unknown = |name: &str| LoadError::UnknownCheck {
-            name: name.to_owned(),
-            used_by: used_by.to_owned(),
-        };
-        for part in check.parts() {
-            match part {
-                Check::Named(name) => {
-                    if !self.checks.iter().any(|known| known.name == *name) {
-                        let found = registry.checks.get(name).ok_or_else(|| unknown(name))?;
-                        self.checks.push(found.clone());
-                    }
-                }
-                Check::Custom { check: name, .. } => {
-                    if !self.custom.iter().any(|known| known.name == *name) {
-                        let found = registry
-                            .checks
-                            .get_custom(name)
-                            .ok_or_else(|| unknown(name))?;
-                        self.custom.push(found.clone());
-                    }
-                }
-                Check::State { .. } => self.reads_state = true,
-                _ => {}
+/// Reads the app checks in `check`, and in every check inside it, as the
+/// app's check type, and checks that what each part names is there. Returns
+/// whether some part reads the app's state.
+fn resolve_check(
+    registry: &Registry,
+    types: &TypeRegistry,
+    check: &mut Check,
+    used_by: &str,
+) -> Result<bool, LoadError> {
+    check
+        .type_app_checks(types)
+        .map_err(|problem| load_error(problem, used_by))?;
+    let mut reads_state = false;
+    for part in check.parts() {
+        match part {
+            Check::Named(name) => {
+                return Err(LoadError::BadCheck {
+                    used_by: used_by.to_owned(),
+                    message: format!(
+                        "the check `{name}` is a Rust closure on a scenario, which a script cannot refer to"
+                    ),
+                });
             }
-            if let Some(target) = part.target() {
-                require_resolver(registry, target, used_by)?;
-            }
-            part.problem(types)
-                .map_err(|problem| load_error(problem, used_by))?;
+            Check::State { .. } => reads_state = true,
+            _ => {}
         }
-        Ok(())
+        if let Some(target) = part.target() {
+            require_resolver(registry, target, used_by)?;
+        }
+        part.problem(types)
+            .map_err(|problem| load_error(problem, used_by))?;
     }
+    Ok(reads_state)
 }
 
 /// The load error for a check that cannot run, naming where it is.
@@ -742,6 +679,19 @@ fn load_error(problem: Problem, used_by: &str) -> LoadError {
             value,
             used_by,
             message,
+        },
+        Problem::SeveralAppCheckTypes(types) => LoadError::SeveralAppCheckTypes { used_by, types },
+        Problem::BadAppCheck {
+            written,
+            type_name,
+            message,
+            variants,
+        } => LoadError::BadAppCheck {
+            used_by,
+            check: written,
+            type_name,
+            message,
+            variants,
         },
         Problem::Other(message) => LoadError::BadCheck { used_by, message },
     }

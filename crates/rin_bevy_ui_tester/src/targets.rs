@@ -12,6 +12,7 @@ use bevy::{
         component::Component, entity::Entity, hierarchy::ChildOf, resource::Resource, world::World,
     },
     math::{Vec2, Vec3},
+    reflect::Reflect,
     transform::components::GlobalTransform,
     ui::{ComputedNode, UiGlobalTransform, widget::Text},
     ui_widgets::Button,
@@ -22,7 +23,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// App-defined targets are [`Target::Custom`]: a resolver name (the tag) and a
 /// string payload, which survive a round trip through RON unchanged.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// It is `Reflect`, so a variant of the app's check type (see
+/// [`crate::AppCheck`]) can take one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Reflect)]
 #[non_exhaustive]
 pub enum Target {
     /// A logical pixel position in the window.

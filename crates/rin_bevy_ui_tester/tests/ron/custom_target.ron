@@ -1,5 +1,5 @@
 (
-    format_version: 1,
+    format_version: 3,
     name: "custom target",
     setup: Some(Named("plain_ui")),
     steps: [
@@ -7,5 +7,5 @@
         Click(Left),
         Wait(1),
     ],
-    expect: ["activated once"],
+    expect: [App(ActivatedOnce)],
 )

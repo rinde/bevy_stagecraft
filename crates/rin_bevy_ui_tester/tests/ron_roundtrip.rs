@@ -10,13 +10,14 @@
 mod common;
 
 use bevy::{input::keyboard::KeyCode, math::Vec2};
-use common::{Activations, registry, spawn_ui};
+use common::{Activations, UiCheck, registry, spawn_ui};
 use rin_bevy_ui_tester::{
-    FORMAT_VERSION, LoadError, Modifiers, Scenario, Script, Setup, Step, Target,
+    Check, FORMAT_VERSION, LoadError, Modifiers, Scenario, Script, Setup, Step, Target,
     files::run_ron_files,
 };
 
-/// A scenario written in Rust, with names where RON needs them.
+/// A scenario written in Rust, with names where RON needs them and the
+/// app's own checks as values.
 fn in_rust() -> Scenario {
     Scenario::new("click pause")
         .window_size(800, 600)
@@ -25,7 +26,7 @@ fn in_rust() -> Scenario {
             Step::glide(Target::text("Pause"), 20),
             Step::click(),
             Step::wait(1),
-            Step::check("activated once"),
+            Step::check(Check::app(UiCheck::ActivatedOnce)),
             Step::tap_with(KeyCode::KeyP, Modifiers::CTRL | Modifiers::SHIFT),
             Step::drag(
                 Target::screen(Vec2::new(1.0, 2.0)),
@@ -34,16 +35,7 @@ fn in_rust() -> Scenario {
             ),
             Step::caption("done"),
         ])
-        .check("activated once", |probe| {
-            probe
-                .resource::<Activations>()
-                .is_some_and(|count| count.0 == 1)
-        })
-        .expect("activated once", |probe| {
-            probe
-                .resource::<Activations>()
-                .is_some_and(|count| count.0 == 1)
-        })
+        .expect_check(Check::app(UiCheck::ActivatedOnce))
 }
 
 #[test]
@@ -65,8 +57,8 @@ fn modifiers_read_as_a_list_in_ron() {
     assert!(!ron.contains("Some("), "{ron}");
 }
 
-/// The same scenario as [`in_rust`] without the drag step, written out in
-/// Rust with its own inline closures and no registry.
+/// The same scenario as [`in_rust`] without the drag step, played straight
+/// from Rust with no registry.
 fn in_rust_playable() -> Scenario {
     Scenario::new("click pause")
         .window_size(800, 600)
@@ -75,25 +67,16 @@ fn in_rust_playable() -> Scenario {
             Step::glide(Target::text("Pause"), 20),
             Step::click(),
             Step::wait(1),
-            Step::check("activated once"),
+            Step::check(Check::app(UiCheck::ActivatedOnce)),
             Step::tap_with(KeyCode::KeyP, Modifiers::CTRL | Modifiers::SHIFT),
             Step::caption("done"),
         ])
-        .check("activated once", |probe| {
-            probe
-                .resource::<Activations>()
-                .is_some_and(|count| count.0 == 1)
-        })
-        .expect("activated once", |probe| {
-            probe
-                .resource::<Activations>()
-                .is_some_and(|count| count.0 == 1)
-        })
+        .expect_check(Check::app(UiCheck::ActivatedOnce))
 }
 
 #[test]
 fn both_spellings_play_identically() {
-    // Played directly, with the closures written inline.
+    // Played directly, as written in Rust.
     let from_rust = in_rust_playable().run_headless();
     // Exported to RON and loaded back through the registry.
     let ron = in_rust_playable().to_ron().unwrap();
@@ -128,14 +111,6 @@ fn unknown_names_are_load_errors() {
         .unwrap_err()
     };
     assert!(matches!(
-        load("steps: [Check(\"nope\")]"),
-        LoadError::UnknownCheck { ref name, .. } if name == "nope"
-    ));
-    assert!(matches!(
-        load("steps: [], expect: [\"nope\"]"),
-        LoadError::UnknownCheck { .. }
-    ));
-    assert!(matches!(
         load("steps: [], setup: Some(Named(\"nope\"))"),
         LoadError::UnknownSetup(_)
     ));
@@ -147,11 +122,6 @@ fn unknown_names_are_load_errors() {
         load("steps: [Click(Left), MoveTo(Custom(resolver: \"nope\", argument: \"\"))]"),
         LoadError::UnknownTarget { ref used_by, .. } if used_by == "step 1"
     ));
-    let message = load("steps: [Check(\"nope\")]").to_string();
-    assert!(
-        message.contains("step 0") && message.contains("nope"),
-        "{message}"
-    );
 }
 
 #[test]
@@ -197,6 +167,7 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
     assert_eq!(
         names,
         [
+            "app_checks",
             "click_pause",
             "custom_target",
             "reflected_checks",

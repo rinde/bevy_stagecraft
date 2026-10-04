@@ -8,9 +8,10 @@
 //! disabled, checked, pressed, focused or visible, what a target's text says.
 //! Types and fields are found through Bevy's type registry and written as
 //! short type paths with a reflect path after them (`Editor.tool`). Anything
-//! else is a check defined in Rust and referred to by name, with an argument
-//! if it takes one.
+//! else is one of the app's own checks: a value of the one enum it marks
+//! with `#[reflect(AppCheck)]` (see [`AppCheck`]), written inside `App(..)`.
 
+mod app;
 mod reflect;
 mod value;
 mod widget;
@@ -27,7 +28,13 @@ use bevy::{
 use ron::value::RawValue;
 use serde::{Deserialize, Serialize, de::DeserializeSeed};
 
-pub use self::value::{Comparison, TextMatch, Value};
+pub use self::{
+    app::{
+        AppCheck, AppCheckField, AppCheckType, AppCheckValue, AppCheckVariant, ReflectAppCheck,
+        SeveralAppCheckTypes, app_check_type,
+    },
+    value::{Comparison, TextMatch, Value},
+};
 use self::{
     reflect::{Reflected, Role, find_type},
     value::{Counted, Measure},
@@ -41,11 +48,10 @@ use crate::{
 
 /// What a check asks of the world.
 ///
-/// In a script, a check defined in Rust is written as just its name in
-/// quotes; the others are spelled out:
+/// In a script every check is spelled out, the app's own inside `App(..)`:
 ///
 /// ```ron
-/// Check("saved"),
+/// Check(App(StationNamed("Alpha"))),
 /// Check(Shows("Score: 3")),
 /// Check(Hovered(Text("OK"))),
 /// Check(Count(with: ["Ghost"], is: Eq(1))),
@@ -56,12 +62,12 @@ use crate::{
 /// Check(TextOf(Text("Score"), StartsWith("Score: "))),
 /// Check(All([Shows("Saved"), Not(Shows("Error"))])),
 /// Check(Within(30, Shows("Saved"))),
-/// Check(Custom(check: "disabled", argument: "OK")),
 /// ```
 ///
 /// In Rust the same checks are typed, and type paths are only for files.
 /// `!check` wraps a check in [`Check::Not`], and a `&str` or `String` turns
-/// into [`Check::Named`].
+/// into [`Check::Named`], a label for a closure on the scenario that never
+/// goes into a file.
 ///
 /// ```
 /// use rin_bevy_ui_tester::{Check, Target};
@@ -77,19 +83,16 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Check {
-    /// A check defined in Rust: with [`Scenario::check`] or, for a loaded
-    /// script, registered in [`crate::CheckRegistry`]. Written as just the
-    /// name.
+    /// A closure defined on the scenario in Rust with [`Scenario::check`] or
+    /// [`Scenario::expect`], by its label. The label is never looked up from
+    /// a file: a closure cannot be written to one, so exporting a scenario
+    /// that uses one is an error naming it. Use [`Check::App`] for a check a
+    /// file can hold.
     Named(String),
-    /// A check defined in Rust that takes an argument, like
-    /// [`Target::Custom`]: with [`Scenario::custom_check`] or
-    /// [`crate::CheckRegistry::register_custom`].
-    Custom {
-        /// The name the check is defined under.
-        check: String,
-        /// What to check, in a form the check understands.
-        argument: String,
-    },
+    /// One of the app's own checks: a value of the type the app marks with
+    /// `#[reflect(AppCheck)]` (see [`AppCheck`]). Written as
+    /// `App(StationNamed("Alpha"))`.
+    App(AppCheckValue),
     /// Some UI node of the app shows exactly this text.
     Shows(String),
     /// The target's widget, or something below it, is under the pointer. A
@@ -176,15 +179,11 @@ pub enum Check {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(remote = "Check", rename = "Check")]
 enum Spelled {
-    /// See [`Check::Named`].
+    /// See [`Check::Named`]; never in a file.
+    #[serde(skip)]
     Named(String),
-    /// See [`Check::Custom`].
-    Custom {
-        /// See [`Check::Custom`].
-        check: String,
-        /// See [`Check::Custom`].
-        argument: String,
-    },
+    /// See [`Check::App`].
+    App(AppCheckValue),
     /// See [`Check::Shows`].
     Shows(String),
     /// See [`Check::Hovered`].
@@ -251,25 +250,33 @@ enum Spelled {
 }
 
 /// The forms a check can take, for a check that does not parse.
-const FORMS: &str = "a check: a name in quotes, or Shows(..), Hovered(..), Count(..), \
-    Resource(..), Component(..), InState(..), Disabled(..), Checked(..), Pressed(..), \
-    Focused(..), Visible(..), Exists(..), TextOf(..), Not(..), All(..), Any(..), Within(..), \
-    State(..), Custom(..) or Named(..)";
+const FORMS: &str = "a check: App(..), Shows(..), Hovered(..), Count(..), Resource(..), \
+    Component(..), InState(..), Disabled(..), Checked(..), Pressed(..), Focused(..), \
+    Visible(..), Exists(..), TextOf(..), Not(..), All(..), Any(..), Within(..) or State(..)";
 
-/// A named check is written as just its name, which is also how version 1
-/// scripts wrote every check.
+/// What a file that refers to a check by name, as format versions 1 and 2
+/// could, is told.
+const BY_NAME: &str = "checks are no longer looked up by name: declare the app's checks as \
+    one enum with `#[derive(Reflect)]` and `#[reflect(AppCheck)]`, and write one as \
+    `App(..)`, such as `Check(App(StationNamed(\"Alpha\")))`";
+
+/// A check made from a closure has only a label, which cannot be read back,
+/// so writing one out fails, naming it.
 impl Serialize for Check {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Self::Named(name) => serializer.serialize_str(name),
+            Self::Named(name) => Err(serde::ser::Error::custom(format!(
+                "the check `{name}` is a Rust closure on the scenario and cannot be written to a \
+                 file; make it a variant of the app's `#[reflect(AppCheck)]` enum or a built-in check"
+            ))),
             spelled => Spelled::serialize(spelled, serializer),
         }
     }
 }
 
-/// Reads the check's RON text whole, then decides between a bare name and a
-/// spelled-out check. Values inside checks are kept as written, which only
-/// RON can give, so checks are read from RON only.
+/// Reads the check's RON text whole, then parses it. Values inside checks
+/// are kept as written, which only RON can give, so checks are read from
+/// RON only.
 impl<'de> Deserialize<'de> for Check {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = Box::<RawValue>::deserialize(deserializer)?;
@@ -296,13 +303,18 @@ fn parse(text: &str) -> Result<Check, String> {
 
     let options = crate::script::ron_options();
     if let Ok(name) = options.from_str::<String>(text) {
-        return Ok(Check::Named(name));
+        return Err(format!("`\"{name}\"`: {BY_NAME}"));
     }
     options.from_str_seed(text, SpelledSeed).map_err(|error| {
         let message = error.code.to_string();
         // A check nested in another has said this already.
-        if message.contains(FORMS) {
+        if message.contains(FORMS) || message.contains(BY_NAME) {
             message
+        } else if ["Named", "Custom"]
+            .iter()
+            .any(|old| message.contains(&format!("variant named `{old}` in enum `Check`")))
+        {
+            format!("{message}: {BY_NAME}")
         } else {
             format!("{message} ({FORMS})")
         }
@@ -459,19 +471,17 @@ fn join_path(type_path: &str, field: &str) -> String {
 }
 
 impl Check {
-    /// The check defined in Rust under `name`.
+    /// The closure defined on the scenario under the label `name`.
     #[must_use]
     pub fn named(name: impl Into<String>) -> Self {
         Self::Named(name.into())
     }
 
-    /// The check defined in Rust under `check`, asked about `argument`.
+    /// One of the app's own checks, for example
+    /// `Check::app(RailCheck::StationNamed("Alpha".into()))`.
     #[must_use]
-    pub fn custom(check: impl Into<String>, argument: impl Into<String>) -> Self {
-        Self::Custom {
-            check: check.into(),
-            argument: argument.into(),
-        }
+    pub fn app<T: AppCheck + Reflect + GetTypeRegistration + TypePath>(check: T) -> Self {
+        Self::App(AppCheckValue::of(check))
     }
 
     /// Some UI node of the app shows exactly `text`.
@@ -629,6 +639,19 @@ impl Check {
         }
     }
 
+    /// Reads every app check in this check, and in the checks inside it, as
+    /// the app's check type in `types`.
+    pub(crate) fn type_app_checks(&mut self, types: &TypeRegistry) -> Result<(), Problem> {
+        match self {
+            Self::App(value) => value.type_against(types),
+            Self::Not(inner) | Self::Within(_, inner) => inner.type_app_checks(types),
+            Self::All(checks) | Self::Any(checks) => checks
+                .iter_mut()
+                .try_for_each(|check| check.type_app_checks(types)),
+            _ => Ok(()),
+        }
+    }
+
     /// Checks, from type information alone, that the types, fields and
     /// values this check names, not counting the checks inside it, are
     /// there and fit.
@@ -663,8 +686,8 @@ impl Check {
 
     /// Runs the check against `world`, which has waited `waited` frames for
     /// it: `None` while a [`Check::Within`] inside still waits for it to
-    /// hold. Checks defined in Rust, and the state probe, come from
-    /// `scenario`.
+    /// hold. Closures defined on the scenario, and the state probe, come
+    /// from `scenario`.
     pub(crate) fn poll(
         &self,
         world: &World,
@@ -744,12 +767,7 @@ impl Check {
                 .find(|check| check.name == *name)
                 .map(|check| check.run(&probe))
                 .ok_or_else(|| format!("the scenario defines no check named `{name}`")),
-            Self::Custom { check, argument } => scenario
-                .custom_checks()
-                .iter()
-                .find(|defined| defined.name == *check)
-                .map(|defined| defined.run(&probe, argument))
-                .ok_or_else(|| format!("the scenario defines no custom check named `{check}`")),
+            Self::App(value) => value.run(probe),
             Self::Shows(text) => Ok(if probe.has_text(text) {
                 Ok(())
             } else {
@@ -933,6 +951,19 @@ pub(crate) enum Problem {
         /// Why it does not fit.
         message: String,
     },
+    /// More than one registered type is an app check; their type paths.
+    SeveralAppCheckTypes(Vec<String>),
+    /// An app check does not read as the app's check type.
+    BadAppCheck {
+        /// The check as written.
+        written: String,
+        /// The app's check type.
+        type_name: String,
+        /// Why it does not read.
+        message: String,
+        /// The type's variants, as a file writes them.
+        variants: Vec<String>,
+    },
     /// Anything else that stops the check from running.
     Other(String),
 }
@@ -953,9 +984,31 @@ impl Problem {
                 ..
             } => format!("{message}{}", did_you_mean(suggestions)),
             Self::BadValue { value, message } => format!("`{value}` does not fit: {message}"),
+            Self::SeveralAppCheckTypes(types) => app::several_message(types),
+            Self::BadAppCheck {
+                written,
+                type_name,
+                message,
+                variants,
+            } => bad_app_check(written, type_name, message, variants),
             Self::Other(message) => message.clone(),
         }
     }
+}
+
+/// Why an app check does not read as the app's type, with the forms it can
+/// take.
+pub(crate) fn bad_app_check(
+    written: &str,
+    type_name: &str,
+    message: &str,
+    variants: &[String],
+) -> String {
+    let forms: Vec<String> = variants.iter().map(|form| format!("`{form}`")).collect();
+    format!(
+        "`{written}` is not a `{type_name}`: {message}; `{type_name}` is one of {}",
+        forms.join(", ")
+    )
 }
 
 /// A hint such as ``; did you mean `Ghost`?``, or nothing when no name is
@@ -1097,7 +1150,7 @@ impl fmt::Display for Check {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Named(name) => f.write_str(name),
-            Self::Custom { check, argument } => write!(f, "{check} \"{argument}\""),
+            Self::App(value) => write!(f, "{value}"),
             Self::Shows(text) => write!(f, "\"{text}\" is shown"),
             Self::Hovered(target) => write!(f, "{target:?} is under the pointer"),
             Self::State { key, value } => write!(f, "state `{key}` is \"{value}\""),
@@ -1137,5 +1190,30 @@ impl From<&str> for Check {
 impl From<String> for Check {
     fn from(name: String) -> Self {
         Self::Named(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "tests may panic")]
+
+    use super::*;
+
+    #[test]
+    fn a_misspelt_target_is_not_taken_for_a_check_by_name() {
+        let message = parse("Hovered(Custm(resolver: \"a\", argument: \"b\"))").unwrap_err();
+        assert!(!message.contains("by name"), "{message}");
+    }
+
+    #[test]
+    fn the_forms_that_named_a_check_say_what_to_write_instead() {
+        for text in [
+            "\"saved\"",
+            "Named(\"saved\")",
+            "Custom(check: \"a\", argument: \"b\")",
+        ] {
+            let message = parse(text).unwrap_err();
+            assert!(message.contains(BY_NAME), "{text}: {message}");
+        }
     }
 }

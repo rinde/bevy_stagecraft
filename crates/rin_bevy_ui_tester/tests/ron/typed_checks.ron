@@ -1,6 +1,6 @@
 #![enable(implicit_some)]
 (
-    format_version: 2,
+    format_version: 3,
     name: "typed checks",
     window_size: (800, 600),
     setup: Named("plain_ui"),
@@ -12,11 +12,11 @@
         Check(Hovered(Text("Pause"))),
         Click(Left),
         Wait(1),
-        Check(Custom(check: "activated", argument: "1")),
-        Check("activated once"),
+        Check(App(Activated(1))),
+        Check(App(ActivatedOnce)),
     ],
     expect: [
-        "activated once",
+        App(ActivatedOnce),
         Not(Shows("Resume")),
     ],
     expect_state: {"activations": "1"},

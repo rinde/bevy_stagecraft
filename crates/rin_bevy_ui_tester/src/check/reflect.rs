@@ -18,7 +18,7 @@ use bevy::{
     },
     reflect::{
         Access, NamedField, ParsedPath, PartialReflect, Reflect, ReflectFromReflect, TypeInfo,
-        TypeRegistration, TypeRegistry, UnnamedField,
+        TypePathTable, TypeRegistration, TypeRegistry, UnnamedField,
         enums::VariantInfo,
         serde::{TypedReflectDeserializer, TypedReflectSerializer},
     },
@@ -99,9 +99,20 @@ pub(super) fn find_type<'r>(
     match found {
         Some(registration) if role.fits(registration) => Ok(registration),
         Some(_) => Err(Problem::Other(role.mismatch(name))),
-        None if types.is_ambiguous(name) => Err(Problem::Other(format!(
-            "`{name}` names more than one registered type; write its full type path"
-        ))),
+        None if types.is_ambiguous(name) => {
+            let mut paths: Vec<&str> = types
+                .iter()
+                .map(|registration| registration.type_info().type_path_table())
+                .filter(|table| table.short_path() == name)
+                .map(TypePathTable::path)
+                .collect();
+            paths.sort_unstable();
+            let paths: Vec<String> = paths.iter().map(|path| format!("`{path}`")).collect();
+            Err(Problem::Other(format!(
+                "`{name}` names more than one registered type ({}); write its full type path",
+                paths.join(", ")
+            )))
+        }
         None => Err(Problem::UnknownType {
             name: name.to_owned(),
             suggestions: close_names(
