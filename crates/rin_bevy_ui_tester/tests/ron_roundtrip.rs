@@ -156,15 +156,15 @@ fn unknown_names_are_load_errors() {
 
 #[test]
 fn a_newer_format_is_refused_even_if_the_rest_is_unreadable() {
-    let error = Scenario::from_ron("(format_version: 3, name: \"x\", brand_new: 7)").unwrap_err();
+    let error = Scenario::from_ron("(format_version: 4, name: \"x\", brand_new: 7)").unwrap_err();
     assert_eq!(
         error,
         LoadError::UnsupportedVersion {
-            found: 3,
-            supported: 2
+            found: 4,
+            supported: 3
         }
     );
-    assert!(error.to_string().contains("versions 1 to 2"), "{error}");
+    assert!(error.to_string().contains("versions 1 to 3"), "{error}");
 }
 
 #[test]
@@ -194,7 +194,15 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
     })
     .unwrap();
     let names: Vec<_> = results.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(names, ["click_pause", "custom_target", "typed_checks"]);
+    assert_eq!(
+        names,
+        [
+            "click_pause",
+            "custom_target",
+            "reflected_checks",
+            "typed_checks"
+        ]
+    );
     assert!(
         results.iter().all(rin_bevy_ui_tester::FileResult::passed),
         "{results:?}"

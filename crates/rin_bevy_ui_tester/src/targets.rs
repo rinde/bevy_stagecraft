@@ -191,8 +191,12 @@ pub fn resolve(world: &World, target: &Target) -> Result<ResolvedTarget, String>
     }
 }
 
-/// Finds the node showing `text` and the middle of it.
-fn resolve_text(world: &World, text: &str) -> Result<ResolvedTarget, String> {
+/// The one node of the app showing exactly `text`.
+///
+/// # Errors
+///
+/// Says that no node shows it, or that several do.
+pub(crate) fn text_node(world: &World, text: &str) -> Result<Entity, String> {
     let mut found: Vec<Entity> = world
         .try_query::<(Entity, &Text)>()
         .map(|query| {
@@ -204,16 +208,19 @@ fn resolve_text(world: &World, text: &str) -> Result<ResolvedTarget, String> {
         })
         .unwrap_or_default();
     found.sort();
-    let [entity] = found.as_slice() else {
-        return Err(if found.is_empty() {
-            format!("no UI node shows \"{text}\"")
-        } else {
-            format!(
-                "{} UI nodes show \"{text}\"; the target is ambiguous",
-                found.len()
-            )
-        });
-    };
+    match found.as_slice() {
+        [entity] => Ok(*entity),
+        [] => Err(format!("no UI node shows \"{text}\"")),
+        _ => Err(format!(
+            "{} UI nodes show \"{text}\"; the target is ambiguous",
+            found.len()
+        )),
+    }
+}
+
+/// Finds the node showing `text` and the middle of it.
+fn resolve_text(world: &World, text: &str) -> Result<ResolvedTarget, String> {
+    let entity = &text_node(world, text)?;
     // A label is usually a child of the button it names; the button is what
     // the user wants to hit.
     let widget = enclosing_button(world, *entity).unwrap_or(*entity);

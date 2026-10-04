@@ -14,7 +14,8 @@ use bevy::{
 use rin_bevy_ui_tester::{Probe, Registry, ResolvedTarget, StateProbe};
 
 /// How many times the button was activated.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 pub struct Activations(pub u32);
 
 /// Spawns a camera and a "Pause" button that counts activations.
@@ -76,6 +77,8 @@ pub fn registry() -> Registry {
             probe.resource::<Activations>().is_some_and(|a| a.0 == 1)
         });
     registry.checks.register_custom("activated", activated);
+    registry.register_type::<Activations>();
+    registry.register_type::<Button>();
     registry.targets.register("pause_button", |_world, _arg| {
         Ok(ResolvedTarget::at(Vec2::new(150.0, 50.0)))
     });

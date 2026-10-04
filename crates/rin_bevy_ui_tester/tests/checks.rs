@@ -271,3 +271,16 @@ fn names_inside_checks_are_resolved_when_the_file_loads() {
         LoadError::UnknownTarget { ref resolver, .. } if resolver == "nope"
     ));
 }
+
+#[test]
+fn a_misspelt_check_inside_another_is_reported_on_its_line() {
+    let error = Scenario::from_ron(
+        "(format_version: 3, name: \"x\", steps: [\n    Wait(1),\n    Check(All([Shows(\"a\"), Not(Showz(\"b\"))])),\n])",
+    )
+    .unwrap_err();
+    assert!(matches!(&error, LoadError::Syntax(_)), "{error:?}");
+    let message = error.to_string();
+    assert!(message.starts_with("invalid script: 3:"), "{message}");
+    assert!(message.contains("Showz"), "{message}");
+    assert_eq!(message.matches("a check:").count(), 1, "{message}");
+}

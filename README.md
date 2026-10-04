@@ -71,8 +71,46 @@ A `Check` is one of:
 - `!check`: the check does not hold. A check that cannot run at all, such as
   a name nobody defined, still fails.
 
-A check step takes no frames. A failed one fails its step but does not stop
-the script. Reports name each check in words, such as `"1" is shown`.
+Most questions about plain Bevy data are built in, typed in Rust and found
+through Bevy's type registry (`AppTypeRegistry`), so writing app code for a
+check is rare:
+
+```rust,ignore
+Check::count::<Ghost>().eq(1)                        // entities with Ghost
+Check::count::<Ghost>().and::<Selected>().between(1, 3)
+Check::resource::<Editor>("tool").eq(Tool::Lay)      // a reflected resource field
+Check::component::<Gauge>(Target::text("Speed"), "value").gt(0.5_f32)
+Check::in_state(Mode::Editing)                       // a Bevy State<S>
+Check::disabled(Target::text("Save"))                // also checked, pressed,
+                                                     // focused, visible, exists
+Check::text_of(Target::text("Score"), TextMatch::starts_with("Score: "))
+Check::all([a, b]), Check::any([a, b])
+Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
+```
+
+- Comparisons are `eq`, `ne`, `lt`, `le`, `gt`, `ge` and `between` (both ends
+  included); a failure says what was found: `count of `Ghost` is 2, expected
+  1`.
+- `Count` leaves out disabled entities, as queries do. The types must be
+  registered in the app (`app.register_type::<T>()`, or Bevy's automatic
+  registration); `Resource` and `Component` need `#[reflect(Resource)]` or
+  `#[reflect(Component)]`, and `InState` needs `app.register_type_state::<S>()`.
+- `Component` reads the component on the target's node or, failing that, the
+  nearest node above it that has one, so a label finds the widget it sits in.
+- The widget states read the components Bevy's widgets keep:
+  `InteractionDisabled`, `Checked`, `Pressed` (or `Interaction::Pressed`),
+  `InputFocus` (the widget or something below it), `InheritedVisibility` and a
+  laid-out size. A text target names the nearest widget at or above the text.
+- `TextOf` reads every text node at or below the target's widget, spans
+  included, joined by spaces, and matches `Exact`, `Contains` or `StartsWith`.
+- `Within(frames, check)` holds if the check holds now or on one of the next
+  `frames` frames (Playwright's `expect.poll`), so a step waits for something
+  without a guessed `Wait`, and takes only the frames it waited. It works in
+  the expect list too.
+
+A check step takes no frames unless it waits. A failed one fails its step but
+does not stop the script. Reports name each check in words, such as `"1" is
+shown`.
 
 Targets are `Target::screen`, `Target::text` (any Bevy UI toolkit),
 `Target::world` and `Target::custom`, which an app backs with a resolver
@@ -90,16 +128,23 @@ checks defined in Rust, setups, views and custom targets, and a `Registry`
 maps the names to code: `registry.checks.register(..)` for named checks,
 `register_custom(..)` for checks that take an argument (the generic checks
 `pointer_over_ui` and `pointer_over_nothing` are built in), and
-`Registry::with_state` for `State` checks. A file naming something nobody
-registered, or written in a `format_version` this crate does not read, is
-rejected when it loads.
+`Registry::with_state` for `State` checks. Types that checks name are looked
+up in `Registry::types`: share the app's own registry with
+`Registry::default().with_types_of(app.world())`, or add types one by one with
+`register_type::<T>()` and `register_state::<S>()` (`Registry::install` then
+adds them to the app too). A file naming something nobody registered, or
+written in a `format_version` this crate does not read, is rejected when it
+loads. That includes a type or field that does not exist (the error names the
+step and suggests close names) and a value that does not fit its field: values
+are read with Bevy's `TypedReflectDeserializer` against the field's type.
 
-The current format is version 2. Version 1 files are still read: they are
-version 2 files with only named checks.
+The current format is version 3. Versions 1 and 2 are still read: version 2
+added checks spelled out as data, version 3 the built-in checks below, and an
+older file is also a newer one.
 
 ```ron
 (
-    format_version: 2,
+    format_version: 3,
     name: "click pause",
     setup: Named("plain_ui"),
     steps: [
@@ -111,10 +156,26 @@ version 2 files with only named checks.
         Check("activated once"),                 // a check defined in Rust
         Check(Custom(check: "activated", argument: "1")),
         Check(State(key: "activations", value: "1")),
+        Check(Count(with: ["Ghost"], is: Eq(1))),
+        Check(Resource(path: "Editor.tool", is: Eq(Lay))),
+        Check(Component(target: Text("Speed"), path: "Gauge.value", is: Gt(0.5))),
+        Check(InState(state: "Mode", value: Editing)),
+        Check(Disabled(Text("Save"))),
+        Check(TextOf(Text("Score"), StartsWith("Score: "))),
+        Check(Within(30, Shows("Saved"))),
     ],
-    expect: ["activated once", Shows("Resume"), Not(Shows("Error"))],
+    expect: [
+        "activated once",
+        Shows("Resume"),
+        All([Not(Shows("Error")), Exists(Text("Pause"))]),
+    ],
 )
 ```
+
+Types are written as short type paths, followed by a reflect path for a field
+(`Editor.tool`, `Score.0`, `Board.cells[2]`). A value is plain RON read as the
+field's type, so `Eq(Lay)` is the variant `Lay` of whatever enum the field
+holds.
 
 A check defined in Rust is written as just its name. A mistake in a spelled
 out check is reported as a syntax error at its position, listing the forms a
@@ -267,7 +328,7 @@ thresholds are `StepOptions`. The app plugs in through `SessionHooks`:
 ```ron
 // Recorded from a session. Edit freely. ...
 (
-    format_version: 2,
+    format_version: 3,
     name: "Recording",
     window_size: (640, 360),
     setup: File("recording.setup.txt"),

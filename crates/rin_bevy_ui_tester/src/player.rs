@@ -178,8 +178,15 @@ enum Op {
         /// The step's name for the target, for the message.
         label: String,
     },
-    /// Run the check.
-    Check(usize, Check),
+    /// Run the check, which has waited this many frames to hold.
+    Check {
+        /// Index of the step this belongs to.
+        step: usize,
+        /// The check.
+        check: Check,
+        /// Frames waited so far, for [`Check::Within`].
+        waited: u32,
+    },
     /// Change the caption.
     Caption(String),
 }
@@ -197,6 +204,11 @@ struct Running {
     cursor: Vec2,
     /// Whether a step failed and the rest is being skipped.
     aborted: bool,
+    /// The expectations' outcomes so far, once the steps are done: `None`
+    /// for one still waiting to hold.
+    expected: Option<Vec<Option<Outcome>>>,
+    /// Frames the expectations have waited.
+    expect_waited: u32,
 }
 
 /// Plays one scenario at a time, a frame per update.
@@ -239,9 +251,11 @@ impl ScenarioPlayer {
     /// with no scenario counts as between steps.
     #[must_use]
     pub fn at_step_boundary(&self) -> bool {
-        self.running
-            .as_ref()
-            .is_none_or(|run| run.ops.iter().all(|op| !matches!(op, Op::Frame(..))))
+        self.running.as_ref().is_none_or(|run| {
+            run.ops
+                .iter()
+                .all(|op| !matches!(op, Op::Frame(..) | Op::Check { waited: 1.., .. }))
+        })
     }
 }
 
@@ -327,6 +341,8 @@ impl ScenarioPlayer {
                 ops: VecDeque::new(),
                 cursor,
                 aborted: false,
+                expected: None,
+                expect_waited: 0,
             });
         }
         let Some(run) = self.running.as_mut() else {
@@ -344,8 +360,10 @@ impl ScenarioPlayer {
                     run.expand(world, report, index);
                     continue;
                 }
-                run.finish(world, report);
-                self.running = None;
+                if run.finish(world, report) {
+                    self.running = None;
+                }
+                // Either the end, or a frame for expectations still waiting.
                 return;
             };
             match op {
@@ -362,9 +380,22 @@ impl ScenarioPlayer {
                         run.abort(report, step, message);
                     }
                 }
-                Op::Check(step, check) => {
+                Op::Check {
+                    step,
+                    check,
+                    waited,
+                } => {
                     let name = check.to_string();
-                    match check.run(world, &run.scenario) {
+                    let Some(result) = check.poll(world, &run.scenario, waited) else {
+                        // Not yet: look again after one more frame.
+                        run.ops.push_front(Op::Check {
+                            step,
+                            check,
+                            waited: waited + 1,
+                        });
+                        return;
+                    };
+                    match result {
                         Ok(()) => record_check(report, &name, CheckKind::Step, Outcome::Pass),
                         Err(message) => {
                             record_check(
@@ -498,7 +529,11 @@ impl Running {
                 }
             }
             Step::Key { .. } | Step::KeyUp { .. } | Step::Tap { .. } => {}
-            Step::Check(check) => self.ops.push_back(Op::Check(index, check)),
+            Step::Check(check) => self.ops.push_back(Op::Check {
+                step: index,
+                check,
+                waited: 0,
+            }),
             Step::Caption(text) => self.ops.push_back(Op::Caption(text)),
         }
     }
@@ -561,20 +596,46 @@ impl Running {
         self.move_ops(step, positions, to, target);
     }
 
-    /// Runs the end-of-script expectations and closes the report.
-    fn finish(&self, world: &World, report: &mut ScenarioReport) {
-        for expect in self.scenario.expects() {
-            let outcome = if self.aborted {
-                Outcome::Skipped
+    /// Runs the end-of-script expectations and, once none waits any more,
+    /// records them in order and closes the report. Returns whether it did;
+    /// otherwise a frame passes and it runs again.
+    fn finish(&mut self, world: &World, report: &mut ScenarioReport) -> bool {
+        let expects = self.scenario.expects();
+        let waited = self.expect_waited;
+        let outcomes = self
+            .expected
+            .get_or_insert_with(|| vec![None; expects.len()]);
+        for (expect, outcome) in expects.iter().zip(outcomes.iter_mut()) {
+            if outcome.is_some() {
+                continue;
+            }
+            *outcome = if self.aborted {
+                Some(Outcome::Skipped)
             } else {
-                match expect.run(world, &self.scenario) {
-                    Ok(()) => Outcome::Pass,
-                    Err(message) => Outcome::Fail(message),
-                }
+                expect
+                    .poll(world, &self.scenario, waited)
+                    .map(|result| match result {
+                        Ok(()) => Outcome::Pass,
+                        Err(message) => Outcome::Fail(message),
+                    })
             };
-            record_check(report, &expect.to_string(), CheckKind::Expect, outcome);
+        }
+        if outcomes.iter().any(Option::is_none) {
+            self.expect_waited += 1;
+            return false;
+        }
+        for (expect, outcome) in expects.iter().zip(outcomes.iter()) {
+            if let Some(outcome) = outcome {
+                record_check(
+                    report,
+                    &expect.to_string(),
+                    CheckKind::Expect,
+                    outcome.clone(),
+                );
+            }
         }
         report.finished = true;
+        true
     }
 }
 

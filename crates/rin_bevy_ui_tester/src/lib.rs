@@ -30,7 +30,7 @@ pub mod targets;
 
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
-pub use check::Check;
+pub use check::{Check, Comparison, CountOf, FieldOf, TextMatch, Value};
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
 #[cfg(feature = "gallery")]
 pub use gallery::{

@@ -68,6 +68,8 @@ features = [
     "bevy_image",
     "bevy_mesh",
     "bevy_gizmos",
+    # App states, so a check can ask which state the app is in.
+    "bevy_state",
     # Serde for vectors, keys and mouse buttons, so scripts can be written out.
     "serialize",
     # Warnings from the synthetic input systems.
