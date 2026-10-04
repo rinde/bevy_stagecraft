@@ -21,9 +21,10 @@ use bevy::{
 };
 
 use crate::{
+    check::Check,
     headless::HeadlessPlugins,
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems},
-    probe::{Probe, describe_entity, hovered_entities, is_within},
+    probe::check_hover,
     scenario::{ORIGIN, Scenario, Step},
     targets::{ResolvedTarget, TargetResolvers, resolve},
 };
@@ -177,8 +178,8 @@ enum Op {
         /// The step's name for the target, for the message.
         label: String,
     },
-    /// Run the named check.
-    Check(usize, String),
+    /// Run the check.
+    Check(usize, Check),
     /// Change the caption.
     Caption(String),
 }
@@ -361,24 +362,9 @@ impl ScenarioPlayer {
                         run.abort(report, step, message);
                     }
                 }
-                Op::Check(step, name) => {
-                    let Some(check) = run
-                        .scenario
-                        .checks()
-                        .iter()
-                        .find(|check| check.name == name)
-                    else {
-                        let message = format!("the scenario defines no check named `{name}`");
-                        record_check(
-                            report,
-                            &name,
-                            CheckKind::Step,
-                            Outcome::Fail(message.clone()),
-                        );
-                        fail_step(report, step, message);
-                        continue;
-                    };
-                    match check.run(&Probe::new(world)) {
+                Op::Check(step, check) => {
+                    let name = check.to_string();
+                    match check.run(world, &run.scenario) {
                         Ok(()) => record_check(report, &name, CheckKind::Step, Outcome::Pass),
                         Err(message) => {
                             record_check(
@@ -512,7 +498,7 @@ impl Running {
                 }
             }
             Step::Key { .. } | Step::KeyUp { .. } | Step::Tap { .. } => {}
-            Step::Check(name) => self.ops.push_back(Op::Check(index, name)),
+            Step::Check(check) => self.ops.push_back(Op::Check(index, check)),
             Step::Caption(text) => self.ops.push_back(Op::Caption(text)),
         }
     }
@@ -581,12 +567,12 @@ impl Running {
             let outcome = if self.aborted {
                 Outcome::Skipped
             } else {
-                match expect.run(&Probe::new(world)) {
+                match expect.run(world, &self.scenario) {
                     Ok(()) => Outcome::Pass,
                     Err(message) => Outcome::Fail(message),
                 }
             };
-            record_check(report, &expect.name, CheckKind::Expect, outcome);
+            record_check(report, &expect.to_string(), CheckKind::Expect, outcome);
         }
         report.finished = true;
     }
@@ -621,27 +607,6 @@ fn key_events(step: &Step) -> Option<Vec<SyntheticEvent>> {
         }
         _ => None,
     }
-}
-
-/// Fails unless `widget`, or something below it, is under the pointer.
-fn check_hover(world: &World, widget: Entity, label: &str) -> Result<(), String> {
-    let hovered = hovered_entities(world);
-    if hovered
-        .iter()
-        .any(|entity| is_within(world, *entity, widget))
-    {
-        return Ok(());
-    }
-    let wanted = describe_entity(world, widget);
-    Err(hovered.first().map_or_else(
-        || format!("{label} ({wanted}) is not under the pointer: nothing is"),
-        |covering| {
-            format!(
-                "{label} ({wanted}) is not under the pointer: it is covered by {}",
-                describe_entity(world, *covering)
-            )
-        },
-    ))
 }
 
 /// Frames of layout and picking a fresh UI needs before the script starts.

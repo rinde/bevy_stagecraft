@@ -563,13 +563,13 @@ pub(super) fn update_details(
     // Slots in the order the player records them: step checks as the script
     // reaches them, then the expectations.
     let step_checks = scenario.script().iter().filter_map(|step| match step {
-        Step::Check(name) => Some((CheckKind::Step, name.as_str())),
+        Step::Check(check) => Some((CheckKind::Step, check.to_string())),
         _ => None,
     });
     let expects = scenario
         .expects()
-        .iter()
-        .map(|check| (CheckKind::Expect, check.name.as_str()));
+        .into_iter()
+        .map(|check| (CheckKind::Expect, check.to_string()));
     let mut seen_step = 0;
     let mut seen_expect = 0;
     let mut lines = Vec::new();

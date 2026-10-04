@@ -33,11 +33,11 @@ app.update();
 ## Example scenario
 
 A scenario is plain data: steps, with time counted in frames of 1/60 s, and
-checks referred to by name. `run_headless` builds a headless app, runs the
-setup hook, plays the steps and returns a `ScenarioReport`.
+checks. `run_headless` builds a headless app, runs the setup hook, plays the
+steps and returns a `ScenarioReport`.
 
 ```rust,ignore
-use rin_bevy_ui_tester::{Scenario, Step, Target};
+use rin_bevy_ui_tester::{Check, Scenario, Step, Target};
 
 #[test]
 fn clicking_the_button_increments_the_counter() {
@@ -47,13 +47,32 @@ fn clicking_the_button_increments_the_counter() {
             Step::move_to(Target::text("Add")),  // fails if something covers it
             Step::click(),
             Step::wait(1),
-            Step::check("counter shows 1"),
+            Step::check(Check::shows("1")),
+            Step::check("counter is 1"),         // a check defined in Rust
         ])
-        .check("counter shows 1", |probe| probe.has_text("1"))
+        .check("counter is 1", |probe| probe.resource::<Counter>().is_some_and(|c| c.0 == 1))
+        .expect_check(!Check::shows("Error"))   // at the end
         .run_headless();
     assert!(report.passed(), "{:?}", report.failures());
 }
 ```
+
+A `Check` is one of:
+
+- a name (`Check::named`, or just a `&str`): a check defined in Rust with
+  `Scenario::check` or `Scenario::expect`;
+- `Check::custom(name, argument)`: a check defined in Rust that takes an
+  argument (`Scenario::custom_check`);
+- `Check::shows(text)`: some UI node of the app shows exactly this text;
+- `Check::hovered(target)`: the target's widget, or something below it, is
+  under the pointer;
+- `Check::state(key, value)`: the app's `StateProbe` (`Scenario::with_state`)
+  reports this value;
+- `!check`: the check does not hold. A check that cannot run at all, such as
+  a name nobody defined, still fails.
+
+A check step takes no frames. A failed one fails its step but does not stop
+the script. Reports name each check in words, such as `"1" is shown`.
 
 Targets are `Target::screen`, `Target::text` (any Bevy UI toolkit),
 `Target::world` and `Target::custom`, which an app backs with a resolver
@@ -67,25 +86,39 @@ fails naming what covers it. A failed step skips the rest of the script.
 name, window size, setup, view, steps, expect list), and `Scenario::from_ron`
 reads one back, so a scenario can be written in Rust or as a file and
 converted either way. Closures cannot be serialised, so a script names its
-checks, setups, views and custom targets, and a `Registry` maps the names to
-code (the generic checks `pointer_over_ui` and `pointer_over_nothing` are
-built in). A file naming something nobody registered, or written in a newer
-`format_version`, is rejected when it loads.
+checks defined in Rust, setups, views and custom targets, and a `Registry`
+maps the names to code: `registry.checks.register(..)` for named checks,
+`register_custom(..)` for checks that take an argument (the generic checks
+`pointer_over_ui` and `pointer_over_nothing` are built in), and
+`Registry::with_state` for `State` checks. A file naming something nobody
+registered, or written in a `format_version` this crate does not read, is
+rejected when it loads.
+
+The current format is version 2. Version 1 files are still read: they are
+version 2 files with only named checks.
 
 ```ron
 (
-    format_version: 1,
+    format_version: 2,
     name: "click pause",
     setup: Named("plain_ui"),
     steps: [
+        Check(Not(Hovered(Text("Pause")))),
         Glide(target: Text("Pause"), frames: 20),
+        Check(Hovered(Text("Pause"))),
         Click(Left),
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
-        Check("activated once"),
+        Check("activated once"),                 // a check defined in Rust
+        Check(Custom(check: "activated", argument: "1")),
+        Check(State(key: "activations", value: "1")),
     ],
-    expect: ["activated once"],
+    expect: ["activated once", Shows("Resume"), Not(Shows("Error"))],
 )
 ```
+
+A check defined in Rust is written as just its name. A mistake in a spelled
+out check is reported as a syntax error at its position, listing the forms a
+check can take.
 
 ```rust,ignore
 let scenario = Scenario::from_ron_with(include_str!("x.ron"), &registry)?
@@ -227,12 +260,14 @@ thresholds are `StepOptions`. The app plugs in through `SessionHooks`:
 - `state` is a `StateProbe` that reads the app's state as `key: value` text.
   What changed between start and stop is written as `expect_state`, which the
   person keeps, edits or deletes; set the same probe on the `Registry`
-  (`Registry::with_state`) so a loaded file checks it.
+  (`Registry::with_state`) so a loaded file checks it. Each entry runs as a
+  `State` check at the end, and the same probe answers `State` checks added
+  part-way through.
 
 ```ron
 // Recorded from a session. Edit freely. ...
 (
-    format_version: 1,
+    format_version: 2,
     name: "Recording",
     window_size: (640, 360),
     setup: File("recording.setup.txt"),

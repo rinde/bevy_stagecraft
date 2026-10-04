@@ -1,0 +1,23 @@
+#![enable(implicit_some)]
+(
+    format_version: 2,
+    name: "typed checks",
+    window_size: (800, 600),
+    setup: Named("plain_ui"),
+    steps: [
+        Check(Shows("Pause")),
+        Check(Not(Hovered(Text("Pause")))),
+        Check(State(key: "activations", value: "0")),
+        Glide(target: Text("Pause"), frames: 10),
+        Check(Hovered(Text("Pause"))),
+        Click(Left),
+        Wait(1),
+        Check(Custom(check: "activated", argument: "1")),
+        Check("activated once"),
+    ],
+    expect: [
+        "activated once",
+        Not(Shows("Resume")),
+    ],
+    expect_state: {"activations": "1"},
+)

@@ -52,8 +52,9 @@ lands.
 | ---------- | -------------------------------------------- | ------- |
 | `headless` | `HeadlessPlugins`: a real Bevy app and UI with no GPU or display (virtual primary window, fixed 1/60 s time) | done |
 | `input`    | `SyntheticInput`: queued mouse and keyboard input, drained in `PreUpdate` into Bevy's input messages and `PointerInput` | done |
-| `scenario` | `Scenario` builder (setup, view, steps, named checks, expects), `Step`, `Modifiers` (serde form is a list, `[Ctrl, Shift]`); `to_script` / `from_script` / `from_ron` / `to_ron` | done |
-| `script`   | `Script` (the serde data model, `format_version`), `Setup`, `Registry` (`CheckRegistry`, named setups and views, target resolvers), `LoadError`, `export_ron` | done |
+| `scenario` | `Scenario` builder (setup, view, steps, named and custom checks, expects, state probe), `Step`, `NamedCheck`, `CustomCheck`, `Modifiers` (serde form is a list, `[Ctrl, Shift]`); `to_script` / `from_script` / `from_ron` / `to_ron` | done |
+| `check`    | `Check`, a check as data: `Named` (written as a bare string, as in format version 1), `Custom` (with an argument), `Shows`, `Hovered`, `State`, `Not`; the serde form goes through a private mirror enum so no derived functions are public; evaluation, where a check that cannot run fails even inside `Not` | done |
+| `script`   | `Script` (the serde data model; writes `format_version` 2, reads 1 and 2), `Setup`, `Registry` (`CheckRegistry` with named and custom checks, named setups and views, target resolvers, state probe), `LoadError`, `export_ron` | done |
 | `files`    | `run_ron_tests`: a `harness = false` runner turning every `.ron` file in a directory into one test | done |
 | `player`   | `ScenarioPlayerPlugin`: plays a scenario through `SyntheticInput` one frame per update into the `ScenarioReport` resource; `Scenario::run_headless` / `run_in` | done |
 | `targets`  | `Target` (screen, text, world, custom) and the `TargetResolvers` extension point | done |
