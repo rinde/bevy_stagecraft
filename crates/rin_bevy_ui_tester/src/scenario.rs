@@ -5,7 +5,7 @@
 //! exception is a check written as a closure, which only a scenario in Rust
 //! can hold.
 
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::sync::Arc;
 use core::{fmt, ops::BitOr};
 
 use bevy::{
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     check::Check,
     probe::Probe,
-    script::{FORMAT_VERSION, LoadError, Registry, Script, Setup, StateProbe},
+    script::{FORMAT_VERSION, LoadError, Registry, Script, Setup},
     targets::Target,
 };
 
@@ -386,14 +386,8 @@ pub struct Scenario {
     steps: Vec<Step>,
     /// What [`Check::Named`] refers to, one per label.
     checks: Vec<NamedCheck>,
-    /// Checks run once the script has finished, before those of
-    /// `state_expects`.
+    /// Checks run once the script has finished.
     expects: Vec<Check>,
-    /// The script's `expect_state` entries, run as [`Check::State`] at the
-    /// end and kept apart so the script converts back.
-    state_expects: BTreeMap<String, String>,
-    /// Reads the app's state for [`Check::State`].
-    state: Option<StateProbe>,
 }
 
 impl fmt::Debug for Scenario {
@@ -408,8 +402,6 @@ impl fmt::Debug for Scenario {
             .field("steps", &self.steps)
             .field("checks", &self.checks)
             .field("expects", &self.expects)
-            .field("state_expects", &self.state_expects)
-            .field("state", &self.state)
             .finish()
     }
 }
@@ -428,8 +420,6 @@ impl Scenario {
             steps: Vec::new(),
             checks: Vec::new(),
             expects: Vec::new(),
-            state_expects: BTreeMap::new(),
-            state: None,
         }
     }
 
@@ -546,13 +536,6 @@ impl Scenario {
         self
     }
 
-    /// Sets the probe that [`Check::State`] reads the app's state with.
-    #[must_use]
-    pub fn with_state(mut self, probe: StateProbe) -> Self {
-        self.state = Some(probe);
-        self
-    }
-
     /// Adds `check` to the named checks, replacing one of the same name.
     fn define(&mut self, check: NamedCheck) {
         self.checks.retain(|defined| defined.name != check.name);
@@ -595,25 +578,10 @@ impl Scenario {
         &self.checks
     }
 
-    /// The checks that run at the end, in order: the expect list, then one
-    /// [`Check::State`] per `expect_state` entry.
+    /// The checks that run at the end, in order.
     #[must_use]
     pub fn expects(&self) -> Vec<Check> {
-        self.expects
-            .iter()
-            .cloned()
-            .chain(
-                self.state_expects
-                    .iter()
-                    .map(|(key, value)| Check::state(key, value)),
-            )
-            .collect()
-    }
-
-    /// The probe [`Check::State`] reads the app's state with, if any.
-    #[must_use]
-    pub const fn state_probe(&self) -> Option<&StateProbe> {
-        self.state.as_ref()
+        self.expects.clone()
     }
 
     /// Runs the setup hook, if there is one. Returns whether there was.
@@ -650,7 +618,6 @@ impl Scenario {
             view: self.view_ref.clone(),
             steps: self.steps.clone(),
             expect: self.expects.clone(),
-            expect_state: self.state_expects.clone(),
         }
     }
 
@@ -663,8 +630,7 @@ impl Scenario {
     /// [`LoadError`] when the format version is not one this crate reads,
     /// when the script names a setup, view, target or type that `registry`
     /// does not have, when an app check does not read as the app's check
-    /// type, or when it checks the app's state and `registry` has no state
-    /// probe. Nothing is ever skipped.
+    /// type. Nothing is ever skipped.
     pub fn from_script(script: Script, registry: &Registry) -> Result<Self, LoadError> {
         crate::script::build_scenario(script, registry)
     }
@@ -704,7 +670,6 @@ impl Scenario {
         script: Script,
         setup: Option<Arc<HookFn>>,
         view: Option<Arc<HookFn>>,
-        state: Option<StateProbe>,
     ) -> Self {
         Self {
             name: script.name,
@@ -716,8 +681,6 @@ impl Scenario {
             steps: script.steps,
             checks: Vec::new(),
             expects: script.expect,
-            state_expects: script.expect_state,
-            state,
         }
     }
 }

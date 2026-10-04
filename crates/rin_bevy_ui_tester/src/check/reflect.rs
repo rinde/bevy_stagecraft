@@ -57,7 +57,7 @@ pub(super) enum Role {
 
 impl Role {
     /// Whether `registration` can play this role.
-    fn fits(self, registration: &TypeRegistration) -> bool {
+    pub(super) fn fits(self, registration: &TypeRegistration) -> bool {
         match self {
             Self::Counted => true,
             Self::Resource => {

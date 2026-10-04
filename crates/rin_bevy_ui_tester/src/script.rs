@@ -32,8 +32,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     check::{
-        AppCheckType, Check, Problem, SeveralAppCheckTypes, app_check_type, bad_app_check,
-        did_you_mean,
+        AppCheckType, Check, NO_STATE_PROBE, Problem, SeveralAppCheckTypes, app_check_type,
+        bad_app_check, did_you_mean,
     },
     scenario::{HookFn, Scenario, Step},
     targets::{Target, TargetResolvers},
@@ -111,15 +111,11 @@ pub struct Script {
     pub view: Option<String>,
     /// What the scenario does.
     pub steps: Vec<Step>,
-    /// Checks that run once the steps have finished.
+    /// Checks that run once the steps have finished. A recorded session
+    /// writes the checks it suggests here (see [`crate::check::suggest`]), for the
+    /// person to keep, edit or delete.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expect: Vec<Check>,
-    /// What the app's state must say once the steps have finished, as the
-    /// app's own state probe (see [`StateProbe`]) names it: each key must
-    /// have exactly this value. A recorded session writes what changed here,
-    /// for the person to keep, edit or delete.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub expect_state: BTreeMap<String, String>,
 }
 
 impl Script {
@@ -143,9 +139,14 @@ impl Script {
             .from_str(text)
             .map_err(|error| LoadError::Syntax(error.to_string()))?;
         check_version(version.format_version)?;
-        options
-            .from_str(text)
-            .map_err(|error| LoadError::Syntax(error.to_string()))
+        options.from_str(text).map_err(|error| {
+            let message = error.to_string();
+            if message.contains("`expect_state`") {
+                LoadError::Syntax(format!("{message}: {NO_STATE_PROBE}"))
+            } else {
+                LoadError::Syntax(message)
+            }
+        })
     }
 
     /// The script as pretty RON.
@@ -215,9 +216,6 @@ pub enum LoadError {
         /// Where it was named, for example `step 3`.
         used_by: String,
     },
-    /// The script checks the app's state ([`Check::State`] or
-    /// `expect_state`) but no state probe is registered to read it with.
-    NoStateProbe,
     /// A check names a type that is not in [`Registry::types`], or that is
     /// not the kind of type the check needs.
     UnknownType {
@@ -310,10 +308,6 @@ impl fmt::Display for LoadError {
                 f,
                 "{used_by} uses a custom target `{resolver}`, which has no registered resolver"
             ),
-            Self::NoStateProbe => write!(
-                f,
-                "the script checks the app's state, but no state probe is registered"
-            ),
             Self::Io { path, message } => write!(f, "cannot read {path}: {message}"),
             Self::UnknownType {
                 name,
@@ -355,45 +349,6 @@ impl fmt::Display for LoadError {
 }
 
 impl core::error::Error for LoadError {}
-
-/// What the app's state looks like as plain text: named values.
-///
-/// The same probe serves a recording (what changed during the session) and a
-/// loaded script (`expect_state`), so what is written is what is read.
-///
-/// ```
-/// use rin_bevy_ui_tester::StateProbe;
-///
-/// let probe = StateProbe::new(|_world| [("score".to_owned(), "3".to_owned())].into());
-/// let world = bevy::ecs::world::World::new();
-/// assert_eq!(probe.snapshot(&world).get("score").map(String::as_str), Some("3"));
-/// ```
-#[derive(Clone)]
-pub struct StateProbe(Arc<StateFn>);
-
-/// What a state probe does.
-type StateFn = dyn Fn(&World) -> BTreeMap<String, String> + Send + Sync;
-
-impl fmt::Debug for StateProbe {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("StateProbe(..)")
-    }
-}
-
-impl StateProbe {
-    /// A probe that reads state with `read`. Keys name what is read, values
-    /// are its current value as text; keep both stable and readable, as people
-    /// edit them in the file.
-    pub fn new(read: impl Fn(&World) -> BTreeMap<String, String> + Send + Sync + 'static) -> Self {
-        Self(Arc::new(read))
-    }
-
-    /// The state of `world` right now.
-    #[must_use]
-    pub fn snapshot(&self, world: &World) -> BTreeMap<String, String> {
-        (self.0)(world)
-    }
-}
 
 /// Hooks over the world, by name: what [`Setup::Named`] and a script's view
 /// refer to.
@@ -449,9 +404,6 @@ pub struct Registry {
     pub views: HookRegistry,
     /// Resolvers for [`Target::Custom`].
     pub targets: TargetResolvers,
-    /// Reads the app's state, for [`Check::State`] and
-    /// [`Script::expect_state`].
-    pub state: Option<StateProbe>,
     /// The types checks may name, such as [`Check::Count`] and
     /// [`Check::Resource`], and the app's check type that [`Check::App`]
     /// is read as: a script is checked against them when it loads.
@@ -473,21 +425,12 @@ impl Default for Registry {
             setups: HookRegistry::default(),
             views: HookRegistry::default(),
             targets: TargetResolvers::default(),
-            state: None,
             types,
         }
     }
 }
 
 impl Registry {
-    /// Sets the probe that reads the app's state, for [`Check::State`] and
-    /// [`Script::expect_state`].
-    #[must_use]
-    pub fn with_state(mut self, probe: StateProbe) -> Self {
-        self.state = Some(probe);
-        self
-    }
-
     /// Registers `T`, and the types of its fields, for checks to name.
     pub fn register_type<T: GetTypeRegistration>(&mut self) {
         self.types.write().register::<T>();
@@ -600,52 +543,41 @@ pub(crate) fn build_scenario(
         None => None,
     };
     let types = registry.types.read();
-    let mut reads_state = !script.expect_state.is_empty();
     for (index, step) in script.steps.iter_mut().enumerate() {
         let used_by = format!("step {index}");
         for target in step_targets(step) {
             require_resolver(registry, target, &used_by)?;
         }
         if let Step::Check(check) = step {
-            reads_state |= resolve_check(registry, &types, check, &used_by)?;
+            resolve_check(registry, &types, check, &used_by)?;
         }
     }
     for check in &mut script.expect {
-        reads_state |= resolve_check(registry, &types, check, "the expect list")?;
+        resolve_check(registry, &types, check, "the expect list")?;
     }
     drop(types);
-    let state = match (&registry.state, reads_state) {
-        (None, true) => return Err(LoadError::NoStateProbe),
-        (state, _) => state.clone(),
-    };
-    Ok(Scenario::assemble(script, setup, view, state))
+    Ok(Scenario::assemble(script, setup, view))
 }
 
 /// Reads the app checks in `check`, and in every check inside it, as the
-/// app's check type, and checks that what each part names is there. Returns
-/// whether some part reads the app's state.
+/// app's check type, and checks that what each part names is there.
 fn resolve_check(
     registry: &Registry,
     types: &TypeRegistry,
     check: &mut Check,
     used_by: &str,
-) -> Result<bool, LoadError> {
+) -> Result<(), LoadError> {
     check
         .type_app_checks(types)
         .map_err(|problem| load_error(problem, used_by))?;
-    let mut reads_state = false;
     for part in check.parts() {
-        match part {
-            Check::Named(name) => {
-                return Err(LoadError::BadCheck {
-                    used_by: used_by.to_owned(),
-                    message: format!(
-                        "the check `{name}` is a Rust closure on a scenario, which a script cannot refer to"
-                    ),
-                });
-            }
-            Check::State { .. } => reads_state = true,
-            _ => {}
+        if let Check::Named(name) = part {
+            return Err(LoadError::BadCheck {
+                used_by: used_by.to_owned(),
+                message: format!(
+                    "the check `{name}` is a Rust closure on a scenario, which a script cannot refer to"
+                ),
+            });
         }
         if let Some(target) = part.target() {
             require_resolver(registry, target, used_by)?;
@@ -653,7 +585,7 @@ fn resolve_check(
         part.problem(types)
             .map_err(|problem| load_error(problem, used_by))?;
     }
-    Ok(reads_state)
+    Ok(())
 }
 
 /// The load error for a check that cannot run, naming where it is.

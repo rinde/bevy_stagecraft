@@ -9,7 +9,10 @@
 //! pause, step, or take over the app with the real mouse.
 //!
 //! **Record** saves what you do by hand as a `.ron` file in `recordings/`,
-//! with the counter and switch as they were when you pressed it. Files in
+//! with the counter and switch as they were when you pressed it. When you
+//! stop, the Scenarios window lists the checks the changes suggest (the
+//! counter's new value, the new text, the switch's fact); untick the ones
+//! you do not want and the file is written again without them. Files in
 //! that directory show up under "Recorded" the next time the example starts.
 //! With `--record` the session starts straight away and is saved when the app
 //! window is closed:
@@ -25,8 +28,8 @@ use bevy::{
 };
 use rin_bevy_ui_tester::{
     AppCheck, Check, CheckResult, Gallery, GalleryEntry, GalleryPlugin, Probe, ReflectAppCheck,
-    Registry, Scenario, Script, SessionHooks, SessionRecorder, StateProbe, Step, Target,
-    script::Setup, session,
+    Registry, Scenario, Script, SessionHooks, SessionRecorder, Step, Target, script::Setup,
+    session,
 };
 
 /// Where recordings are written, and read from at startup.
@@ -35,12 +38,14 @@ const RECORDINGS: &str = "recordings";
 /// The size of the app's window, in logical pixels.
 const WINDOW: (u32, u32) = (640, 360);
 
-/// What the app counts.
-#[derive(Resource, Default)]
+/// What the app counts. Reflected, so a recording can suggest checks on it.
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 struct Counter(u32);
 
-/// The switch.
-#[derive(Resource, Default)]
+/// The switch. Reflected, like the counter.
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 struct Switch(bool);
 
 /// The app's own checks. Bevy finds the type by itself, and a scenario that
@@ -69,6 +74,15 @@ impl AppCheck for CounterCheck {
                     Err("the switch is off".into())
                 }
             }
+        }
+    }
+
+    /// What a recording may suggest of the app's own checks.
+    fn facts(probe: &Probe) -> Vec<Self> {
+        if probe.resource::<Switch>().is_some_and(|switch| switch.0) {
+            vec![Self::SwitchOn]
+        } else {
+            Vec::new()
         }
     }
 }
@@ -248,34 +262,16 @@ fn gallery() -> Gallery {
         )
 }
 
-/// The app's state as text: what a recording starts from and what it checks.
-fn state_probe() -> StateProbe {
-    StateProbe::new(|world| {
-        let count = world.get_resource::<Counter>().map_or(0, |c| c.0);
-        let on = world.get_resource::<Switch>().is_some_and(|s| s.0);
-        [
-            ("count".to_owned(), count.to_string()),
-            (
-                "switch".to_owned(),
-                if on { "on" } else { "off" }.to_owned(),
-            ),
-        ]
-        .into()
-    })
-}
-
 /// What a recording needs of the app: its starting state, written next to the
 /// script as `<name>.setup.txt` ("count switch").
 fn session_hooks() -> SessionHooks {
-    SessionHooks::new()
-        .capture_setup(|world, dir, stem| {
-            let count = world.get_resource::<Counter>().map_or(0, |c| c.0);
-            let on = world.get_resource::<Switch>().is_some_and(|s| s.0);
-            let file = format!("{stem}.setup.txt");
-            fs::write(dir.join(&file), format!("{count} {on}")).map_err(|e| e.to_string())?;
-            Ok(Some(Setup::File(file)))
-        })
-        .state(state_probe())
+    SessionHooks::new().capture_setup(|world, dir, stem| {
+        let count = world.get_resource::<Counter>().map_or(0, |c| c.0);
+        let on = world.get_resource::<Switch>().is_some_and(|s| s.0);
+        let file = format!("{stem}.setup.txt");
+        fs::write(dir.join(&file), format!("{count} {on}")).map_err(|e| e.to_string())?;
+        Ok(Some(Setup::File(file)))
+    })
 }
 
 /// The app set up as a recording's setup file says.
@@ -292,7 +288,7 @@ fn setup_from(text: &str) -> impl Fn(&mut World) + Send + Sync + 'static {
 
 /// Loads every recording in [`RECORDINGS`], with the app's own names resolved.
 fn recorded() -> Vec<GalleryEntry> {
-    let registry = Registry::default().with_state(state_probe());
+    let registry = Registry::default();
     let Ok(files) = fs::read_dir(RECORDINGS) else {
         return Vec::new();
     };

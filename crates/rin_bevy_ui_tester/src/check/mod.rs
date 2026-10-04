@@ -13,6 +13,7 @@
 
 mod app;
 mod reflect;
+pub mod suggest;
 mod value;
 mod widget;
 
@@ -98,14 +99,6 @@ pub enum Check {
     /// The target's widget, or something below it, is under the pointer. A
     /// target that is only a position names no widget, and the check fails.
     Hovered(Target),
-    /// The app's state probe (see [`crate::StateProbe`]) reports `key` with
-    /// exactly this value.
-    State {
-        /// What the probe calls the value.
-        key: String,
-        /// The value it must have, as text.
-        value: String,
-    },
     /// How many entities of the app have every one of these components.
     /// Disabled entities are left out, as queries leave them out.
     Count {
@@ -188,13 +181,6 @@ enum Spelled {
     Shows(String),
     /// See [`Check::Hovered`].
     Hovered(Target),
-    /// See [`Check::State`].
-    State {
-        /// See [`Check::State`].
-        key: String,
-        /// See [`Check::State`].
-        value: String,
-    },
     /// See [`Check::Count`].
     Count {
         /// See [`Check::Count`].
@@ -252,13 +238,19 @@ enum Spelled {
 /// The forms a check can take, for a check that does not parse.
 const FORMS: &str = "a check: App(..), Shows(..), Hovered(..), Count(..), Resource(..), \
     Component(..), InState(..), Disabled(..), Checked(..), Pressed(..), Focused(..), \
-    Visible(..), Exists(..), TextOf(..), Not(..), All(..), Any(..), Within(..) or State(..)";
+    Visible(..), Exists(..), TextOf(..), Not(..), All(..), Any(..) or Within(..)";
 
 /// What a file that refers to a check by name, as format versions 1 and 2
 /// could, is told.
 const BY_NAME: &str = "checks are no longer looked up by name: declare the app's checks as \
     one enum with `#[derive(Reflect)]` and `#[reflect(AppCheck)]`, and write one as \
     `App(..)`, such as `Check(App(StationNamed(\"Alpha\")))`";
+
+/// What a file that checks the app's state as text, as the state probe of
+/// earlier versions could, is told.
+pub(crate) const NO_STATE_PROBE: &str = "the state probe is gone: publish the state as a \
+    reflected resource (`#[derive(Resource, Reflect)]` with `#[reflect(Resource)]`) and check \
+    it with `Resource(path: \"Type.field\", is: Eq(..))`";
 
 /// A check made from a closure has only a label, which cannot be read back,
 /// so writing one out fails, naming it.
@@ -315,6 +307,8 @@ fn parse(text: &str) -> Result<Check, String> {
             .any(|old| message.contains(&format!("variant named `{old}` in enum `Check`")))
         {
             format!("{message}: {BY_NAME}")
+        } else if message.contains("variant named `State` in enum `Check`") {
+            format!("{message}: {NO_STATE_PROBE}")
         } else {
             format!("{message} ({FORMS})")
         }
@@ -494,15 +488,6 @@ impl Check {
     #[must_use]
     pub const fn hovered(target: Target) -> Self {
         Self::Hovered(target)
-    }
-
-    /// The app's state reports `key` as `value`.
-    #[must_use]
-    pub fn state(key: impl Into<String>, value: impl Into<String>) -> Self {
-        Self::State {
-            key: key.into(),
-            value: value.into(),
-        }
     }
 
     /// How many entities have `C` (and whatever [`CountOf::and`] adds), for
@@ -686,8 +671,7 @@ impl Check {
 
     /// Runs the check against `world`, which has waited `waited` frames for
     /// it: `None` while a [`Check::Within`] inside still waits for it to
-    /// hold. Closures defined on the scenario, and the state probe, come
-    /// from `scenario`.
+    /// hold. Closures defined on the scenario come from `scenario`.
     pub(crate) fn poll(
         &self,
         world: &World,
@@ -782,20 +766,6 @@ impl Check {
                     format!("{target:?} is a position, not a widget, so it cannot be hovered")
                 })?;
                 Ok(check_hover(world, widget, &format!("{target:?}")))
-            }
-            Self::State { key, value } => {
-                let state = scenario
-                    .state_probe()
-                    .ok_or_else(|| format!("there is no state probe to read `{key}` with"))?
-                    .snapshot(world);
-                let actual = state
-                    .get(key)
-                    .ok_or_else(|| format!("the app's state has no `{key}`"))?;
-                Ok(if actual == value {
-                    Ok(())
-                } else {
-                    Err(format!("state `{key}` is \"{actual}\", not \"{value}\""))
-                })
             }
             Self::Count { .. }
             | Self::Resource { .. }
@@ -1153,7 +1123,6 @@ impl fmt::Display for Check {
             Self::App(value) => write!(f, "{value}"),
             Self::Shows(text) => write!(f, "\"{text}\" is shown"),
             Self::Hovered(target) => write!(f, "{target:?} is under the pointer"),
-            Self::State { key, value } => write!(f, "state `{key}` is \"{value}\""),
             Self::Count { is, .. } | Self::Resource { is, .. } | Self::Component { is, .. } => {
                 write!(f, "{} {is}", self.subject())
             }

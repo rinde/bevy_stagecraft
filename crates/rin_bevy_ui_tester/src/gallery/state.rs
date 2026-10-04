@@ -5,6 +5,11 @@ use std::path::PathBuf;
 
 use bevy::ecs::resource::Resource;
 
+use crate::{
+    check::Check,
+    session::{SavedSession, SessionError},
+};
+
 /// How fast the script plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Speed {
@@ -81,8 +86,12 @@ pub enum GalleryAction {
     /// primary window over and log what the real mouse and keyboard do there
     /// (see [`crate::session`]).
     Record,
-    /// Stop recording and write the scenario into the export directory.
+    /// Stop recording, write the scenario into the export directory and
+    /// show the checks it suggests as a checklist.
     StopRecording,
+    /// Tick or untick the suggested check with this index, and write the
+    /// recording again with the ticked ones as its `expect`.
+    ToggleSuggestion(usize),
 }
 
 /// What the gallery is in the middle of.
@@ -125,6 +134,79 @@ pub enum Recording {
     On,
 }
 
+/// The checks the last recording suggested, as a checklist.
+///
+/// Each one is ticked or not, and the recording's file holds the ticked ones
+/// as its `expect`. All are ticked to begin with, as in the file just
+/// written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Suggestions {
+    /// The recording, as last written.
+    session: SavedSession,
+    /// Whether each candidate is ticked, in the candidates' order.
+    ticked: Vec<bool>,
+}
+
+impl Suggestions {
+    /// The checklist for `session`, every candidate ticked.
+    pub(crate) fn new(session: SavedSession) -> Self {
+        let ticked = vec![true; session.candidates.len()];
+        Self { session, ticked }
+    }
+
+    /// The recording, as last written.
+    #[must_use]
+    pub const fn session(&self) -> &SavedSession {
+        &self.session
+    }
+
+    /// Each candidate, in order, with whether it is ticked.
+    pub fn entries(&self) -> impl Iterator<Item = (&Check, bool)> {
+        self.session
+            .candidates
+            .iter()
+            .zip(self.ticked.iter().copied())
+    }
+
+    /// How many candidates there are.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.ticked.len()
+    }
+
+    /// Whether there are no candidates.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.ticked.is_empty()
+    }
+
+    /// Whether the candidate with this index is ticked.
+    #[must_use]
+    pub fn is_ticked(&self, index: usize) -> bool {
+        self.ticked.get(index).copied().unwrap_or(false)
+    }
+
+    /// The ticked candidates, in order.
+    #[must_use]
+    pub fn ticked(&self) -> Vec<Check> {
+        self.entries()
+            .filter(|(_, ticked)| *ticked)
+            .map(|(check, _)| check.clone())
+            .collect()
+    }
+
+    /// Ticks or unticks the candidate with this index and writes the
+    /// recording again. An index past the end changes nothing.
+    pub(crate) fn toggle(&mut self, index: usize) -> Result<(), SessionError> {
+        let Some(ticked) = self.ticked.get_mut(index) else {
+            return Ok(());
+        };
+        *ticked = !*ticked;
+        let expect = self.ticked();
+        self.session.save_expect(expect)
+    }
+}
+
 /// The gallery's controls and what it remembers: selection, mode, speed and
 /// each entry's last result. Ask for things with [`Self::request`].
 #[derive(Resource, Debug, Clone)]
@@ -157,6 +239,9 @@ pub struct GalleryState {
     pub(crate) status: String,
     /// Whether a session is being recorded, as of the last request round.
     pub(crate) recording: Recording,
+    /// The checks the last recording suggested, until something else is
+    /// selected or recorded.
+    pub(crate) suggestions: Option<Suggestions>,
 }
 
 impl GalleryState {
@@ -178,6 +263,7 @@ impl GalleryState {
             export_dir,
             status: String::new(),
             recording: Recording::Off,
+            suggestions: None,
         }
     }
 
@@ -245,6 +331,13 @@ impl GalleryState {
     #[must_use]
     pub const fn is_recording(&self) -> bool {
         matches!(self.recording, Recording::On)
+    }
+
+    /// The checks the last recording suggested, shown as a checklist until
+    /// something else is selected or recorded.
+    #[must_use]
+    pub const fn suggestions(&self) -> Option<&Suggestions> {
+        self.suggestions.as_ref()
     }
 
     /// Whether the script, not the real mouse and keyboard, has the primary

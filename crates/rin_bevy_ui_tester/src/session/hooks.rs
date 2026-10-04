@@ -6,7 +6,11 @@ use std::path::Path;
 
 use bevy::{ecs::world::World, math::Vec2};
 
-use crate::{script::Setup, script::StateProbe, targets::Target};
+use crate::{
+    check::suggest::{NoiseFilter, WorldSnapshot},
+    script::Setup,
+    targets::Target,
+};
 
 /// What the setup hook does: write what is needed to get back to the current
 /// state into the directory (names starting with the stem), and say how the
@@ -28,8 +32,8 @@ pub struct SessionHooks {
     view: Option<Arc<ViewFn>>,
     /// Resolves a position to an app-defined target.
     target: Option<Arc<TargetFn>>,
-    /// Reads the app's state.
-    state: Option<StateProbe>,
+    /// What the snapshots that suggest checks leave out.
+    noise: NoiseFilter,
 }
 
 impl fmt::Debug for SessionHooks {
@@ -38,7 +42,7 @@ impl fmt::Debug for SessionHooks {
             .field("capture_setup", &self.setup.is_some())
             .field("capture_view", &self.view.is_some())
             .field("resolve_target", &self.target.is_some())
-            .field("state", &self.state.is_some())
+            .field("noise_filter", &self.noise)
             .finish()
     }
 }
@@ -92,11 +96,13 @@ impl SessionHooks {
         self
     }
 
-    /// Reads the app's state as `key` and `value` text. What differs between
-    /// start and stop is written into the script as `expect_state`.
+    /// Sets what the world snapshots taken at start and stop leave out, which
+    /// decides the checks a recording suggests (see [`crate::check::suggest`]). The
+    /// default leaves out Bevy's own types; [`NoiseFilter::nothing`] leaves
+    /// out nothing.
     #[must_use]
-    pub fn state(mut self, probe: StateProbe) -> Self {
-        self.state = Some(probe);
+    pub fn noise_filter(mut self, filter: NoiseFilter) -> Self {
+        self.noise = filter;
         self
     }
 
@@ -122,11 +128,8 @@ impl SessionHooks {
         self.target.as_ref().and_then(|hook| hook(world, position))
     }
 
-    /// The app's state, if it has a probe.
-    pub(super) fn snapshot(
-        &self,
-        world: &World,
-    ) -> Option<alloc::collections::BTreeMap<String, String>> {
-        self.state.as_ref().map(|probe| probe.snapshot(world))
+    /// A snapshot of `world`, as the noise filter allows.
+    pub(super) fn snapshot(&self, world: &World) -> WorldSnapshot {
+        WorldSnapshot::take(world, &self.noise)
     }
 }

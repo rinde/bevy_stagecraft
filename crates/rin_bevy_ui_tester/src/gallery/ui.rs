@@ -28,7 +28,9 @@ use bevy::{
 };
 
 use super::{
-    Gallery, GalleryAction, GalleryState, Speed, input::ScenariosScroll, state::GalleryPhase,
+    Gallery, GalleryAction, GalleryState, Speed,
+    input::ScenariosScroll,
+    state::{GalleryPhase, Suggestions},
 };
 use crate::{
     overlay::OverlayTheme,
@@ -95,6 +97,8 @@ pub(super) enum Control {
     Record,
     /// A catalogue entry.
     Entry(usize),
+    /// A check the last recording suggested, in the checklist.
+    Suggestion(usize),
 }
 
 /// Text that shows a control's current wording.
@@ -154,7 +158,7 @@ fn control_text(control: Control, state: &GalleryState) -> String {
             "Record"
         }
         .into(),
-        Control::Entry(_) => String::new(),
+        Control::Entry(_) | Control::Suggestion(_) => String::new(),
     }
 }
 
@@ -183,6 +187,7 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
             }
         }
         Control::Entry(index) => GalleryAction::Select(index),
+        Control::Suggestion(index) => GalleryAction::ToggleSuggestion(index),
     }
 }
 
@@ -440,6 +445,9 @@ pub(super) fn style_controls(
             Control::TakeOver => state.is_taken_over(),
             Control::Record => state.is_recording(),
             Control::Entry(index) => state.selected() == Some(*index),
+            Control::Suggestion(index) => state
+                .suggestions()
+                .is_some_and(|suggestions| suggestions.is_ticked(*index)),
             Control::StepFrame | Control::StepStep | Control::Restart | Control::Export => false,
         };
         let wanted = if on { BUTTON_ON } else { BUTTON };
@@ -539,9 +547,14 @@ pub(super) fn scroll_catalogue(
     scroll.0 = 0.0;
 }
 
+/// What the details panel shows: the selection, its report, and the
+/// checklist of a recording.
+type DetailsKey = (Option<usize>, ScenarioReport, Option<Suggestions>);
+
 /// Rewrites the selected entry's description and its checks, with a mark for
 /// each: the checks the scenario names, in the order they run, with those not
-/// reached yet shown as such.
+/// reached yet shown as such. After a recording it shows the checks the
+/// recording suggests instead, as a checklist.
 pub(super) fn update_details(
     mut commands: Commands,
     state: Res<GalleryState>,
@@ -549,13 +562,26 @@ pub(super) fn update_details(
     gallery: Res<Gallery>,
     theme: Res<OverlayTheme>,
     details: Query<Entity, With<Details>>,
-    mut shown: Local<Option<(Option<usize>, ScenarioReport)>>,
+    mut shown: Local<Option<DetailsKey>>,
 ) {
-    let key = (state.selected(), report.clone());
+    let key = (
+        state.selected(),
+        report.clone(),
+        state.suggestions().cloned(),
+    );
     if shown.as_ref() == Some(&key) {
         return;
     }
     *shown = Some(key);
+    if let Some(suggestions) = state.suggestions() {
+        for entity in &details {
+            commands
+                .entity(entity)
+                .despawn_children()
+                .with_children(|panel| spawn_checklist(panel, suggestions));
+        }
+        return;
+    }
     let Some(entry) = state.selected().and_then(|index| gallery.get(index)) else {
         return;
     };
@@ -610,6 +636,49 @@ pub(super) fn update_details(
                 for (line, tint) in &lines {
                     label(panel, line.clone(), *tint);
                 }
+            });
+    }
+}
+
+/// What a ticked candidate starts with. ASCII, as the bundled font has no
+/// tick.
+const TICKED: &str = "[x]";
+
+/// What an unticked candidate starts with.
+const UNTICKED: &str = "[ ]";
+
+/// The checklist of the checks a recording suggests: one row per candidate,
+/// which a click ticks or unticks.
+fn spawn_checklist(panel: &mut ChildSpawnerCommands<'_>, suggestions: &Suggestions) {
+    if suggestions.is_empty() {
+        label(panel, "Nothing changed that a check could say", DIM);
+        return;
+    }
+    label(panel, "Suggested checks (click to tick or untick)", TEXT);
+    for (index, (check, ticked)) in suggestions.entries().enumerate() {
+        let control = Control::Suggestion(index);
+        panel
+            .spawn((
+                control,
+                NotUnderTest,
+                Node {
+                    padding: UiRect::axes(px(PADDING), px(1)),
+                    border_radius: BorderRadius::all(px(3)),
+                    ..Node::default()
+                },
+                BackgroundColor(if ticked { BUTTON_ON } else { BUTTON }),
+            ))
+            .observe(
+                move |click: On<Pointer<Click>>, mut state: ResMut<GalleryState>| {
+                    if click.button == PointerButton::Primary {
+                        let action = control_action(control, &state);
+                        state.request(action);
+                    }
+                },
+            )
+            .with_children(|row| {
+                let mark = if ticked { TICKED } else { UNTICKED };
+                label(row, format!("{mark} {check}"), TEXT);
             });
     }
 }
