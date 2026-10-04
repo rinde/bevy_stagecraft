@@ -48,7 +48,8 @@ fn clicking_the_button_increments_the_counter() {
             Step::click(),
             Step::wait(1),
             Step::check(Check::shows("1")),
-            Step::check(Check::app(CounterCheck::Is(1))), // the app's own check
+            // `CounterCheck` is the app's own `#[reflect(AppCheck)]` enum (see below)
+            Step::check(Check::app(CounterCheck::Is(1))),
         ])
         .expect_check(!Check::shows("Error"))   // at the end
         .run_headless();

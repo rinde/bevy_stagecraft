@@ -122,6 +122,8 @@ impl fmt::Debug for AppCheckValue {
     }
 }
 
+// The RON text alone decides equality: an app has one app check type, so two
+// values with the same text are the same value of it, typed or not yet typed.
 impl PartialEq for AppCheckValue {
     fn eq(&self, other: &Self) -> bool {
         self.ron == other.ron

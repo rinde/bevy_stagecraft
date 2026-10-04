@@ -28,8 +28,8 @@ whether it needs a rebase. Never merge it yourself.
 
 No dependency on any game crate (`rail_core`, `rail_game`, ...) and no game
 state. The crate takes Bevy types only. Games extend it through its extension
-points: custom targets, probes, named checks and world builders. This is the
-same rule as `rail_ui` and `rin-bevy-ui`.
+points: custom targets, probes, app checks (the app's one `#[reflect(AppCheck)]`
+enum) and world builders. This is the same rule as `rail_ui` and `rin-bevy-ui`.
 
 ## Bevy version policy
 
@@ -52,7 +52,7 @@ lands.
 | ---------- | -------------------------------------------- | ------- |
 | `headless` | `HeadlessPlugins`: a real Bevy app and UI with no GPU or display (virtual primary window, fixed 1/60 s time) | done |
 | `input`    | `SyntheticInput`: queued mouse and keyboard input, drained in `PreUpdate` into Bevy's input messages and `PointerInput` | done |
-| `scenario` | `Scenario` builder (setup, view, steps, named and custom checks, expects, state probe), `Step`, `NamedCheck`, `CustomCheck`, `Modifiers` (serde form is a list, `[Ctrl, Shift]`); `to_script` / `from_script` / `from_ron` / `to_ron` | done |
+| `scenario` | `Scenario` builder (setup, view, steps, closure checks and expects by label (never in a file, so they cannot be exported), state probe), `Step`, `NamedCheck` (a label and its closure), `Modifiers` (serde form is a list, `[Ctrl, Shift]`); `to_script` / `from_script` / `from_ron` / `to_ron` | done |
 | `check`    | `Check`, a check as data: `App` (the app's own check: a value of its one `#[reflect(AppCheck)]` enum, found by Bevy's automatic registration; `AppCheckValue` keeps a file's payload as raw RON until the script loads, reads it with `TypedReflectDeserializer` and writes it with `TypedReflectSerializer`), `Named` (a label for a closure on the scenario, never in a file; exporting one is an error naming it), `Shows`, `Hovered`, `State`, the reflected built-ins `Count`, `Resource`, `Component`, `InState` (types by short type path, fields by reflect path, values as raw RON read with `TypedReflectDeserializer`), the widget states `Disabled`, `Checked`, `Pressed`, `Focused`, `Visible`, `Exists`, `TextOf`, and `Not`, `All`, `Any`, `Within` (polled by the player frame by frame); typed builders `CountOf`, `FieldOf`; `Comparison`, `TextMatch`, `Value`; `AppCheck`, `ReflectAppCheck`, `app_check_type` (the app check type's variants and field types, for #44's forms). A check is read from RON whole (`RawValue`) so values keep their spelling; the serde form goes through a private mirror enum so no derived functions are public; a bare name, `Named(..)` or `Custom(..)` in a file is refused saying to write `App(..)`; a check that cannot run fails even inside `Not`. Submodules: `app`, `value`, `reflect` (type and field lookup, close-name suggestions, load-time validation), `widget` | done |
 | `script`   | `Script` (the serde data model; writes `format_version` 3, reads 1 to 3), `Setup`, `Registry` (named setups and views, target resolvers, state probe, and `types`, the type registry reflected checks are validated against and app checks are typed against when a script loads; the default holds every type that derives `Reflect`), `LoadError` (unknown types and fields name the step and suggest close names; `BadAppCheck` lists the variants, `SeveralAppCheckTypes` names them all), `export_ron` | done |
 | `files`    | `run_ron_tests`: a `harness = false` runner turning every `.ron` file in a directory into one test | done |

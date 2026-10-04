@@ -308,7 +308,8 @@ impl Step {
         Self::Wait(frames)
     }
 
-    /// Run `check`: a [`Check`], or the name of a check defined in Rust.
+    /// Run `check`: a [`Check`], or the label of a closure defined on the
+    /// scenario with [`Scenario::check`] or [`Scenario::expect`].
     #[must_use]
     pub fn check(check: impl Into<Check>) -> Self {
         Self::Check(check.into())
