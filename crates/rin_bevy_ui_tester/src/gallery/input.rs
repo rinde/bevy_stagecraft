@@ -179,6 +179,16 @@ pub(super) fn route_real_input(
             Route::Keep
         }
     };
+    // The Scenarios window's wheel is always the gallery's: Bevy's own pointer
+    // handles its other mouse input while nothing is scripted, but nothing
+    // scrolls the catalogue except this.
+    let route_wheel = |window: Entity| {
+        if Some(window) == scenarios {
+            Route::Take
+        } else {
+            route_mouse(window)
+        }
+    };
     let route_keys = |window: Entity| {
         if Some(window) == scenarios {
             Route::Take
@@ -211,7 +221,7 @@ pub(super) fn route_real_input(
     ));
     let moves = sort_messages(&mut cursor_moved, |message| message.window, route_mouse);
     let presses = sort_messages(&mut buttons, |message| message.window, route_mouse);
-    let turns = sort_messages(&mut wheel, |message| message.window, route_mouse);
+    let turns = sort_messages(&mut wheel, |message| message.window, route_wheel);
     let pointer = scenarios_pointer();
     for moved in moves {
         let Some(at) = location(moved.window, moved.position) else {
