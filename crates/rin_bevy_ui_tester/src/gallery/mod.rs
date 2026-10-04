@@ -252,7 +252,7 @@ impl Plugin for GalleryPlugin {
         .add_systems(
             Update,
             (
-                input::exit_with_primary,
+                input::exit_with_either_window,
                 ui::place_scenarios_window,
                 ui::scroll_catalogue,
                 ui::style_controls,
