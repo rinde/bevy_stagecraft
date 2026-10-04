@@ -12,7 +12,8 @@ mod common;
 use bevy::{input::keyboard::KeyCode, math::Vec2};
 use common::{Activations, registry, spawn_ui};
 use rin_bevy_ui_tester::{
-    LoadError, Modifiers, Scenario, Script, Setup, Step, Target, files::run_ron_files,
+    FORMAT_VERSION, LoadError, Modifiers, Scenario, Script, Setup, Step, Target,
+    files::run_ron_files,
 };
 
 /// A scenario written in Rust, with names where RON needs them.
@@ -155,14 +156,15 @@ fn unknown_names_are_load_errors() {
 
 #[test]
 fn a_newer_format_is_refused_even_if_the_rest_is_unreadable() {
-    let error = Scenario::from_ron("(format_version: 2, name: \"x\", brand_new: 7)").unwrap_err();
+    let error = Scenario::from_ron("(format_version: 3, name: \"x\", brand_new: 7)").unwrap_err();
     assert_eq!(
         error,
         LoadError::UnsupportedVersion {
-            found: 2,
-            supported: 1
+            found: 3,
+            supported: 2
         }
     );
+    assert!(error.to_string().contains("versions 1 to 2"), "{error}");
 }
 
 #[test]
@@ -178,7 +180,7 @@ fn typos_are_syntax_errors_and_setup_files_pass_through() {
         Some(&Setup::File("a.ron".into()))
     );
     let script: Script = scenario.to_script();
-    assert_eq!(script.format_version, 1);
+    assert_eq!(script.format_version, FORMAT_VERSION);
 }
 
 #[test]
@@ -192,7 +194,7 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
     })
     .unwrap();
     let names: Vec<_> = results.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(names, ["click_pause", "custom_target"]);
+    assert_eq!(names, ["click_pause", "custom_target", "typed_checks"]);
     assert!(
         results.iter().all(rin_bevy_ui_tester::FileResult::passed),
         "{results:?}"

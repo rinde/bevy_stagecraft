@@ -2,10 +2,10 @@
 //! its names meaning, and reading and writing RON.
 //!
 //! A scenario written in Rust and a `.ron` file are two spellings of the same
-//! [`Script`]. Closures cannot be serialised, so a script refers to checks,
-//! setups, views and app-defined targets by name, and a [`Registry`] maps
-//! those names to code. Loading a script that names something the registry
-//! lacks is an error, never a silent skip.
+//! [`Script`]. Closures cannot be serialised, so a script refers to checks
+//! defined in Rust, setups, views and app-defined targets by name, and a
+//! [`Registry`] maps those names to code. Loading a script that names
+//! something the registry lacks is an error, never a silent skip.
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;
@@ -15,14 +15,37 @@ use ron::{Options, extensions::Extensions, ser::PrettyConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    check::Check,
     probe::Probe,
-    scenario::{CheckResult, HookFn, IntoCheckResult, NamedCheck, Scenario, Step, named},
+    scenario::{
+        CheckResult, CustomCheck, HookFn, IntoCheckResult, NamedCheck, Scenario, Step, custom,
+        named,
+    },
     targets::{Target, TargetResolvers},
 };
 
-/// The script format this crate reads and writes. A file with another
-/// version is refused rather than guessed at.
-pub const FORMAT_VERSION: u32 = 1;
+/// The script format this crate writes. A file of a version older than
+/// [`OLDEST_FORMAT_VERSION`] or newer than this is refused rather than
+/// guessed at.
+///
+/// Version 2 added checks spelled out as data ([`Check`]); every version 1
+/// file is also a version 2 file.
+pub const FORMAT_VERSION: u32 = 2;
+
+/// The oldest script format this crate still reads.
+pub const OLDEST_FORMAT_VERSION: u32 = 1;
+
+/// Refuses a format version this crate does not read.
+const fn check_version(found: u32) -> Result<(), LoadError> {
+    if found >= OLDEST_FORMAT_VERSION && found <= FORMAT_VERSION {
+        Ok(())
+    } else {
+        Err(LoadError::UnsupportedVersion {
+            found,
+            supported: FORMAT_VERSION,
+        })
+    }
+}
 
 /// Where a scenario's starting state comes from. The crate stores and passes
 /// this along and never interprets it.
@@ -43,15 +66,16 @@ pub enum Setup {
 /// use rin_bevy_ui_tester::script::Script;
 ///
 /// let script = Script::from_ron(
-///     "(format_version: 1, name: \"demo\", steps: [Click(Left), Wait(2)])",
+///     "(format_version: 2, name: \"demo\", steps: [Click(Left), Wait(2), Check(Shows(\"1\"))])",
 /// )
 /// .unwrap();
-/// assert_eq!(script.steps.len(), 2);
+/// assert_eq!(script.steps.len(), 3);
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Script {
-    /// Must equal [`FORMAT_VERSION`].
+    /// The format the script is written in, from [`OLDEST_FORMAT_VERSION`]
+    /// to [`FORMAT_VERSION`].
     pub format_version: u32,
     /// What the scenario is called.
     pub name: String,
@@ -67,9 +91,9 @@ pub struct Script {
     pub view: Option<String>,
     /// What the scenario does.
     pub steps: Vec<Step>,
-    /// Names of checks that run once the steps have finished.
+    /// Checks that run once the steps have finished.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub expect: Vec<String>,
+    pub expect: Vec<Check>,
     /// What the app's state must say once the steps have finished, as the
     /// app's own state probe (see [`StateProbe`]) names it: each key must
     /// have exactly this value. A recorded session writes what changed here,
@@ -98,12 +122,7 @@ impl Script {
         let version: Version = options
             .from_str(text)
             .map_err(|error| LoadError::Syntax(error.to_string()))?;
-        if version.format_version != FORMAT_VERSION {
-            return Err(LoadError::UnsupportedVersion {
-                found: version.format_version,
-                supported: FORMAT_VERSION,
-            });
-        }
+        check_version(version.format_version)?;
         options
             .from_str(text)
             .map_err(|error| LoadError::Syntax(error.to_string()))
@@ -160,7 +179,7 @@ pub enum LoadError {
     UnsupportedVersion {
         /// The version in the file.
         found: u32,
-        /// The version this crate reads.
+        /// The newest version this crate reads, [`FORMAT_VERSION`].
         supported: u32,
     },
     /// A check is named that nobody registered.
@@ -181,8 +200,8 @@ pub enum LoadError {
         /// Where it was named, for example `step 3`.
         used_by: String,
     },
-    /// The script has `expect_state` entries but no state probe is registered
-    /// to read them with.
+    /// The script checks the app's state ([`Check::State`] or
+    /// `expect_state`) but no state probe is registered to read it with.
     NoStateProbe,
     /// A file could not be read.
     Io {
@@ -199,7 +218,7 @@ impl fmt::Display for LoadError {
             Self::Syntax(message) => write!(f, "invalid script: {message}"),
             Self::UnsupportedVersion { found, supported } => write!(
                 f,
-                "script format version {found} is not supported; this crate reads version {supported}"
+                "script format version {found} is not supported; this crate reads versions {OLDEST_FORMAT_VERSION} to {supported}"
             ),
             Self::UnknownCheck { name, used_by } => {
                 write!(f, "{used_by} names check `{name}`, which is not registered")
@@ -219,7 +238,7 @@ impl fmt::Display for LoadError {
             ),
             Self::NoStateProbe => write!(
                 f,
-                "the script has `expect_state` entries, but no state probe is registered"
+                "the script checks the app's state, but no state probe is registered"
             ),
             Self::Io { path, message } => write!(f, "cannot read {path}: {message}"),
         }
@@ -228,16 +247,22 @@ impl fmt::Display for LoadError {
 
 impl core::error::Error for LoadError {}
 
-/// Named checks over a [`Probe`]. Scripts refer to checks by these names.
+/// Checks over a [`Probe`] defined in Rust, by name: what [`Check::Named`]
+/// and [`Check::Custom`] in a script refer to.
 #[derive(Clone, Default)]
 pub struct CheckRegistry {
     /// Checks by name, ordered so nothing depends on hash order.
     checks: BTreeMap<String, NamedCheck>,
+    /// Checks that take an argument, by name.
+    custom: BTreeMap<String, CustomCheck>,
 }
 
 impl fmt::Debug for CheckRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.checks.keys()).finish()
+        f.debug_struct("CheckRegistry")
+            .field("checks", &self.checks.keys().collect::<Vec<_>>())
+            .field("custom", &self.custom.keys().collect::<Vec<_>>())
+            .finish()
     }
 }
 
@@ -252,10 +277,28 @@ impl CheckRegistry {
         self.checks.insert(check.name.clone(), check);
     }
 
+    /// Registers `check`, which takes an argument, under `name`, replacing
+    /// any earlier one. A script runs it as
+    /// `Custom(check: "name", argument: "...")`.
+    pub fn register_custom<R: IntoCheckResult>(
+        &mut self,
+        name: impl Into<String>,
+        check: impl Fn(&Probe<'_>, &str) -> R + Send + Sync + 'static,
+    ) {
+        let check = custom(name, check);
+        self.custom.insert(check.name.clone(), check);
+    }
+
     /// The check called `name`.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&NamedCheck> {
         self.checks.get(name)
+    }
+
+    /// The check that takes an argument called `name`.
+    #[must_use]
+    pub fn get_custom(&self, name: &str) -> Option<&CustomCheck> {
+        self.custom.get(name)
     }
 
     /// Whether a check is registered under `name`.
@@ -332,27 +375,6 @@ impl StateProbe {
     }
 }
 
-/// The name of the check made from one `expect_state` entry.
-pub(crate) fn state_check_name(key: &str, value: &str) -> String {
-    format!("state `{key}` is \"{value}\"")
-}
-
-/// The end-of-script check for one `expect_state` entry.
-fn state_check(probe: &StateProbe, key: &str, value: &str) -> NamedCheck {
-    let probe = probe.clone();
-    let (key, value) = (key.to_owned(), value.to_owned());
-    named(
-        state_check_name(&key, &value),
-        move |checked: &Probe<'_>| -> CheckResult {
-            match probe.snapshot(checked.world()).get(&key) {
-                Some(actual) if *actual == value => Ok(()),
-                Some(actual) => Err(format!("state `{key}` is \"{actual}\", not \"{value}\"")),
-                None => Err(format!("the app's state has no `{key}`")),
-            }
-        },
-    )
-}
-
 /// Hooks over the world, by name: what [`Setup::Named`] and a script's view
 /// refer to.
 #[derive(Clone, Default)]
@@ -405,7 +427,8 @@ pub struct Registry {
     pub views: HookRegistry,
     /// Resolvers for [`Target::Custom`].
     pub targets: TargetResolvers,
-    /// Reads the app's state, for [`Script::expect_state`].
+    /// Reads the app's state, for [`Check::State`] and
+    /// [`Script::expect_state`].
     pub state: Option<StateProbe>,
 }
 
@@ -422,7 +445,7 @@ impl Default for Registry {
 }
 
 impl Registry {
-    /// Sets the probe that reads the app's state, for
+    /// Sets the probe that reads the app's state, for [`Check::State`] and
     /// [`Script::expect_state`].
     #[must_use]
     pub fn with_state(mut self, probe: StateProbe) -> Self {
@@ -441,12 +464,7 @@ impl Registry {
 
 /// Resolves every name in `script` against `registry`.
 pub(crate) fn build_scenario(script: Script, registry: &Registry) -> Result<Scenario, LoadError> {
-    if script.format_version != FORMAT_VERSION {
-        return Err(LoadError::UnsupportedVersion {
-            found: script.format_version,
-            supported: FORMAT_VERSION,
-        });
-    }
+    check_version(script.format_version)?;
     let setup = match &script.setup {
         Some(Setup::Named(name)) => Some(
             registry
@@ -465,57 +483,91 @@ pub(crate) fn build_scenario(script: Script, registry: &Registry) -> Result<Scen
         ),
         None => None,
     };
-    let mut checks: Vec<NamedCheck> = Vec::new();
+    let mut resolved = Resolved::default();
     for (index, step) in script.steps.iter().enumerate() {
-        let used_by = || format!("step {index}");
+        let used_by = format!("step {index}");
         for target in step_targets(step) {
-            if let Target::Custom { resolver, .. } = target
-                && !registry.targets.contains(resolver)
-            {
-                return Err(LoadError::UnknownTarget {
-                    resolver: resolver.clone(),
-                    used_by: used_by(),
-                });
+            require_resolver(registry, target, &used_by)?;
+        }
+        if let Step::Check(check) = step {
+            resolved.add(registry, check, &used_by)?;
+        }
+    }
+    for check in &script.expect {
+        resolved.add(registry, check, "the expect list")?;
+    }
+    if !script.expect_state.is_empty() {
+        resolved.reads_state = true;
+    }
+    let state = match (&registry.state, resolved.reads_state) {
+        (None, true) => return Err(LoadError::NoStateProbe),
+        (state, _) => state.clone(),
+    };
+    Ok(Scenario::assemble(
+        script,
+        setup,
+        view,
+        resolved.checks,
+        resolved.custom,
+        state,
+    ))
+}
+
+/// What a script's checks refer to, found in the registry.
+#[derive(Debug, Default)]
+struct Resolved {
+    /// The named checks, one per name.
+    checks: Vec<NamedCheck>,
+    /// The checks that take an argument, one per name.
+    custom: Vec<CustomCheck>,
+    /// Whether some check reads the app's state.
+    reads_state: bool,
+}
+
+impl Resolved {
+    /// Finds what `check`, and every check inside it, refers to.
+    fn add(&mut self, registry: &Registry, check: &Check, used_by: &str) -> Result<(), LoadError> {
+        let unknown = |name: &str| LoadError::UnknownCheck {
+            name: name.to_owned(),
+            used_by: used_by.to_owned(),
+        };
+        for part in check.parts() {
+            match part {
+                Check::Named(name) => {
+                    if !self.checks.iter().any(|known| known.name == *name) {
+                        let found = registry.checks.get(name).ok_or_else(|| unknown(name))?;
+                        self.checks.push(found.clone());
+                    }
+                }
+                Check::Custom { check: name, .. } => {
+                    if !self.custom.iter().any(|known| known.name == *name) {
+                        let found = registry
+                            .checks
+                            .get_custom(name)
+                            .ok_or_else(|| unknown(name))?;
+                        self.custom.push(found.clone());
+                    }
+                }
+                Check::Hovered(target) => require_resolver(registry, target, used_by)?,
+                Check::State { .. } => self.reads_state = true,
+                Check::Shows(_) | Check::Not(_) => {}
             }
         }
-        if let Step::Check(name) = step
-            && !checks.iter().any(|check| &check.name == name)
-        {
-            let check = registry
-                .checks
-                .get(name)
-                .ok_or_else(|| LoadError::UnknownCheck {
-                    name: name.clone(),
-                    used_by: used_by(),
-                })?;
-            checks.push(check.clone());
+        Ok(())
+    }
+}
+
+/// Refuses a custom target whose resolver nobody registered.
+fn require_resolver(registry: &Registry, target: &Target, used_by: &str) -> Result<(), LoadError> {
+    match target {
+        Target::Custom { resolver, .. } if !registry.targets.contains(resolver) => {
+            Err(LoadError::UnknownTarget {
+                resolver: resolver.clone(),
+                used_by: used_by.to_owned(),
+            })
         }
+        _ => Ok(()),
     }
-    let expects = script
-        .expect
-        .iter()
-        .map(|name| {
-            registry
-                .checks
-                .get(name)
-                .cloned()
-                .ok_or_else(|| LoadError::UnknownCheck {
-                    name: name.clone(),
-                    used_by: "the expect list".into(),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut expects = expects;
-    if !script.expect_state.is_empty() {
-        let probe = registry.state.as_ref().ok_or(LoadError::NoStateProbe)?;
-        expects.extend(
-            script
-                .expect_state
-                .iter()
-                .map(|(key, value)| state_check(probe, key, value)),
-        );
-    }
-    Ok(Scenario::assemble(script, setup, view, checks, expects))
 }
 
 /// The targets a step acts on.

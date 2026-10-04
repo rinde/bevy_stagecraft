@@ -88,6 +88,28 @@ pub(crate) fn hovered_entities(world: &World) -> Vec<Entity> {
     hits.into_iter().map(|(entity, _)| entity).collect()
 }
 
+/// Fails unless `widget`, or something below it, is under the pointer.
+/// `label` is how the script named the widget, for the message.
+pub(crate) fn check_hover(world: &World, widget: Entity, label: &str) -> Result<(), String> {
+    let hovered = hovered_entities(world);
+    if hovered
+        .iter()
+        .any(|entity| is_within(world, *entity, widget))
+    {
+        return Ok(());
+    }
+    let wanted = describe_entity(world, widget);
+    Err(hovered.first().map_or_else(
+        || format!("{label} ({wanted}) is not under the pointer: nothing is"),
+        |covering| {
+            format!(
+                "{label} ({wanted}) is not under the pointer: it is covered by {}",
+                describe_entity(world, *covering)
+            )
+        },
+    ))
+}
+
 /// A short human description of `entity`, for failure messages.
 pub(crate) fn describe_entity(world: &World, entity: Entity) -> String {
     if let Some(name) = world.get::<Name>(entity) {

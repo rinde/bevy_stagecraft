@@ -10,6 +10,7 @@ extern crate alloc;
 
 #[cfg(feature = "record")]
 pub mod capture;
+pub mod check;
 pub mod files;
 #[cfg(feature = "gallery")]
 pub mod gallery;
@@ -29,6 +30,7 @@ pub mod targets;
 
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
+pub use check::Check;
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
 #[cfg(feature = "gallery")]
 pub use gallery::{
@@ -51,10 +53,12 @@ pub use recorder::{
     Capture, CaptureMeta, Captures, RecordError, Recorder, RecorderPlugins, RecorderSystems,
     RecorderTarget, Recording, ScenarioRecording,
 };
-pub use scenario::{CheckResult, IntoCheckResult, Modifiers, NamedCheck, Scenario, Step};
+pub use scenario::{
+    CheckResult, CustomCheck, IntoCheckResult, Modifiers, NamedCheck, Scenario, Step,
+};
 pub use script::{
-    CheckRegistry, ExportError, FORMAT_VERSION, HookRegistry, LoadError, Registry, Script, Setup,
-    StateProbe, export_ron,
+    CheckRegistry, ExportError, FORMAT_VERSION, HookRegistry, LoadError, OLDEST_FORMAT_VERSION,
+    Registry, Script, Setup, StateProbe, export_ron,
 };
 pub use session::{
     RecordedEvent, RecordedKind, SavedSession, SessionConfig, SessionError, SessionHooks,

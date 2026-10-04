@@ -268,7 +268,7 @@ pub fn describe_step(step: &Step, before: &[Step], descriptions: &TargetDescript
         Step::KeyUp { key, modifiers } => format!("Release {}", chord(*key, *modifiers)),
         Step::Tap { key, modifiers } => format!("Tap {}", chord(*key, *modifiers)),
         Step::Wait(frames) => format!("Wait {frames} frames"),
-        Step::Check(name) => format!("Check: {name}"),
+        Step::Check(check) => format!("Check: {check}"),
         Step::Caption(text) => text.clone(),
     }
 }

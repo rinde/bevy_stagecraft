@@ -1,8 +1,8 @@
 //! Scenario definition: setup, view, steps and checks.
 //!
-//! Steps and targets are plain data and checks are referenced by name, so a
-//! scenario converts to a serialisable [`Script`] and back (see
-//! [`crate::script`]).
+//! Steps, targets and checks are plain data, and checks defined in Rust are
+//! referred to by name, so a scenario converts to a serialisable [`Script`]
+//! and back (see [`crate::script`]).
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::{fmt, ops::BitOr};
@@ -15,8 +15,9 @@ use bevy::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    check::Check,
     probe::Probe,
-    script::{FORMAT_VERSION, LoadError, Registry, Script, Setup, state_check_name},
+    script::{FORMAT_VERSION, LoadError, Registry, Script, Setup, StateProbe},
     targets::Target,
 };
 
@@ -235,9 +236,9 @@ pub enum Step {
     },
     /// Do nothing for this many frames.
     Wait(u16),
-    /// Run the check of this name, which the scenario defines. Takes no
-    /// frames: it sees the world as the previous step left it.
-    Check(String),
+    /// Run the check. Takes no frames: it sees the world as the previous step
+    /// left it. A failed check fails the step but does not stop the script.
+    Check(Check),
     /// Show this caption from here on, for the recorder and the gallery.
     Caption(String),
 }
@@ -306,10 +307,10 @@ impl Step {
         Self::Wait(frames)
     }
 
-    /// Run the check called `name`.
+    /// Run `check`: a [`Check`], or the name of a check defined in Rust.
     #[must_use]
-    pub fn check(name: impl Into<String>) -> Self {
-        Self::Check(name.into())
+    pub fn check(check: impl Into<Check>) -> Self {
+        Self::Check(check.into())
     }
 
     /// Show `text` as the caption.
@@ -353,6 +354,38 @@ impl NamedCheck {
     }
 }
 
+/// What a check that takes an argument does with a probe.
+type CustomCheckFn = dyn Fn(&Probe<'_>, &str) -> CheckResult + Send + Sync;
+
+/// A check that takes an argument, with its name: what [`Check::Custom`]
+/// refers to.
+#[derive(Clone)]
+pub struct CustomCheck {
+    /// The name checks refer to it by.
+    pub name: String,
+    /// The check itself.
+    pub(crate) run: Arc<CustomCheckFn>,
+}
+
+impl fmt::Debug for CustomCheck {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CustomCheck")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CustomCheck {
+    /// Runs the check against `probe`, asking it about `argument`.
+    ///
+    /// # Errors
+    ///
+    /// The check's own explanation when it fails.
+    pub fn run(&self, probe: &Probe<'_>, argument: &str) -> CheckResult {
+        (self.run)(probe, argument)
+    }
+}
+
 /// A scenario: a name, hooks the app gives meaning to, a script and checks.
 ///
 /// ```
@@ -381,13 +414,18 @@ pub struct Scenario {
     view_ref: Option<String>,
     /// The script.
     steps: Vec<Step>,
-    /// Checks that [`Step::Check`] refers to.
+    /// What [`Check::Named`] refers to, one per name.
     checks: Vec<NamedCheck>,
-    /// Checks run once the script has finished. Those made from
-    /// `state_expects` are among them.
-    expects: Vec<NamedCheck>,
-    /// The script's `expect_state` entries, kept so the script converts back.
+    /// What [`Check::Custom`] refers to, one per name.
+    custom_checks: Vec<CustomCheck>,
+    /// Checks run once the script has finished, before those of
+    /// `state_expects`.
+    expects: Vec<Check>,
+    /// The script's `expect_state` entries, run as [`Check::State`] at the
+    /// end and kept apart so the script converts back.
     state_expects: BTreeMap<String, String>,
+    /// Reads the app's state for [`Check::State`].
+    state: Option<StateProbe>,
 }
 
 impl fmt::Debug for Scenario {
@@ -401,8 +439,10 @@ impl fmt::Debug for Scenario {
             .field("view_ref", &self.view_ref)
             .field("steps", &self.steps)
             .field("checks", &self.checks)
+            .field("custom_checks", &self.custom_checks)
             .field("expects", &self.expects)
             .field("state_expects", &self.state_expects)
+            .field("state", &self.state)
             .finish()
     }
 }
@@ -420,8 +460,10 @@ impl Scenario {
             view_ref: None,
             steps: Vec::new(),
             checks: Vec::new(),
+            custom_checks: Vec::new(),
             expects: Vec::new(),
             state_expects: BTreeMap::new(),
+            state: None,
         }
     }
 
@@ -496,26 +538,69 @@ impl Scenario {
         self
     }
 
-    /// Defines a check that a [`Step::Check`] of the same name runs.
+    /// Defines the check that [`Check::Named`] of the same name runs, for
+    /// example from `Step::check(name)`. Defining a name again replaces the
+    /// check.
     #[must_use]
     pub fn check<R: IntoCheckResult>(
         mut self,
         name: impl Into<String>,
         check: impl Fn(&Probe<'_>) -> R + Send + Sync + 'static,
     ) -> Self {
-        self.checks.push(named(name, check));
+        self.define(named(name, check));
         self
     }
 
-    /// Defines a check that runs once the script has finished.
+    /// Defines a check under `name` and runs it once the script has finished.
+    /// The name is shared with [`Scenario::check`], so a step can run the
+    /// same check part-way through.
     #[must_use]
     pub fn expect<R: IntoCheckResult>(
         mut self,
         name: impl Into<String>,
         check: impl Fn(&Probe<'_>) -> R + Send + Sync + 'static,
     ) -> Self {
-        self.expects.push(named(name, check));
+        let check = named(name, check);
+        self.expects.push(Check::Named(check.name.clone()));
+        self.define(check);
         self
+    }
+
+    /// Runs `check` once the script has finished, for example
+    /// `Check::shows("Saved")`.
+    #[must_use]
+    pub fn expect_check(mut self, check: impl Into<Check>) -> Self {
+        self.expects.push(check.into());
+        self
+    }
+
+    /// Defines the check that [`Check::Custom`] of the same name runs: the
+    /// closure gets the check's argument. Defining a name again replaces the
+    /// check.
+    #[must_use]
+    pub fn custom_check<R: IntoCheckResult>(
+        mut self,
+        name: impl Into<String>,
+        check: impl Fn(&Probe<'_>, &str) -> R + Send + Sync + 'static,
+    ) -> Self {
+        let check = custom(name, check);
+        self.custom_checks
+            .retain(|defined| defined.name != check.name);
+        self.custom_checks.push(check);
+        self
+    }
+
+    /// Sets the probe that [`Check::State`] reads the app's state with.
+    #[must_use]
+    pub fn with_state(mut self, probe: StateProbe) -> Self {
+        self.state = Some(probe);
+        self
+    }
+
+    /// Adds `check` to the named checks, replacing one of the same name.
+    fn define(&mut self, check: NamedCheck) {
+        self.checks.retain(|defined| defined.name != check.name);
+        self.checks.push(check);
     }
 
     /// The scenario's name.
@@ -548,16 +633,37 @@ impl Scenario {
         &self.steps
     }
 
-    /// The checks [`Step::Check`] can refer to.
+    /// The checks [`Check::Named`] can refer to.
     #[must_use]
     pub fn checks(&self) -> &[NamedCheck] {
         &self.checks
     }
 
-    /// The checks that run at the end.
+    /// The checks [`Check::Custom`] can refer to.
     #[must_use]
-    pub fn expects(&self) -> &[NamedCheck] {
-        &self.expects
+    pub fn custom_checks(&self) -> &[CustomCheck] {
+        &self.custom_checks
+    }
+
+    /// The checks that run at the end, in order: the expect list, then one
+    /// [`Check::State`] per `expect_state` entry.
+    #[must_use]
+    pub fn expects(&self) -> Vec<Check> {
+        self.expects
+            .iter()
+            .cloned()
+            .chain(
+                self.state_expects
+                    .iter()
+                    .map(|(key, value)| Check::state(key, value)),
+            )
+            .collect()
+    }
+
+    /// The probe [`Check::State`] reads the app's state with, if any.
+    #[must_use]
+    pub const fn state_probe(&self) -> Option<&StateProbe> {
+        self.state.as_ref()
     }
 
     /// Runs the setup hook, if there is one. Returns whether there was.
@@ -579,11 +685,11 @@ impl Scenario {
 
 impl Scenario {
     /// The serialisable form of this scenario. Closures cannot be written
-    /// out, so only names survive: the hooks set with
-    /// [`Scenario::setup_named`] and [`Scenario::view_named`], the checks
-    /// that [`Step::Check`] steps name, and the names of the `expect` checks.
-    /// Anything set with the plain [`Scenario::setup`] or [`Scenario::view`]
-    /// is not part of the script.
+    /// out, so of the code only names survive: the hooks set with
+    /// [`Scenario::setup_named`] and [`Scenario::view_named`], and the names
+    /// that [`Check::Named`] and [`Check::Custom`] refer to. Anything set
+    /// with the plain [`Scenario::setup`] or [`Scenario::view`] is not part
+    /// of the script.
     #[must_use]
     pub fn to_script(&self) -> Script {
         Script {
@@ -593,17 +699,7 @@ impl Scenario {
             setup: self.setup_ref.clone(),
             view: self.view_ref.clone(),
             steps: self.steps.clone(),
-            expect: self
-                .expects
-                .iter()
-                .filter(|check| {
-                    !self
-                        .state_expects
-                        .iter()
-                        .any(|(key, value)| state_check_name(key, value) == check.name)
-                })
-                .map(|check| check.name.clone())
-                .collect(),
+            expect: self.expects.clone(),
             expect_state: self.state_expects.clone(),
         }
     }
@@ -613,9 +709,10 @@ impl Scenario {
     ///
     /// # Errors
     ///
-    /// [`LoadError`] when the format version is not the one this crate reads,
-    /// or when the script names a check, setup, view or target that
-    /// `registry` does not have. Nothing is ever skipped.
+    /// [`LoadError`] when the format version is not one this crate reads,
+    /// when the script names a check, setup, view or target that `registry`
+    /// does not have, or when it checks the app's state and `registry` has no
+    /// state probe. Nothing is ever skipped.
     pub fn from_script(script: Script, registry: &Registry) -> Result<Self, LoadError> {
         crate::script::build_scenario(script, registry)
     }
@@ -654,7 +751,8 @@ impl Scenario {
         setup: Option<Arc<HookFn>>,
         view: Option<Arc<HookFn>>,
         checks: Vec<NamedCheck>,
-        expects: Vec<NamedCheck>,
+        custom_checks: Vec<CustomCheck>,
+        state: Option<StateProbe>,
     ) -> Self {
         Self {
             name: script.name,
@@ -665,8 +763,10 @@ impl Scenario {
             view_ref: script.view,
             steps: script.steps,
             checks,
-            expects,
+            custom_checks,
+            expects: script.expect,
             state_expects: script.expect_state,
+            state,
         }
     }
 }
@@ -679,6 +779,17 @@ pub(crate) fn named<R: IntoCheckResult>(
     NamedCheck {
         name: name.into(),
         run: Arc::new(move |probe| check(probe).into_check_result()),
+    }
+}
+
+/// Wraps a check closure that takes an argument with its name.
+pub(crate) fn custom<R: IntoCheckResult>(
+    name: impl Into<String>,
+    check: impl Fn(&Probe<'_>, &str) -> R + Send + Sync + 'static,
+) -> CustomCheck {
+    CustomCheck {
+        name: name.into(),
+        run: Arc::new(move |probe, argument| check(probe, argument).into_check_result()),
     }
 }
 
