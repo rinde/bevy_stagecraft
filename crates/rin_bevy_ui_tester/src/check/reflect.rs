@@ -5,7 +5,7 @@
 //! serve two moments: loading, where only type information is at hand and a
 //! mistake is a load error, and running, where the world supplies the values.
 
-use core::{any::TypeId, cmp::Ordering};
+use core::{any::TypeId, cmp::Ordering, fmt};
 
 use bevy::{
     ecs::{
@@ -344,6 +344,17 @@ pub(super) struct Reflected<'a> {
     pub(super) registration: &'a TypeRegistration,
     /// Where the field's type and its parts are registered.
     pub(super) types: &'a TypeRegistry,
+}
+
+// By hand: `TypeRegistry` is not `Debug`, and listing every type in it would
+// say nothing about the field.
+impl fmt::Debug for Reflected<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Reflected")
+            .field("value", &self.value)
+            .field("registration", &self.registration)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Reflected<'_> {

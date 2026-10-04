@@ -284,3 +284,16 @@ fn a_misspelt_check_inside_another_is_reported_on_its_line() {
     assert!(message.contains("Showz"), "{message}");
     assert_eq!(message.matches("a check:").count(), 1, "{message}");
 }
+
+#[test]
+fn a_mistake_inside_a_check_over_several_lines_is_reported_where_the_check_ends() {
+    // The check is read whole and then parsed on its own, so the position
+    // is that of the end of the check, not of the misspelt `Showz` (line 5).
+    let error = Scenario::from_ron(
+        "(format_version: 3, name: \"x\", steps: [\n    Wait(1),\n    Check(All([\n        Shows(\"a\"),\n        Not(Showz(\"b\")),\n    ])),\n])",
+    )
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(message.starts_with("invalid script: 6:7"), "{message}");
+    assert!(message.contains("Showz"), "{message}");
+}

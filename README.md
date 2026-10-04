@@ -178,8 +178,10 @@ field's type, so `Eq(Lay)` is the variant `Lay` of whatever enum the field
 holds.
 
 A check defined in Rust is written as just its name. A mistake in a spelled
-out check is reported as a syntax error at its position, listing the forms a
-check can take.
+out check is reported as a syntax error, listing the forms a check can take.
+The check is read whole before it is parsed, so the position given is where
+the whole check ends, not where the mistake is: in a check spread over several
+lines, look at the lines before the one reported.
 
 ```rust,ignore
 let scenario = Scenario::from_ron_with(include_str!("x.ron"), &registry)?

@@ -173,7 +173,7 @@ pub enum Check {
 /// [`Check`] with every variant written out by name: serde's derived form,
 /// which [`Check`]'s own impls add the bare name to. A mirror rather than a
 /// derive on [`Check`] itself, so the derived functions stay private.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(remote = "Check", rename = "Check")]
 enum Spelled {
     /// See [`Check::Named`].
@@ -280,6 +280,7 @@ impl<'de> Deserialize<'de> for Check {
 /// Reads one check from its RON text.
 fn parse(text: &str) -> Result<Check, String> {
     /// Reads a check spelled out, through the mirror.
+    #[derive(Debug)]
     struct SpelledSeed;
 
     impl<'de> DeserializeSeed<'de> for SpelledSeed {

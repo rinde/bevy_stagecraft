@@ -11,8 +11,15 @@ use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;
 
 use bevy::{
-    ecs::{reflect::AppTypeRegistry, world::World},
-    reflect::{FromReflect, GetTypeRegistration, TypeRegistry, TypeRegistryArc, Typed},
+    ecs::{
+        reflect::{AppTypeRegistry, ReflectComponent, ReflectResource},
+        world::World,
+    },
+    reflect::{
+        FromReflect, GetTypeRegistration, ReflectDeserialize, ReflectFromReflect, ReflectSerialize,
+        TypeData, TypeRegistration, TypeRegistry, TypeRegistryArc, Typed,
+        std_traits::ReflectDefault,
+    },
     state::{
         reflect::ReflectState,
         state::{State, States},
@@ -122,7 +129,7 @@ impl Script {
     pub fn from_ron(text: &str) -> Result<Self, LoadError> {
         /// Just the version, so a file from a newer format is refused as such
         /// even when the rest of it would not parse.
-        #[derive(Deserialize)]
+        #[derive(Debug, Deserialize)]
         struct Version {
             /// The file's format version.
             format_version: u32,
@@ -182,7 +189,9 @@ impl core::error::Error for ExportError {}
 #[non_exhaustive]
 pub enum LoadError {
     /// The text is not valid RON for a [`Script`]; the message has the
-    /// position.
+    /// position. For a mistake inside a spelled out [`Check`] that is the
+    /// position where the whole check ends, as a check is read whole before
+    /// it is parsed.
     Syntax(String),
     /// The file is of a format version this crate does not read.
     UnsupportedVersion {
@@ -554,7 +563,9 @@ impl Registry {
 
     /// Makes the registered target resolvers available in `world`, where the
     /// player looks for them, and adds the registered types the app's type
-    /// registry lacks, where the checks look for them.
+    /// registry lacks, where the checks look for them. A type the app has
+    /// already registered keeps its registration and gains the type data the
+    /// checks need (such as [`ReflectState`]) that it lacks.
     pub fn install(&self, world: &mut World) {
         world
             .get_resource_or_insert_with(TargetResolvers::default)
@@ -566,10 +577,39 @@ impl Registry {
             let ours = self.types.read();
             let mut theirs = app.write();
             for registration in ours.iter() {
-                theirs.add_registration(registration.clone());
+                if let Some(existing) = theirs.get_mut(registration.type_id()) {
+                    fill_type_data(existing, registration);
+                } else {
+                    theirs.add_registration(registration.clone());
+                }
             }
         }
     }
+}
+
+/// Copies into `theirs` the type data the checks read that `ours` has and
+/// `theirs` lacks, keeping whatever `theirs` already holds.
+///
+/// The app may have registered a type itself (Bevy registers many on its
+/// own) without, say, [`ReflectState`]; a check on it would then load and
+/// still fail when it runs. Type data can only be copied by its concrete
+/// type, so this names the kinds the checks look up.
+fn fill_type_data(theirs: &mut TypeRegistration, ours: &TypeRegistration) {
+    /// Copies one kind of type data, if `theirs` lacks it.
+    fn fill<T: TypeData + Clone>(theirs: &mut TypeRegistration, ours: &TypeRegistration) {
+        if !theirs.contains::<T>()
+            && let Some(data) = ours.data::<T>()
+        {
+            theirs.insert(data.clone());
+        }
+    }
+    fill::<ReflectState>(theirs, ours);
+    fill::<ReflectComponent>(theirs, ours);
+    fill::<ReflectResource>(theirs, ours);
+    fill::<ReflectFromReflect>(theirs, ours);
+    fill::<ReflectDeserialize>(theirs, ours);
+    fill::<ReflectSerialize>(theirs, ours);
+    fill::<ReflectDefault>(theirs, ours);
 }
 
 /// Resolves every name in `script` against `registry`.

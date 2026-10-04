@@ -22,12 +22,12 @@ use rin_bevy_ui_tester::{
 };
 
 /// A ghost, to be counted.
-#[derive(Component, Reflect)]
+#[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Ghost;
 
 /// Marks a selected ghost.
-#[derive(Component, Reflect)]
+#[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Selected;
 
@@ -41,7 +41,7 @@ enum Tool {
 }
 
 /// The editor's settings.
-#[derive(Resource, Reflect)]
+#[derive(Resource, Reflect, Debug)]
 #[reflect(Resource)]
 struct Editor {
     /// The current tool.
@@ -51,7 +51,7 @@ struct Editor {
 }
 
 /// A gauge with a value, on a node with a "Speed" label inside it.
-#[derive(Component, Reflect)]
+#[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Gauge {
     /// The value, from 0 to 1.
@@ -69,7 +69,7 @@ enum Mode {
 }
 
 /// Frames left until "Saved" shows.
-#[derive(Resource)]
+#[derive(Resource, Debug)]
 struct Countdown(u32);
 
 /// How many frames "Later" takes to show "Saved".
@@ -581,7 +581,7 @@ fn a_type_of_the_wrong_kind_is_a_load_error() {
 #[test]
 fn a_type_the_app_never_registered_fails_when_the_check_runs() {
     /// Never registered anywhere.
-    #[derive(Component, Reflect)]
+    #[derive(Component, Reflect, Debug)]
     struct Unregistered;
     let report = run(&Scenario::new("unregistered")
         .setup(spawn)
@@ -609,4 +609,26 @@ fn a_misspelt_field_in_rust_cannot_run_even_inside_not() {
             "`Editor` has no field `tol`; did you mean `tool`?".into()
         )]
     );
+}
+
+#[test]
+fn installing_adds_state_type_data_to_a_state_the_app_registered_without_it() {
+    // The app knows `Mode` as a plain reflected type, as Bevy's automatic
+    // registration would leave it, but not as a state.
+    let mut app = App::new();
+    app.add_plugins((HeadlessPlugins::default(), StatesPlugin))
+        .init_state::<Mode>()
+        .register_type::<Mode>();
+    app.finish();
+    app.cleanup();
+    let mut registry = Registry::default();
+    registry.register_state::<Mode>();
+    let scenario = Scenario::from_ron_with(
+        "(format_version: 3, name: \"x\", steps: [Check(InState(state: \"Mode\", value: Menu))])",
+        &registry,
+    )
+    .unwrap();
+    registry.install(app.world_mut());
+    let report = scenario.run_in(&mut app);
+    assert_eq!(outcomes(&report), [Outcome::Pass]);
 }
