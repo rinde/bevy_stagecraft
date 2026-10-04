@@ -9,9 +9,9 @@ use bevy::{
         entity::Entity,
         hierarchy::ChildSpawnerCommands,
         query::{With, Without},
-        system::{Commands, Query, Res, ResMut},
+        system::{Commands, Local, Query, Res, ResMut},
     },
-    math::Vec2,
+    math::{DVec2, IVec2, Vec2},
     picking::{
         events::{Click, Pointer},
         pointer::PointerButton,
@@ -22,7 +22,9 @@ use bevy::{
         AlignItems, BackgroundColor, BorderRadius, FlexDirection, FlexWrap, Node, Overflow,
         ScrollPosition, UiRect, UiTargetCamera, Val, px, widget::Text,
     },
-    window::{Window, WindowRef, WindowResolution},
+    window::{
+        Monitor, PrimaryMonitor, PrimaryWindow, Window, WindowPosition, WindowRef, WindowResolution,
+    },
 };
 
 use super::{
@@ -228,6 +230,48 @@ fn row(parent: &mut ChildSpawnerCommands<'_>, fill: impl FnOnce(&mut ChildSpawne
             },
         ))
         .with_children(fill);
+}
+
+/// Puts the Scenarios window directly to the left of the app window, the pair
+/// centred horizontally at the top of the primary monitor, once.
+///
+/// The top rather than the middle: the menu bar and the Dock are not part of
+/// what Bevy knows of a monitor, and macOS pushes a window that overlaps them.
+/// At the top both windows are pushed below the menu bar alike and stay
+/// aligned. Bevy reports a window's position only after it has been moved, so the
+/// positions are worked out from the monitor rather than from the app window.
+/// It waits until the monitors are known; on Wayland, which does not let
+/// clients place windows, the window manager decides.
+pub(super) fn place_scenarios_window(
+    mut done: Local<bool>,
+    monitors: Query<&Monitor, With<PrimaryMonitor>>,
+    mut primary: Query<&mut Window, (With<PrimaryWindow>, Without<ScenariosWindow>)>,
+    mut scenarios: Query<&mut Window, With<ScenariosWindow>>,
+) {
+    if *done {
+        return;
+    }
+    let (Some(monitor), Some(mut primary), Some(mut scenarios)) = (
+        monitors.iter().next(),
+        primary.iter_mut().next(),
+        scenarios.iter_mut().next(),
+    ) else {
+        return;
+    };
+    let physical = |window: &Window| {
+        (DVec2::new(f64::from(window.width()), f64::from(window.height())) * monitor.scale_factor)
+            .round()
+            .as_ivec2()
+    };
+    let (left, right) = (physical(&scenarios), physical(&primary));
+    let pair = left.x.saturating_add(right.x);
+    let screen = i32::try_from(monitor.physical_width).unwrap_or(i32::MAX);
+    let corner = monitor
+        .physical_position
+        .saturating_add(IVec2::new(screen.saturating_sub(pair).max(0) / 2, 0));
+    scenarios.position = WindowPosition::At(corner);
+    primary.position = WindowPosition::At(corner.saturating_add(IVec2::new(left.x, 0)));
+    *done = true;
 }
 
 /// Spawns the Scenarios window, its camera and everything in it.
@@ -505,7 +549,7 @@ pub(super) fn update_details(
     gallery: Res<Gallery>,
     theme: Res<OverlayTheme>,
     details: Query<Entity, With<Details>>,
-    mut shown: bevy::ecs::system::Local<Option<(Option<usize>, ScenarioReport)>>,
+    mut shown: Local<Option<(Option<usize>, ScenarioReport)>>,
 ) {
     let key = (state.selected(), report.clone());
     if shown.as_ref() == Some(&key) {
