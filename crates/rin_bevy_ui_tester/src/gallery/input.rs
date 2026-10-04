@@ -300,13 +300,17 @@ pub(super) fn restore_real_cursor(
     }
 }
 
-/// Ends the app when the primary window closes, even though the Scenarios
-/// window is still open.
-pub(super) fn exit_with_primary(
-    mut removed: bevy::ecs::lifecycle::RemovedComponents<PrimaryWindow>,
+/// Ends the app when either window closes, so closing one never leaves the
+/// other behind: the app without its gallery, or the gallery without its app.
+pub(super) fn exit_with_either_window(
+    mut primary: bevy::ecs::lifecycle::RemovedComponents<PrimaryWindow>,
+    mut scenarios: bevy::ecs::lifecycle::RemovedComponents<ScenariosWindow>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if removed.read().next().is_some() {
+    // Both readers are drained so a stale removal cannot fire a later exit.
+    let primary_closed = primary.read().next().is_some();
+    let scenarios_closed = scenarios.read().next().is_some();
+    if primary_closed || scenarios_closed {
         exit.write(AppExit::Success);
     }
 }

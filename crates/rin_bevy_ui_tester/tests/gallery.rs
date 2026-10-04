@@ -728,6 +728,28 @@ fn the_wheel_scrolls_the_catalogue_before_any_scenario_is_selected() {
 }
 
 #[test]
+fn closing_the_scenarios_window_ends_the_app() {
+    let mut app = gallery_app();
+    assert!(app.should_exit().is_none(), "running until a window closes");
+    let second = scenarios_window(&mut app);
+    app.world_mut().despawn(second);
+    app.update();
+    assert!(
+        app.should_exit().is_some(),
+        "the app exits with the gallery"
+    );
+}
+
+#[test]
+fn closing_the_app_window_ends_the_app() {
+    let mut app = gallery_app();
+    let first = primary(&mut app);
+    app.world_mut().despawn(first);
+    app.update();
+    assert!(app.should_exit().is_some(), "the app exits with its window");
+}
+
+#[test]
 fn space_and_arrow_keys_in_the_scenarios_window_drive_the_gallery_but_never_reach_the_app() {
     let mut app = gallery_app();
     ask(&mut app, GalleryAction::Select(0));
