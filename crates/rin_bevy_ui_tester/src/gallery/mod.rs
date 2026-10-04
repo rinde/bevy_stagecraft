@@ -194,6 +194,7 @@ impl GalleryPlugin {
 
 impl Plugin for GalleryPlugin {
     fn build(&self, app: &mut App) {
+        disable_window_tabbing();
         if !app.is_plugin_added::<SyntheticInputPlugin>() {
             app.add_plugins(SyntheticInputPlugin);
         }
@@ -262,3 +263,22 @@ impl Plugin for GalleryPlugin {
         .add_systems(PostUpdate, input::restore_real_cursor);
     }
 }
+
+/// Stops macOS from merging the gallery's two windows into one tabbed window.
+///
+/// With "Prefer tabs" set to "Always" in the system settings, a new window
+/// opens as a tab over the existing one, hiding the app under test. This must
+/// run before winit creates the first window; plugins are built on the main
+/// thread, which `MainThreadMarker` checks. The setting is process-wide.
+#[cfg(target_os = "macos")]
+fn disable_window_tabbing() {
+    let Some(main_thread) = objc2::MainThreadMarker::new() else {
+        bevy::log::warn!("not on the main thread: macOS may put the Scenarios window in a tab");
+        return;
+    };
+    objc2_app_kit::NSWindow::setAllowsAutomaticWindowTabbing(false, main_thread);
+}
+
+/// Window tabbing is a macOS feature; elsewhere there is nothing to turn off.
+#[cfg(not(target_os = "macos"))]
+const fn disable_window_tabbing() {}

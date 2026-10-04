@@ -11,7 +11,7 @@ use bevy::{
         query::{With, Without},
         system::{Commands, Local, Query, Res, ResMut},
     },
-    math::Vec2,
+    math::{DVec2, IVec2, Vec2},
     picking::{
         events::{Click, Pointer},
         pointer::PointerButton,
@@ -22,7 +22,9 @@ use bevy::{
         AlignItems, BackgroundColor, BorderRadius, FlexDirection, FlexWrap, Node, Overflow,
         ScrollPosition, UiRect, UiTargetCamera, Val, px, widget::Text,
     },
-    window::{PrimaryWindow, Window, WindowPosition, WindowRef, WindowResolution},
+    window::{
+        Monitor, PrimaryMonitor, PrimaryWindow, Window, WindowPosition, WindowRef, WindowResolution,
+    },
 };
 
 use super::{
@@ -37,8 +39,6 @@ use crate::{
 
 /// Default size of the Scenarios window, in logical pixels.
 pub const SCENARIOS_WINDOW_SIZE: (u32, u32) = (460, 760);
-/// Gap between the app window and the Scenarios window, in physical pixels.
-const WINDOW_GAP: i32 = 8;
 /// Font size of the Scenarios window's text, in logical pixels.
 const FONT_SIZE: f32 = 15.0;
 /// Padding inside buttons and around panels, in logical pixels.
@@ -232,31 +232,45 @@ fn row(parent: &mut ChildSpawnerCommands<'_>, fill: impl FnOnce(&mut ChildSpawne
         .with_children(fill);
 }
 
-/// Puts the Scenarios window to the right of the app window, once.
+/// Puts the Scenarios window directly to the left of the app window, the pair
+/// centred horizontally at the top of the primary monitor, once.
 ///
-/// Both windows are placed explicitly so a window manager that would
-/// otherwise stack or tab them (macOS with "prefer tabs") has no reason to
-/// merge them. It waits until the platform has reported the app window's
-/// position; where it never does (Wayland), the window manager decides.
+/// The top rather than the middle: the menu bar and the Dock are not part of
+/// what Bevy knows of a monitor, and macOS pushes a window that overlaps them.
+/// At the top both windows are pushed below the menu bar alike and stay
+/// aligned. Bevy reports a window's position only after it has been moved, so the
+/// positions are worked out from the monitor rather than from the app window.
+/// It waits until the monitors are known; on Wayland, which does not let
+/// clients place windows, the window manager decides.
 pub(super) fn place_scenarios_window(
     mut done: Local<bool>,
-    primary: Query<&Window, (With<PrimaryWindow>, Without<ScenariosWindow>)>,
+    monitors: Query<&Monitor, With<PrimaryMonitor>>,
+    mut primary: Query<&mut Window, (With<PrimaryWindow>, Without<ScenariosWindow>)>,
     mut scenarios: Query<&mut Window, With<ScenariosWindow>>,
 ) {
     if *done {
         return;
     }
-    let (Some(primary), Some(mut scenarios)) = (primary.iter().next(), scenarios.iter_mut().next())
-    else {
+    let (Some(monitor), Some(mut primary), Some(mut scenarios)) = (
+        monitors.iter().next(),
+        primary.iter_mut().next(),
+        scenarios.iter_mut().next(),
+    ) else {
         return;
     };
-    let WindowPosition::At(origin) = primary.position else {
-        return;
+    let physical = |window: &Window| {
+        (DVec2::new(f64::from(window.width()), f64::from(window.height())) * monitor.scale_factor)
+            .round()
+            .as_ivec2()
     };
-    let width = i32::try_from(primary.physical_width()).unwrap_or(i32::MAX);
-    scenarios.position = WindowPosition::At(
-        origin.saturating_add(bevy::math::IVec2::new(width.saturating_add(WINDOW_GAP), 0)),
-    );
+    let (left, right) = (physical(&scenarios), physical(&primary));
+    let pair = left.x.saturating_add(right.x);
+    let screen = i32::try_from(monitor.physical_width).unwrap_or(i32::MAX);
+    let corner = monitor
+        .physical_position
+        .saturating_add(IVec2::new(screen.saturating_sub(pair).max(0) / 2, 0));
+    scenarios.position = WindowPosition::At(corner);
+    primary.position = WindowPosition::At(corner.saturating_add(IVec2::new(left.x, 0)));
     *done = true;
 }
 

@@ -26,6 +26,8 @@ gallery = [
     "bevy/bevy_core_pipeline",
     "bevy/bevy_ui_render",
     "bevy/bevy_sprite_render",
+    "dep:objc2",
+    "dep:objc2-app-kit",
 ]
 
 [dependencies]
@@ -33,6 +35,12 @@ ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 # PNG and GIF encoding for the recorder; nothing else of the crate.
 image = { version = "0.25.10", default-features = false, features = ["png", "gif"], optional = true }
+# macOS only: the gallery turns off automatic window tabbing, which would
+# otherwise put the Scenarios window in a tab over the app window.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.4", optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSWindow"], optional = true }
+
 # Deliberately no audio, gamepad or dynamic_linking: a library must not force
 # those on whoever depends on it.
 [dependencies.bevy]
