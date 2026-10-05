@@ -41,6 +41,15 @@
 //! plays or pauses, Right steps one frame, Down steps to the next step, Left
 //! restarts.
 //!
+//! # Running everything
+//!
+//! [`GalleryPlugin::with_run_all`] plays the whole catalogue once, front to
+//! back, with nobody at the controls: each entry is reset, set up and played
+//! as if selected, whether or not the one before passed. When the last has
+//! finished the outcome is logged (one `PASS` or `FAIL` line per scenario,
+//! the failures under it), kept in the [`GalleryRunReport`] resource, and the
+//! app exits, closing both windows, with an error code if anything failed.
+//!
 //! # Recording
 //!
 //! **Record** starts a [session recording](crate::session) from what is on
@@ -109,7 +118,8 @@ mod ui;
 pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
 pub use input::scenarios_pointer;
 pub use state::{
-    GalleryAction, GalleryPhase, GalleryState, PendingStep, Picking, Recording, Speed, Suggestions,
+    GalleryAction, GalleryPhase, GalleryRunReport, GalleryState, PendingStep, Picking, Recording,
+    ScenarioOutcome, Speed, Suggestions,
 };
 pub use ui::{GalleryToolbar, SCENARIOS_WINDOW_SIZE, ScenariosCamera, ScenariosWindow};
 
@@ -179,6 +189,8 @@ pub struct GalleryPlugin {
     loop_pause: u16,
     /// What the app plugs into **Record**.
     session_hooks: SessionHooks,
+    /// Whether to play the whole catalogue once and exit.
+    run_all: bool,
 }
 
 impl GalleryPlugin {
@@ -192,7 +204,20 @@ impl GalleryPlugin {
             export_dir: PathBuf::from("gallery-export"),
             loop_pause: DEFAULT_LOOP_PAUSE,
             session_hooks: SessionHooks::default(),
+            run_all: false,
         }
+    }
+
+    /// Plays every entry once, front to back, with no input needed, then ends
+    /// the app, closing both windows. Every scenario runs, failing ones
+    /// included. The outcome is logged, kept as a [`GalleryRunReport`]
+    /// resource, and the app exits with [`bevy::app::AppExit::error`] if any
+    /// scenario failed, so `App::run` returns it. The controls do nothing
+    /// meanwhile; closing a window still ends the app.
+    #[must_use]
+    pub const fn with_run_all(mut self) -> Self {
+        self.run_all = true;
+        self
     }
 
     /// Sets what the app plugs into **Record**: capturing its setup, naming
@@ -245,13 +270,17 @@ impl Plugin for GalleryPlugin {
                 SessionPlugin::new(self.export_dir.clone()).with_hooks(self.session_hooks.clone()),
             );
         }
+        let mut state = GalleryState::new(self.export_dir.clone(), self.loop_pause);
+        if self.run_all {
+            state.begin_run_all();
+        }
         app.init_resource::<PointerInputSettings>()
             .init_resource::<input::ScenariosScroll>()
             .init_resource::<input::RealCursor>()
             .init_resource::<input::PickClicks>()
             .insert_resource(ExternallyDriven)
             .insert_resource(self.gallery.clone())
-            .insert_resource(GalleryState::new(self.export_dir.clone(), self.loop_pause));
+            .insert_resource(state);
         if let Some(reset) = &self.reset {
             app.insert_resource(reset.clone());
         }

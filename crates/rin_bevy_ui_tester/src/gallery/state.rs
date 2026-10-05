@@ -343,6 +343,71 @@ impl Suggestions {
     }
 }
 
+/// How one scenario fared in a run of the whole catalogue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScenarioOutcome {
+    /// The scenario's name.
+    pub name: String,
+    /// One line per failed step or check, or the setup's failure; empty when
+    /// the scenario passed.
+    pub failures: Vec<String>,
+}
+
+impl ScenarioOutcome {
+    /// Whether the scenario passed.
+    #[must_use]
+    pub const fn passed(&self) -> bool {
+        self.failures.is_empty()
+    }
+}
+
+/// What every scenario of the catalogue did, in catalogue order.
+///
+/// After a run of the whole catalogue (see
+/// [`crate::GalleryPlugin::with_run_all`]) the world keeps the complete report
+/// as a resource.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct GalleryRunReport {
+    /// One outcome per scenario that has finished.
+    pub outcomes: Vec<ScenarioOutcome>,
+}
+
+impl GalleryRunReport {
+    /// Whether every scenario passed.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.outcomes.iter().all(ScenarioOutcome::passed)
+    }
+
+    /// The scenarios that failed, in catalogue order.
+    pub fn failed(&self) -> impl Iterator<Item = &ScenarioOutcome> {
+        self.outcomes.iter().filter(|outcome| !outcome.passed())
+    }
+
+    /// The report in words: the tally, then every scenario with `PASS` or
+    /// `FAIL`, and under each failure what went wrong.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let failed = self.failed().count();
+        let mut lines = vec![format!(
+            "{} of {} scenarios passed",
+            self.outcomes.len() - failed,
+            self.outcomes.len()
+        )];
+        for outcome in &self.outcomes {
+            let mark = if outcome.passed() { "PASS" } else { "FAIL" };
+            lines.push(format!("{mark} {}", outcome.name));
+            lines.extend(
+                outcome
+                    .failures
+                    .iter()
+                    .map(|failure| format!("       {failure}")),
+            );
+        }
+        lines.join("\n")
+    }
+}
+
 /// The gallery's controls and what it remembers: selection, mode, speed and
 /// each entry's last result. Ask for things with [`Self::request`].
 #[derive(Resource, Debug, Clone)]
@@ -388,6 +453,9 @@ pub struct GalleryState {
     /// How the selected entry's setup went, for the player once the UI has
     /// settled.
     pub(crate) setup: Result<bool, String>,
+    /// Set while the whole catalogue is being played once, front to back: what
+    /// has finished so far. The next entry is the one after the last of them.
+    pub(crate) run_all: Option<GalleryRunReport>,
 }
 
 impl GalleryState {
@@ -414,7 +482,22 @@ impl GalleryState {
             picked: None,
             revision: 0,
             setup: Ok(false),
+            run_all: None,
         }
+    }
+
+    /// Makes the gallery play every entry once, front to back, with no looping,
+    /// and exit when the last has finished.
+    pub(crate) fn begin_run_all(&mut self) {
+        self.looping = false;
+        self.run_all = Some(GalleryRunReport::default());
+    }
+
+    /// Whether the whole catalogue is being played automatically, in which
+    /// case the controls do nothing.
+    #[must_use]
+    pub const fn is_running_all(&self) -> bool {
+        self.run_all.is_some()
     }
 
     /// Asks for something; it happens before the script next advances.

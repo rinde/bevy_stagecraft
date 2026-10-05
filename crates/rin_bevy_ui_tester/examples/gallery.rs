@@ -23,6 +23,14 @@
 //! ```text
 //! cargo run --example gallery --features gallery -- --record
 //! ```
+//!
+//! With `--run-all` nobody has to touch anything: every scenario plays once,
+//! in order, and the app closes itself. The outcome is logged, and the exit
+//! code is non-zero if any scenario failed (`just gallery-test`):
+//!
+//! ```text
+//! cargo run --example gallery --features gallery -- --run-all
+//! ```
 
 use std::{fs, path::Path};
 
@@ -363,6 +371,12 @@ fn main() -> AppExit {
     if !recordings.is_empty() {
         gallery = gallery.group("Recorded", recordings);
     }
+    let mut plugin = GalleryPlugin::new(gallery)
+        .with_reset(reset_app)
+        .with_export_dir(RECORDINGS);
+    if std::env::args().any(|arg| arg == "--run-all") {
+        plugin = plugin.with_run_all();
+    }
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -377,10 +391,6 @@ fn main() -> AppExit {
         .add_systems(Update, show_state)
         .add_systems(Startup, record_from_the_command_line)
         .add_systems(Last, save_on_exit)
-        .add_plugins(
-            GalleryPlugin::new(gallery)
-                .with_reset(reset_app)
-                .with_export_dir(RECORDINGS),
-        )
+        .add_plugins(plugin)
         .run()
 }

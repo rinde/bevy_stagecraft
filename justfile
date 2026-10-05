@@ -57,5 +57,11 @@ features:
 test-gpu:
     WGPU_BACKEND=vulkan cargo test --quiet --workspace --features record gpu -- --include-ignored
 
+# Play every gallery scenario in a real window, one by one, and close the
+# window when done. Exits non-zero, naming what failed, if any scenario failed.
+# Needs a display.
+gallery-test:
+    cargo run --quiet --example gallery --features gallery -- --run-all
+
 # Everything CI runs.
 ci: lint test features unused-deps deny

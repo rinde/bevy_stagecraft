@@ -47,8 +47,9 @@ pub use extension::{
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
 #[cfg(feature = "gallery")]
 pub use gallery::{
-    Gallery, GalleryAction, GalleryEntry, GalleryGroup, GalleryPlugin, GalleryState,
-    GallerySystems, ScenariosCamera, ScenariosWindow, Speed, Suggestions,
+    Gallery, GalleryAction, GalleryEntry, GalleryGroup, GalleryPlugin, GalleryRunReport,
+    GalleryState, GallerySystems, ScenarioOutcome, ScenariosCamera, ScenariosWindow, Speed,
+    Suggestions,
 };
 pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};

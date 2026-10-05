@@ -14,6 +14,7 @@
 )]
 
 use bevy::{
+    app::AppExit,
     input::{
         ButtonInput, ButtonState,
         keyboard::{Key, KeyCode, KeyboardInput, NativeKey},
@@ -29,9 +30,9 @@ use bevy::{
     window::{CursorMoved, PrimaryWindow, WindowEvent},
 };
 use rin_bevy_ui_tester::{
-    AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState,
-    HeadlessPlugins, Probe, ReflectAppSetup, Registry, Scenario, ScenariosCamera, ScenariosWindow,
-    Script, Speed, Step, Target, WidgetRole,
+    AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryRunReport,
+    GalleryState, HeadlessPlugins, Probe, ReflectAppSetup, Registry, Scenario, ScenariosCamera,
+    ScenariosWindow, Script, Speed, Step, Target, WidgetRole,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
@@ -1609,4 +1610,98 @@ fn a_scenario_whose_setup_fails_says_so_and_plays_no_step() {
     assert!(!report.passed());
     assert!(report.setup_failure.is_some(), "{report:?}");
     assert!(report.checks.is_empty(), "no step played: {report:?}");
+}
+
+/// A scenario that does nothing and fails its expectation.
+fn never_satisfied() -> Scenario {
+    Scenario::new("never satisfied")
+        .setup(spawn_app)
+        .window_size(640, 480)
+        .expect("a count of 99", |probe| {
+            probe.resource::<Count>().is_some_and(|count| count.0 == 99)
+        })
+}
+
+/// The exit the app asked for during the last update, if any.
+fn exit_asked(app: &App) -> Option<AppExit> {
+    app.world()
+        .resource::<Messages<AppExit>>()
+        .iter_current_update_messages()
+        .next()
+        .cloned()
+}
+
+/// Runs a gallery of these scenarios in run-all mode until it has a report.
+fn run_all(scenarios: impl IntoIterator<Item = Scenario>) -> (App, AppExit) {
+    let mut app = app_with(
+        GalleryPlugin::new(Gallery::new().group("All", scenarios))
+            .with_reset(reset_app)
+            .with_run_all(),
+    );
+    for _ in 0..2_000 {
+        if let Some(exit) = exit_asked(&app) {
+            return (app, exit);
+        }
+        app.update();
+    }
+    panic!("the run never ended");
+}
+
+#[test]
+fn running_everything_plays_every_scenario_once_and_exits_with_success() {
+    let (app, exit) = run_all([adds(2), adds(3)]);
+    assert_eq!(exit, AppExit::Success);
+    let report = app.world().resource::<GalleryRunReport>();
+    assert!(report.passed());
+    let names: Vec<_> = report.outcomes.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["add 2", "add 3"]);
+    assert_eq!(app.world().resource::<Resets>().0, 2, "each ran once");
+    assert!(!app.world().resource::<GalleryState>().is_looping());
+}
+
+#[test]
+fn running_everything_goes_on_after_a_failure_and_reports_every_one() {
+    let (app, exit) = run_all([never_satisfied(), adds(2), never_satisfied()]);
+    assert_eq!(exit, AppExit::error());
+    let report = app.world().resource::<GalleryRunReport>();
+    assert_eq!(report.outcomes.len(), 3, "the later scenarios still ran");
+    assert!(!report.passed());
+    assert_eq!(report.failed().count(), 2);
+    let summary = report.summary();
+    assert!(summary.starts_with("1 of 3 scenarios passed"), "{summary}");
+    assert!(summary.contains("PASS add 2"), "{summary}");
+    assert!(summary.contains("FAIL never satisfied"), "{summary}");
+    assert!(summary.contains("a count of 99"), "{summary}");
+}
+
+#[test]
+fn running_everything_counts_a_failed_setup_as_a_failure() {
+    let broken = Scenario::new("broken setup")
+        .app_setup(GallerySetup::Lost)
+        .window_size(640, 480);
+    let (app, exit) = run_all([broken, adds(2)]);
+    assert_eq!(exit, AppExit::error());
+    let report = app.world().resource::<GalleryRunReport>();
+    assert_eq!(report.outcomes.len(), 2);
+    assert!(report.failed().any(|outcome| {
+        outcome
+            .failures
+            .iter()
+            .any(|line| line.contains("the save is gone"))
+    }));
+}
+
+#[test]
+fn the_controls_do_nothing_while_everything_runs() {
+    let mut app = app_with(
+        GalleryPlugin::new(gallery())
+            .with_reset(reset_app)
+            .with_run_all(),
+    );
+    ask(&mut app, GalleryAction::ToggleLoop);
+    ask(&mut app, GalleryAction::TogglePlay);
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_running_all());
+    assert!(!state.is_looping());
+    assert!(state.is_playing(), "pause was refused");
 }

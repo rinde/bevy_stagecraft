@@ -89,6 +89,7 @@ lands.
 | `just unused-deps` | Fail on unused dependencies                     | `cargo machete --with-metadata`                                                   |
 | `just deny`        | Licences, advisories, bans                      | `cargo deny check`                                                                |
 | `just test-gpu`    | Tests needing a (software) GPU                  | `WGPU_BACKEND=vulkan cargo test --workspace --features record gpu -- --include-ignored` |
+| `just gallery-test` | Play every gallery scenario in a real window, exit non-zero naming failures (needs a display, not part of `ci`) | `cargo run --example gallery --features gallery -- --run-all` |
 | `just ci`          | Everything CI runs                              | all of the above except `test-gpu`                                                |
 
 `just test-gpu` needs a Vulkan driver. On a machine without a GPU, install
