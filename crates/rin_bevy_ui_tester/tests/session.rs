@@ -23,7 +23,7 @@ use bevy::{
 use rin_bevy_ui_tester::{
     AppSetup, AppTarget, AppView, Check, HeadlessPlugins, ReflectAppSetup, ReflectAppTarget,
     ReflectAppView, Registry, ResolvedTarget, Scenario, Script, SessionPlugin, SessionRecorder,
-    Step, Target,
+    Step, Target, WidgetRole,
     script::{Setup, View},
     session::{self, SessionConfig},
 };
@@ -315,9 +315,9 @@ fn the_recorded_file_reads_as_a_few_labelled_steps() {
     assert!(
         script.steps.iter().any(|step| matches!(
             step,
-            Step::Glide { target: Target::Text(text), .. } if text == "+1"
+            Step::Glide { target, .. } if *target == Target::role(WidgetRole::Button, "+1")
         )),
-        "the path ends on the button by its label: {:?}",
+        "the path ends on the button by its role and label: {:?}",
         script.steps
     );
     // Twelve curved samples collapse into a handful of glides.
@@ -330,7 +330,10 @@ fn the_recorded_file_reads_as_a_few_labelled_steps() {
 
     let text = fs::read_to_string(&saved.path).expect("written");
     assert!(text.starts_with("//"), "the file explains itself");
-    assert!(text.contains("Text(\"+1\")"), "{text}");
+    assert!(
+        text.contains("role: Button") && text.contains("label: \"+1\""),
+        "{text}"
+    );
     assert!(
         text.contains("path: \"Count.0\",\n            is: Eq(3),"),
         "{text}"
@@ -486,5 +489,93 @@ fn the_apps_own_target_is_offered_clicks_that_hit_no_label() {
             .contains(&Step::MoveTo(Target::app(SessionTarget::Cell(2, 1)))),
         "{:?}",
         saved.script.steps
+    );
+}
+
+/// The test id of a button the recorder names by it.
+#[derive(Component, Reflect, Debug, Default)]
+#[reflect(Component)]
+struct Tagged;
+
+/// Records one click at `position` in `app` and returns the target the
+/// pointer was moved to for it.
+fn recorded_target(app: &mut App, name: &str, position: Vec2) -> Target {
+    session::start(app.world_mut(), name).expect("starts");
+    real_move(app, position);
+    real_move(app, position);
+    real_click(app);
+    let saved = session::stop(app.world_mut()).expect("saved");
+    saved
+        .script
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            Step::MoveTo(target) | Step::Glide { target, .. } => Some(target.clone()),
+            _ => None,
+        })
+        .expect("the pointer was moved to the click")
+}
+
+#[test]
+fn a_recorded_click_names_a_test_id_then_role_and_label_then_text_then_the_position() {
+    let dir = dir("session-sturdiest");
+    let mut app = app(&dir);
+    app.world_mut().spawn((
+        Button,
+        Tagged,
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(100),
+            top: px(250),
+            width: px(120),
+            height: px(60),
+            ..Node::default()
+        },
+        children![Text::new("Tagged")],
+    ));
+    app.world_mut().spawn((
+        Text::new("Note"),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(400),
+            top: px(250),
+            ..Node::default()
+        },
+    ));
+    for _ in 0..2 {
+        app.update();
+    }
+    let tagged = centre_of(&mut app, "Tagged");
+    assert_eq!(
+        recorded_target(&mut app, "tagged", tagged),
+        Target::component::<Tagged>(),
+        "a test id first"
+    );
+    let plus = centre_of(&mut app, "+1");
+    assert_eq!(
+        recorded_target(&mut app, "role", plus),
+        Target::role(WidgetRole::Button, "+1"),
+        "then role and label"
+    );
+    let note = {
+        let world = app.world_mut();
+        let (node, transform) = world
+            .query::<(&Text, &ComputedNode, &UiGlobalTransform)>()
+            .iter(world)
+            .find(|(text, _, _)| text.0 == "Note")
+            .map(|(_, node, transform)| (*node, *transform))
+            .expect("the note is laid out");
+        transform.affine().translation * node.inverse_scale_factor
+    };
+    assert_eq!(
+        recorded_target(&mut app, "text", note),
+        Target::text("Note"),
+        "then text"
+    );
+    let ground = Vec2::new(500.0, 420.0);
+    assert_eq!(
+        recorded_target(&mut app, "position", ground),
+        Target::screen(ground),
+        "then the position"
     );
 }

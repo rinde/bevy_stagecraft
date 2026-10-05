@@ -16,7 +16,6 @@ use crate::{
         Check,
         pick::{Picked, node_at, subject_of, target_alternatives},
     },
-    extension::app_target_at,
     overlay::PickHighlight,
     session::{SessionConfig, SessionHooks},
 };
@@ -51,7 +50,7 @@ pub(super) fn update(world: &mut World, mut tagged: Local<Option<(Entity, String
     // pointer has moved on to another node.
     let tag = match (subject, tagged.as_ref()) {
         (Some(subject), Some((was, tag))) if *was == subject => tag.clone(),
-        (Some(subject), _) => target_alternatives(world, subject)
+        (Some(subject), _) => target_alternatives(world, Some(subject), position)
             .first()
             .map(|target| format!("{target:?}"))
             .unwrap_or_default(),
@@ -64,8 +63,7 @@ pub(super) fn update(world: &mut World, mut tagged: Local<Option<(Entity, String
         let hooks = world
             .get_resource::<SessionConfig>()
             .map_or_else(SessionHooks::default, |config| config.hooks.clone());
-        let extra = app_target_at(world, position);
-        let picked = Picked::new(world, node, hooks.noise(), extra);
+        let picked = Picked::new(world, node, hooks.noise(), Some(position));
         if let Some(mut state) = world.get_resource_mut::<GalleryState>() {
             state.status = picked_status(&picked, state.is_recording());
             state.picked = Some(picked);

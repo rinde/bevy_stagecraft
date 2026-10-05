@@ -158,7 +158,10 @@ fn text_that_is_not_on_screen_fails_the_step_clearly() {
         .run_headless();
     let failures = report.failures();
     assert_eq!(failures.len(), 1, "{failures:?}");
-    assert!(failures[0].contains("no UI node shows \"Resume\""));
+    assert!(
+        failures[0].contains("no widget shows \"Resume\""),
+        "{failures:?}"
+    );
 }
 
 #[test]

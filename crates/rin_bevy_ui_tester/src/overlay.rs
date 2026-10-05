@@ -225,6 +225,13 @@ pub fn describe_target(target: &Target) -> String {
         Target::Text(text) => text.clone(),
         Target::World(position) => format!("({}, {}, {})", position.x, position.y, position.z),
         Target::App(value) => value.to_string(),
+        Target::Component(name) | Target::Name(name) => name.clone(),
+        Target::Role {
+            label: Some(label), ..
+        } => label.clone(),
+        Target::Role { role, label: None } => format!("{role:?}"),
+        Target::Within(_, inner) => describe_target(inner),
+        Target::Nth(index, inner) => format!("{} #{index}", describe_target(inner)),
     }
 }
 

@@ -20,7 +20,7 @@ use bevy::{
 use common::{Activations, UiTarget, spawn_ui};
 use rin_bevy_ui_tester::{
     AppCheckForm, Check, FieldValue, HeadlessPlugins, NoiseFilter, NotUnderTest, Picked,
-    RecordedEvent, RecordedKind, Step, StepOptions, Target, TextMatch, WorldSnapshot,
+    RecordedEvent, RecordedKind, Step, StepOptions, Target, TextMatch, WidgetRole, WorldSnapshot,
     app_check_forms, checks_that_hold, node_at, read_log, subject_of, target_alternatives,
 };
 
@@ -150,19 +150,20 @@ fn the_node_under_a_position_is_the_apps_topmost_and_never_the_toolings() {
 }
 
 #[test]
-fn a_unique_label_is_the_best_target_and_the_screen_position_the_last() {
+fn role_and_label_come_before_a_unique_label_and_the_screen_position_is_last() {
     let mut app = form_app();
     let save = button_with(&mut app, "Save");
-    let targets = target_alternatives(app.world(), save);
+    let targets = target_alternatives(app.world(), Some(save), None);
     assert_eq!(
         targets,
         [
+            Target::role(WidgetRole::Button, "Save"),
             Target::text("Save"),
             Target::screen(Vec2::new(150.0, 145.0))
         ]
     );
     let twice = text_node(&mut app, "Twice");
-    let targets = target_alternatives(app.world(), twice);
+    let targets = target_alternatives(app.world(), Some(twice), None);
     assert!(
         matches!(targets.as_slice(), [Target::Screen(_)]),
         "a text two nodes show finds neither: {targets:?}"
@@ -255,7 +256,10 @@ fn a_picked_node_works_out_which_app_checks_hold_and_a_stepped_field_changes_the
     let pause = button_with(&mut app, "Pause");
     let mut picked = Picked::new(app.world(), pause, &NoiseFilter::default(), None);
     assert_eq!(picked.subject(), pause);
-    assert_eq!(picked.target(), Some(&Target::text("Pause")));
+    assert_eq!(
+        picked.target(),
+        Some(&Target::role(WidgetRole::Button, "Pause"))
+    );
     let activated = |picked: &Picked| {
         picked
             .forms()
@@ -293,9 +297,16 @@ fn choosing_another_target_works_the_checks_out_through_it() {
     assert!(
         picked
             .checks()
-            .contains(&Check::disabled(Target::text("Save")))
+            .contains(&Check::disabled(Target::role(WidgetRole::Button, "Save")))
     );
     picked.choose_target(app.world(), 1);
+    assert_eq!(picked.target(), Some(&Target::text("Save")));
+    assert!(
+        picked
+            .checks()
+            .contains(&Check::disabled(Target::text("Save")))
+    );
+    picked.choose_target(app.world(), 2);
     assert_eq!(
         picked.target(),
         Some(&Target::screen(Vec2::new(150.0, 145.0)))

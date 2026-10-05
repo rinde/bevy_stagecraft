@@ -31,7 +31,7 @@ use bevy::{
 use rin_bevy_ui_tester::{
     AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState,
     HeadlessPlugins, Probe, ReflectAppSetup, Registry, Scenario, ScenariosCamera, ScenariosWindow,
-    Script, Speed, Step, Target,
+    Script, Speed, Step, Target, WidgetRole,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
@@ -1018,8 +1018,8 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
     assert!(
         script.steps.iter().any(|step| matches!(
             step,
-            Step::Glide { target: Target::Text(label), .. } | Step::MoveTo(Target::Text(label))
-                if label == "Add"
+            Step::Glide { target, .. } | Step::MoveTo(target)
+                if *target == Target::role(WidgetRole::Button, "Add")
         )),
         "{text}"
     );
@@ -1396,12 +1396,13 @@ fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_p
         "the outline is on the button"
     );
     assert_eq!(highlight.selected, Some(save));
-    assert_eq!(highlight.tag, "Text(\"Save\")");
-    let wanted = Check::disabled(Target::text("Save"));
+    assert_eq!(highlight.tag, "Role(role: Button, label: \"Save\")");
+    let save_target = Target::role(WidgetRole::Button, "Save");
+    let wanted = Check::disabled(save_target.clone());
     {
         let state = app.world().resource::<GalleryState>();
         let picked = state.picked().expect("the click picked the button");
-        assert_eq!(picked.target(), Some(&Target::text("Save")));
+        assert_eq!(picked.target(), Some(&save_target));
         assert!(picked.checks().contains(&wanted), "{:?}", picked.checks());
     }
     // The outline is the overlay's, so it is never hit.
@@ -1422,7 +1423,8 @@ fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_p
 
     // Choose it with the real mouse, in the Scenarios window.
     let second = scenarios_window(&mut app);
-    let row = centre_of_button_with(&mut app, "[+] Disabled(Text(\"Save\"))");
+    let spelled = ron::to_string(&wanted).expect("the check is written as RON");
+    let row = centre_of_button_with(&mut app, &format!("[+] {spelled}"));
     real_move(&mut app, second, row);
     app.update();
     app.update();
@@ -1435,7 +1437,7 @@ fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_p
 
     let path = dir.join("recording.ron");
     let text = std::fs::read_to_string(&path).expect("the file was written");
-    assert!(text.contains("Check(Disabled(Text(\"Save\")))"), "{text}");
+    assert!(text.contains("Check(Disabled(Role("), "{text}");
     let script = Script::from_ron(&text).expect("it reads back");
     assert!(script.steps.contains(&Step::check(wanted)), "{text}");
     assert!(
@@ -1531,7 +1533,7 @@ fn a_check_picked_while_paused_is_added_to_the_scenarios_expect_and_runs_at_its_
         !app.world().resource::<GalleryState>().is_playing(),
         "pick mode pauses the script"
     );
-    let wanted = !Check::disabled(Target::text("Add"));
+    let wanted = !Check::disabled(Target::role(WidgetRole::Button, "Add"));
     let index = app
         .world()
         .resource::<GalleryState>()

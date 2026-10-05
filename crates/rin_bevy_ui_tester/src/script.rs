@@ -53,8 +53,10 @@ use crate::{
 /// resolver (`Named(..)` and `File(..)` setups, a view's bare name and
 /// `Custom(resolver: .., argument: ..)` targets), which became the app's own
 /// values inside `App(..)` as well: a file that uses an old form is refused
-/// with a load error that says what to write instead. Any other older file
-/// still loads.
+/// with a load error that says what to write instead. The locator targets
+/// (`Component(..)`, `Name(..)`, `Role(..)`, `Within(..)` and `Nth(..)`)
+/// came later still in version 3: they only add forms, so every file that
+/// loaded before still does. Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.
