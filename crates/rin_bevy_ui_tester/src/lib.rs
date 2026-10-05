@@ -11,6 +11,7 @@ extern crate alloc;
 #[cfg(feature = "record")]
 pub mod capture;
 pub mod check;
+pub mod extension;
 pub mod files;
 #[cfg(feature = "gallery")]
 pub mod gallery;
@@ -31,13 +32,17 @@ pub mod targets;
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
 pub use check::{
-    AppCheck, AppCheckField, AppCheckType, AppCheckValue, AppCheckVariant, Check, Comparison,
-    CountOf, FieldOf, ReflectAppCheck, SeveralAppCheckTypes, TextMatch, Value, app_check_type,
+    AppCheck, Check, Comparison, CountOf, FieldOf, ReflectAppCheck, TextMatch, Value,
     pick::{
         AppCheckForm, FieldValue, Picked, PickedForm, app_check_forms, checks_that_hold, node_at,
         subject_of, target_alternatives,
     },
     suggest::{DEFAULT_IGNORED, NoiseFilter, WorldSnapshot, suggest_checks},
+};
+pub use extension::{
+    AppCheckValue, AppField, AppSetup, AppSetupValue, AppTarget, AppTargetValue, AppType, AppValue,
+    AppVariant, AppView, AppViewValue, Extension, ReflectAppSetup, ReflectAppTarget,
+    ReflectAppView, Setup, SeveralAppTypes, View, app_type,
 };
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
 #[cfg(feature = "gallery")]
@@ -63,12 +68,11 @@ pub use recorder::{
 };
 pub use scenario::{CheckResult, IntoCheckResult, Modifiers, NamedCheck, Scenario, Step};
 pub use script::{
-    ExportError, FORMAT_VERSION, HookRegistry, LoadError, OLDEST_FORMAT_VERSION, Registry, Script,
-    Setup, export_ron,
+    ExportError, FORMAT_VERSION, LoadError, OLDEST_FORMAT_VERSION, Registry, Script, export_ron,
 };
 pub use session::{
     Checkpoint, CheckpointTaken, DEFAULT_CHECKPOINT_KEY, LoggedSteps, RecordedEvent, RecordedKind,
     SavedSession, SessionConfig, SessionError, SessionHooks, SessionPlugin, SessionRecorder,
     SessionSystems, StepOptions, read_log, steps_from_events,
 };
-pub use targets::{NotUnderTest, ResolvedTarget, Target, TargetResolvers, resolve};
+pub use targets::{NotUnderTest, ResolvedTarget, Target, resolve};

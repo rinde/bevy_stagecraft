@@ -26,7 +26,7 @@ use crate::{
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems},
     probe::check_hover,
     scenario::{ORIGIN, Scenario, Step},
-    targets::{ResolvedTarget, TargetResolvers, resolve},
+    targets::{ResolvedTarget, resolve},
 };
 
 /// How a step or a check ended.
@@ -96,6 +96,8 @@ pub struct ScenarioReport {
     pub frames: u32,
     /// Whether the script and the expectations are done.
     pub finished: bool,
+    /// Why the scenario's setup failed, if it did; no step plays then.
+    pub setup_failure: Option<String>,
 }
 
 impl ScenarioReport {
@@ -103,6 +105,7 @@ impl ScenarioReport {
     #[must_use]
     pub fn passed(&self) -> bool {
         self.finished
+            && self.setup_failure.is_none()
             && self.steps.iter().all(|record| record.outcome.is_pass())
             && self.checks.iter().all(|record| record.outcome.is_pass())
     }
@@ -127,7 +130,12 @@ impl ScenarioReport {
                 Outcome::Fail(message) => Some(format!("check `{}`: {message}", record.name)),
                 Outcome::Pass | Outcome::Skipped => None,
             });
-        steps.chain(checks).collect()
+        self.setup_failure
+            .iter()
+            .map(|message| format!("setup: {message}"))
+            .chain(steps)
+            .chain(checks)
+            .collect()
     }
 }
 
@@ -139,8 +147,7 @@ pub enum ScenarioSystems {
     Play,
 }
 
-/// Registers [`ScenarioPlayer`], [`ScenarioReport`], [`TargetResolvers`] and
-/// the system that advances the script. Needs `SyntheticInputPlugin`, which
+/// Registers [`ScenarioPlayer`], [`ScenarioReport`] and the system that advances the script. Needs `SyntheticInputPlugin`, which
 /// [`HeadlessPlugins`] includes.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScenarioPlayerPlugin;
@@ -149,7 +156,6 @@ impl Plugin for ScenarioPlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ScenarioPlayer>()
             .init_resource::<ScenarioReport>()
-            .init_resource::<TargetResolvers>()
             .add_systems(
                 PreUpdate,
                 play.in_set(ScenarioSystems::Play)
@@ -216,6 +222,8 @@ struct Running {
 pub struct ScenarioPlayer {
     /// Waiting to begin on the next frame.
     pending: Option<Scenario>,
+    /// Why the setup of the scenario waiting to begin failed, if it did.
+    setup_failure: Option<String>,
     /// Being played.
     running: Option<Running>,
 }
@@ -226,6 +234,17 @@ impl ScenarioPlayer {
     pub fn start(&mut self, scenario: Scenario) {
         self.running = None;
         self.pending = Some(scenario);
+        self.setup_failure = None;
+    }
+
+    /// Starts `scenario` with the outcome of its setup
+    /// ([`Scenario::run_setup`]): as [`ScenarioPlayer::start`] does when it
+    /// built the world, and otherwise as a run that fails on the next frame
+    /// with every step skipped and `message` as the report's
+    /// [`ScenarioReport::setup_failure`].
+    pub fn start_after_setup(&mut self, scenario: Scenario, setup: Result<bool, String>) {
+        self.start(scenario);
+        self.setup_failure = setup.err();
     }
 
     /// Whether a scenario is waiting to begin or still being played.
@@ -252,6 +271,7 @@ impl ScenarioPlayer {
     pub fn stop(&mut self) {
         self.pending = None;
         self.running = None;
+        self.setup_failure = None;
     }
 
     /// How many steps have begun, which is also the index of the next one.
@@ -320,44 +340,56 @@ fn record_check(report: &mut ScenarioReport, name: &str, kind: CheckKind, outcom
 }
 
 impl ScenarioPlayer {
+    /// Starts `scenario`: a fresh report with every step not yet reached,
+    /// or, when its setup failed, a finished report saying so.
+    fn begin(&mut self, world: &mut World, report: &mut ScenarioReport, scenario: Scenario) {
+        *report = ScenarioReport {
+            name: scenario.name().into(),
+            steps: scenario
+                .script()
+                .iter()
+                .map(|step| StepRecord {
+                    step: step.clone(),
+                    outcome: Outcome::Skipped,
+                    frame: 0,
+                })
+                .collect(),
+            ..ScenarioReport::default()
+        };
+        if let Some(message) = self.setup_failure.take() {
+            report.setup_failure = Some(message);
+            report.frames = 1;
+            report.finished = true;
+            return;
+        }
+        // What the script last did beats where a real window thinks the
+        // cursor is, so a gallery restart does not depend on the mouse.
+        let cursor = world
+            .get_resource::<SyntheticInput>()
+            .and_then(SyntheticInput::cursor)
+            .or_else(|| {
+                world
+                    .query_filtered::<&Window, bevy::ecs::query::With<PrimaryWindow>>()
+                    .iter(world)
+                    .next()
+                    .and_then(Window::cursor_position)
+            })
+            .unwrap_or(ORIGIN);
+        self.running = Some(Running {
+            scenario,
+            next_step: 0,
+            ops: VecDeque::new(),
+            cursor,
+            aborted: false,
+            expected: None,
+            expect_waited: 0,
+        });
+    }
+
     /// Does the work of one frame.
     fn advance(&mut self, world: &mut World, report: &mut ScenarioReport, settled: bool) {
         if let Some(scenario) = self.pending.take() {
-            *report = ScenarioReport {
-                name: scenario.name().into(),
-                steps: scenario
-                    .script()
-                    .iter()
-                    .map(|step| StepRecord {
-                        step: step.clone(),
-                        outcome: Outcome::Skipped,
-                        frame: 0,
-                    })
-                    .collect(),
-                ..ScenarioReport::default()
-            };
-            // What the script last did beats where a real window thinks the
-            // cursor is, so a gallery restart does not depend on the mouse.
-            let cursor = world
-                .get_resource::<SyntheticInput>()
-                .and_then(SyntheticInput::cursor)
-                .or_else(|| {
-                    world
-                        .query_filtered::<&Window, bevy::ecs::query::With<PrimaryWindow>>()
-                        .iter(world)
-                        .next()
-                        .and_then(Window::cursor_position)
-                })
-                .unwrap_or(ORIGIN);
-            self.running = Some(Running {
-                scenario,
-                next_step: 0,
-                ops: VecDeque::new(),
-                cursor,
-                aborted: false,
-                expected: None,
-                expect_waited: 0,
-            });
+            self.begin(world, report, scenario);
         }
         let Some(run) = self.running.as_mut() else {
             return;
@@ -691,19 +723,21 @@ impl Scenario {
     /// Plays the scenario in `app`, which needs [`HeadlessPlugins`] (or the
     /// equivalent) and, if [`ScenarioPlayerPlugin`] is not there yet, gets it
     /// even after the app is finished.
-    /// Runs the setup hook and settles the UI first, then returns the report.
+    /// Builds the world with the scenario's setup and settles the UI first,
+    /// then returns the report; a setup that fails fails the report, with
+    /// every step skipped.
     pub fn run_in(&self, app: &mut App) -> ScenarioReport {
         if !app.world().contains_resource::<ScenarioPlayer>() {
             // `add_plugins` refuses once the app is finished, but the app is
             // allowed to gain systems and resources, so build it by hand.
             Plugin::build(&ScenarioPlayerPlugin, app);
         }
-        self.run_setup(app.world_mut());
+        let setup = self.run_setup(app.world_mut());
         for _ in 0..SETTLE_FRAMES {
             app.update();
         }
         if let Some(mut player) = app.world_mut().get_resource_mut::<ScenarioPlayer>() {
-            player.start(self.clone());
+            player.start_after_setup(self.clone(), setup);
         }
         while app
             .world()

@@ -82,8 +82,11 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
             window.resolution.set(pixels(width), pixels(height));
         }
     }
-    entry.scenario.run_setup(world);
-    entry.scenario.run_view(world);
+    let setup = entry.scenario.run_setup(world);
+    let view = match &setup {
+        Ok(_) => entry.scenario.run_view(world),
+        Err(_) => Ok(false),
+    };
     world.insert_resource(ScenarioReport {
         name: entry.scenario.name().into(),
         ..ScenarioReport::default()
@@ -94,7 +97,12 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     state.taken_over = false;
     state.step = None;
     state.tick = 0;
-    state.status.clear();
+    state.status = match (&setup, view) {
+        (Err(error), _) => format!("Setup failed: {error}"),
+        (Ok(_), Err(error)) => format!("View failed: {error}"),
+        (Ok(_), Ok(_)) => String::new(),
+    };
+    state.setup = setup;
 }
 
 /// A window dimension as the `f32` Bevy's window resolution takes. Sizes above
@@ -491,7 +499,7 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
             if let (Some(scenario), Some(mut player)) =
                 (scenario, world.get_resource_mut::<ScenarioPlayer>())
             {
-                player.start(scenario);
+                player.start_after_setup(scenario, state.setup.clone());
             }
             state.phase = GalleryPhase::Running;
         }

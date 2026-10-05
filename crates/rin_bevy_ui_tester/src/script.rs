@@ -1,15 +1,15 @@
-//! Scenarios as data: the serialisable [`Script`], the registries that give
-//! its names meaning, and reading and writing RON.
+//! Scenarios as data: the serialisable [`Script`], the [`Registry`] of types
+//! it is read against, and reading and writing RON.
 //!
 //! A scenario written in Rust and a `.ron` file are two spellings of the same
-//! [`Script`]. Closures cannot be serialised, so a script refers to setups,
-//! views and app-defined targets by name, and a [`Registry`] maps those
-//! names to code. The app's own checks are values of its reflected check
-//! type (see [`crate::AppCheck`]), read against the registry's types. Loading
-//! a script that names something the registry lacks is an error, never a
-//! silent skip.
+//! [`Script`]. Closures cannot be serialised, so whatever is the app's own
+//! (its setups, views, targets and checks) is a value of one of its reflected
+//! enums (see [`crate::extension`]), written inside `App(..)` and read
+//! against the registry's types when the script loads. Nothing is looked up
+//! by a name. Loading a script whose values or types the registry cannot
+//! read is an error, never a silent skip.
 
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::sync::Arc;
 use core::fmt;
 
 use bevy::{
@@ -30,13 +30,14 @@ use bevy::{
 use ron::{Options, extensions::Extensions, ser::PrettyConfig};
 use serde::{Deserialize, Serialize};
 
+pub use crate::extension::{Setup, View};
 use crate::{
-    check::{
-        AppCheckType, Check, NO_STATE_PROBE, Problem, SeveralAppCheckTypes, app_check_type,
-        bad_app_check, did_you_mean,
+    check::{Check, NO_STATE_PROBE, Problem, did_you_mean},
+    extension::{
+        AppType, Extension, SeveralAppTypes, app_type, bad_app_value, no_app_type, several_message,
     },
-    scenario::{HookFn, Scenario, Step},
-    targets::{Target, TargetResolvers},
+    scenario::{Scenario, Step},
+    targets::Target,
 };
 
 /// The script format this crate writes. A file of a version older than
@@ -48,8 +49,12 @@ use crate::{
 /// resources, components, states, widget states, text), `All`, `Any` and
 /// `Within`, and the app's own checks as `App(..)`. Version 3 also dropped
 /// checks referred to by name (a bare `"name"`, `Named(..)` and
-/// `Custom(..)`): an older file that uses them is refused with a load error
-/// that says what to write instead. Any other older file still loads.
+/// `Custom(..)`), then setups, views and targets referred to by name or
+/// resolver (`Named(..)` and `File(..)` setups, a view's bare name and
+/// `Custom(resolver: .., argument: ..)` targets), which became the app's own
+/// values inside `App(..)` as well: a file that uses an old form is refused
+/// with a load error that says what to write instead. Any other older file
+/// still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.
@@ -65,19 +70,6 @@ const fn check_version(found: u32) -> Result<(), LoadError> {
             supported: FORMAT_VERSION,
         })
     }
-}
-
-/// Where a scenario's starting state comes from. The crate stores and passes
-/// this along and never interprets it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum Setup {
-    /// A function the app registered under this name (see
-    /// [`Registry::setups`]).
-    Named(String),
-    /// A file next to the script, which the app knows how to load; rails uses
-    /// its RON save files.
-    File(String),
 }
 
 /// A scenario as plain data: what is written to and read from a `.ron` file.
@@ -102,13 +94,12 @@ pub struct Script {
     /// The window size the scenario wants, in logical pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_size: Option<(u32, u32)>,
-    /// Where the starting state comes from.
+    /// Where the starting state comes from: one of the app's setups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<Setup>,
-    /// The name of a registered view hook, which arranges how the world is
-    /// shown.
+    /// How the world is shown: one of the app's views.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view: Option<String>,
+    pub view: Option<View>,
     /// What the scenario does.
     pub steps: Vec<Step>,
     /// Checks that run once the steps have finished. A recorded session
@@ -120,8 +111,8 @@ pub struct Script {
 
 impl Script {
     /// Parses RON text. Files may leave out the `Some(..)` around optional
-    /// fields. Only the format version is checked here; names are resolved by
-    /// [`Scenario::from_script`].
+    /// fields. Only the format version is checked here; the app's values and
+    /// the types checks name are read by [`Scenario::from_script`].
     ///
     /// # Errors
     ///
@@ -205,17 +196,6 @@ pub enum LoadError {
         /// The newest version this crate reads, [`FORMAT_VERSION`].
         supported: u32,
     },
-    /// A setup is named that nobody registered.
-    UnknownSetup(String),
-    /// A view is named that nobody registered.
-    UnknownView(String),
-    /// A custom target names a resolver that nobody registered.
-    UnknownTarget {
-        /// The resolver's name.
-        resolver: String,
-        /// Where it was named, for example `step 3`.
-        used_by: String,
-    },
     /// A check names a type that is not in [`Registry::types`], or that is
     /// not the kind of type the check needs.
     UnknownType {
@@ -246,23 +226,36 @@ pub enum LoadError {
         /// Why it does not fit.
         message: String,
     },
-    /// More than one type in [`Registry::types`] carries
-    /// `#[reflect(AppCheck)]`, and an app check cannot tell which it is.
-    SeveralAppCheckTypes {
-        /// Where the app check is, for example `step 3`.
+    /// More than one type in [`Registry::types`] carries the attribute of
+    /// one extension point, such as `#[reflect(AppSetup)]`, and a value
+    /// written inside `App(..)` cannot tell which it is.
+    SeveralAppTypes {
+        /// The extension point.
+        extension: Extension,
+        /// Where the value is, for example `step 3` or `the setup`.
         used_by: String,
         /// The full type paths of every such type, in order.
         types: Vec<String>,
     },
-    /// An app check does not read as the app's check type: a misspelt
-    /// variant, or a wrong argument.
-    BadAppCheck {
-        /// Where it was written, for example `step 3`.
+    /// A value is written inside `App(..)`, but no type in
+    /// [`Registry::types`] carries the extension point's attribute.
+    NoAppType {
+        /// The extension point.
+        extension: Extension,
+        /// Where the value is, for example `step 3` or `the setup`.
         used_by: String,
-        /// The check as written.
-        check: String,
-        /// The app's check type.
-        type_name: String,
+    },
+    /// A value inside `App(..)` does not read as the app's type for its
+    /// extension point: a misspelt variant, or a wrong argument.
+    BadAppValue {
+        /// The extension point.
+        extension: Extension,
+        /// Where it was written, for example `step 3` or `the view`.
+        used_by: String,
+        /// The value as written.
+        value: String,
+        /// The app's type, by its short type path.
+        type_name: &'static str,
         /// Why it does not read.
         message: String,
         /// The type's variants with the types of their fields, as a file
@@ -270,10 +263,17 @@ pub enum LoadError {
         variants: Vec<String>,
     },
     /// A check cannot run for another reason, such as a type that is
-    /// registered but not as a resource, or an app check when no type is
-    /// one.
+    /// registered but not as a resource.
     BadCheck {
         /// Where the check is, for example `step 3`.
+        used_by: String,
+        /// What is wrong.
+        message: String,
+    },
+    /// The app's setup, view or a target cannot be used for another reason,
+    /// such as a type that cannot be built from reflection.
+    Invalid {
+        /// Where it is, for example `step 3` or `the setup`.
         used_by: String,
         /// What is wrong.
         message: String,
@@ -294,19 +294,6 @@ impl fmt::Display for LoadError {
             Self::UnsupportedVersion { found, supported } => write!(
                 f,
                 "script format version {found} is not supported; this crate reads versions {OLDEST_FORMAT_VERSION} to {supported}"
-            ),
-            Self::UnknownSetup(name) => {
-                write!(
-                    f,
-                    "the script names setup `{name}`, which is not registered"
-                )
-            }
-            Self::UnknownView(name) => {
-                write!(f, "the script names view `{name}`, which is not registered")
-            }
-            Self::UnknownTarget { resolver, used_by } => write!(
-                f,
-                "{used_by} uses a custom target `{resolver}`, which has no registered resolver"
             ),
             Self::Io { path, message } => write!(f, "cannot read {path}: {message}"),
             Self::UnknownType {
@@ -329,88 +316,56 @@ impl fmt::Display for LoadError {
                 used_by,
                 message,
             } => write!(f, "{used_by}: `{value}` does not fit: {message}"),
-            Self::SeveralAppCheckTypes { used_by, types } => {
-                write!(f, "{used_by}: {}", SeveralAppCheckTypes(types.clone()))
-            }
-            Self::BadAppCheck {
+            Self::SeveralAppTypes {
+                extension,
                 used_by,
-                check,
+                types,
+            } => write!(f, "{used_by}: {}", several_message(*extension, types)),
+            Self::NoAppType { extension, used_by } => {
+                write!(f, "{used_by}: {}", no_app_type(*extension))
+            }
+            Self::BadAppValue {
+                used_by,
+                value,
                 type_name,
                 message,
                 variants,
+                ..
             } => write!(
                 f,
                 "{used_by}: {}",
-                bad_app_check(check, type_name, message, variants)
+                bad_app_value(value, type_name, message, variants)
             ),
-            Self::BadCheck { used_by, message } => write!(f, "{used_by}: {message}"),
+            Self::BadCheck { used_by, message } | Self::Invalid { used_by, message } => {
+                write!(f, "{used_by}: {message}")
+            }
         }
     }
 }
 
 impl core::error::Error for LoadError {}
 
-/// Hooks over the world, by name: what [`Setup::Named`] and a script's view
-/// refer to.
-#[derive(Clone, Default)]
-pub struct HookRegistry {
-    /// Hooks by name.
-    hooks: BTreeMap<String, Arc<HookFn>>,
-}
-
-impl fmt::Debug for HookRegistry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.hooks.keys()).finish()
-    }
-}
-
-impl HookRegistry {
-    /// Registers `hook` under `name`, replacing any earlier one.
-    pub fn register(
-        &mut self,
-        name: impl Into<String>,
-        hook: impl Fn(&mut World) + Send + Sync + 'static,
-    ) {
-        self.hooks.insert(name.into(), Arc::new(hook));
-    }
-
-    /// Whether a hook is registered under `name`.
-    #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
-        self.hooks.contains_key(name)
-    }
-
-    /// The hook called `name`.
-    pub(crate) fn get(&self, name: &str) -> Option<Arc<HookFn>> {
-        self.hooks.get(name).cloned()
-    }
-}
-
-/// Everything a script's names and types are resolved against when it loads.
+/// The types a script is read against when it loads.
 ///
-/// An app adds its setups, views and target resolvers, then loads files with
-/// [`Scenario::from_ron_with`] and installs the resolvers into the world it
-/// plays in with [`Registry::install`].
+/// An app loads files with [`Scenario::from_ron_with`], and adds the types
+/// to the app it plays them in with [`Registry::install`] when it does not
+/// share one registry with it.
 ///
 /// The registry carries the types, so a script is checked whole when it
-/// loads, with no world at hand: a misspelt type, field, value or app check
-/// is a [`LoadError`] rather than a failure part way through a run. The
-/// app's check type (see [`crate::AppCheck`]) is found there too.
+/// loads, with no world at hand: a misspelt type, field or value, or an app
+/// setup, view, target or check that does not read as the app's type, is a
+/// [`LoadError`] rather than a failure part way through a run. The app's
+/// types for its setups, views, targets and checks (see
+/// [`crate::extension`]) are found there too; nothing is registered by name.
 #[derive(Debug, Clone)]
 pub struct Registry {
-    /// Named setups, for [`Setup::Named`].
-    pub setups: HookRegistry,
-    /// Named views.
-    pub views: HookRegistry,
-    /// Resolvers for [`Target::Custom`].
-    pub targets: TargetResolvers,
     /// The types checks may name, such as [`Check::Count`] and
-    /// [`Check::Resource`], and the app's check type that [`Check::App`]
-    /// is read as: a script is checked against them when it loads.
+    /// [`Check::Resource`], and the app's types that values inside `App(..)`
+    /// are read as: a script is checked against them when it loads.
     ///
     /// Starts with every type that derives `Reflect`, as Bevy registers them
     /// by itself (an `App` does the same with Bevy's `reflect_auto_register`
-    /// feature, which is on by default), so the app's check type needs no
+    /// feature, which is on by default), so the app's types need no
     /// registration call. Add a type that is not found that way (a generic
     /// one, say) with [`Registry::register_type`], or share the app's own
     /// registry with [`Registry::with_types_of`].
@@ -421,12 +376,7 @@ impl Default for Registry {
     fn default() -> Self {
         let types = TypeRegistryArc::default();
         types.write().register_derived_types();
-        Self {
-            setups: HookRegistry::default(),
-            views: HookRegistry::default(),
-            targets: TargetResolvers::default(),
-            types,
-        }
+        Self { types }
     }
 }
 
@@ -445,15 +395,15 @@ impl Registry {
         types.register_type_data::<S, ReflectState>();
     }
 
-    /// The app's check type in [`Registry::types`], with its variants and
-    /// the types of their fields, for offering app checks with a form; `None`
-    /// when no type carries `#[reflect(AppCheck)]`.
+    /// The app's type for `extension` in [`Registry::types`], with its
+    /// variants and the types of their fields, for offering values with a
+    /// form; `None` when no type carries the extension point's attribute.
     ///
     /// # Errors
     ///
-    /// [`SeveralAppCheckTypes`] when more than one does.
-    pub fn app_check_type(&self) -> Result<Option<AppCheckType>, SeveralAppCheckTypes> {
-        app_check_type(&self.types.read())
+    /// [`SeveralAppTypes`] when more than one does.
+    pub fn app_type(&self, extension: Extension) -> Result<Option<AppType>, SeveralAppTypes> {
+        app_type(&self.types.read(), extension)
     }
 
     /// Uses the type registry of `world`'s app, shared rather than copied,
@@ -466,15 +416,11 @@ impl Registry {
         self
     }
 
-    /// Makes the registered target resolvers available in `world`, where the
-    /// player looks for them, and adds the registered types the app's type
-    /// registry lacks, where the checks look for them. A type the app has
-    /// already registered keeps its registration and gains the type data the
-    /// checks need (such as [`ReflectState`]) that it lacks.
+    /// Adds the registered types the app's type registry lacks to `world`,
+    /// where the checks look for them. A type the app has already registered
+    /// keeps its registration and gains the type data the checks need (such
+    /// as [`ReflectState`]) that it lacks.
     pub fn install(&self, world: &mut World) {
-        world
-            .get_resource_or_insert_with(TargetResolvers::default)
-            .extend_from(&self.targets);
         let app = world.get_resource_or_init::<AppTypeRegistry>();
         // Sharing one registry, the app already has every type; locking it
         // twice would deadlock.
@@ -517,59 +463,48 @@ fn fill_type_data(theirs: &mut TypeRegistration, ours: &TypeRegistration) {
     fill::<ReflectDefault>(theirs, ours);
 }
 
-/// Resolves every name in `script` against `registry`, and reads its app
-/// checks as the app's check type.
+/// Reads every value inside `App(..)` in `script` (its setup, its view, the
+/// targets of its steps and checks, and its checks) as the app's type in
+/// `registry`, and checks that what each check names is there.
 pub(crate) fn build_scenario(
     mut script: Script,
     registry: &Registry,
 ) -> Result<Scenario, LoadError> {
     check_version(script.format_version)?;
-    let setup = match &script.setup {
-        Some(Setup::Named(name)) => Some(
-            registry
-                .setups
-                .get(name)
-                .ok_or_else(|| LoadError::UnknownSetup(name.clone()))?,
-        ),
-        Some(Setup::File(_)) | None => None,
-    };
-    let view = match &script.view {
-        Some(name) => Some(
-            registry
-                .views
-                .get(name)
-                .ok_or_else(|| LoadError::UnknownView(name.clone()))?,
-        ),
-        None => None,
-    };
     let types = registry.types.read();
+    if let Some(setup) = &mut script.setup {
+        setup
+            .type_against(&types)
+            .map_err(|problem| load_error(problem, "the setup", false))?;
+    }
+    if let Some(view) = &mut script.view {
+        view.type_against(&types)
+            .map_err(|problem| load_error(problem, "the view", false))?;
+    }
     for (index, step) in script.steps.iter_mut().enumerate() {
         let used_by = format!("step {index}");
         for target in step_targets(step) {
-            require_resolver(registry, target, &used_by)?;
+            target
+                .type_against(&types)
+                .map_err(|problem| load_error(problem, &used_by, false))?;
         }
         if let Step::Check(check) = step {
-            resolve_check(registry, &types, check, &used_by)?;
+            resolve_check(&types, check, &used_by)?;
         }
     }
     for check in &mut script.expect {
-        resolve_check(registry, &types, check, "the expect list")?;
+        resolve_check(&types, check, "the expect list")?;
     }
     drop(types);
-    Ok(Scenario::assemble(script, setup, view))
+    Ok(Scenario::assemble(script))
 }
 
-/// Reads the app checks in `check`, and in every check inside it, as the
-/// app's check type, and checks that what each part names is there.
-fn resolve_check(
-    registry: &Registry,
-    types: &TypeRegistry,
-    check: &mut Check,
-    used_by: &str,
-) -> Result<(), LoadError> {
+/// Reads the app's values in `check`, and in every check inside it, as the
+/// app's types, and checks that what each part names is there.
+fn resolve_check(types: &TypeRegistry, check: &mut Check, used_by: &str) -> Result<(), LoadError> {
     check
-        .type_app_checks(types)
-        .map_err(|problem| load_error(problem, used_by))?;
+        .type_app_values(types)
+        .map_err(|problem| load_error(problem, used_by, true))?;
     for part in check.parts() {
         if let Check::Named(name) = part {
             return Err(LoadError::BadCheck {
@@ -579,17 +514,15 @@ fn resolve_check(
                 ),
             });
         }
-        if let Some(target) = part.target() {
-            require_resolver(registry, target, used_by)?;
-        }
         part.problem(types)
-            .map_err(|problem| load_error(problem, used_by))?;
+            .map_err(|problem| load_error(problem, used_by, true))?;
     }
     Ok(())
 }
 
-/// The load error for a check that cannot run, naming where it is.
-fn load_error(problem: Problem, used_by: &str) -> LoadError {
+/// The load error for a value or check that cannot be used, naming where it
+/// is; `in_check` says whether a check holds it.
+fn load_error(problem: Problem, used_by: &str, in_check: bool) -> LoadError {
     let used_by = used_by.to_owned();
     match problem {
         Problem::UnknownType { name, suggestions } => LoadError::UnknownType {
@@ -612,38 +545,33 @@ fn load_error(problem: Problem, used_by: &str) -> LoadError {
             used_by,
             message,
         },
-        Problem::SeveralAppCheckTypes(types) => LoadError::SeveralAppCheckTypes { used_by, types },
-        Problem::BadAppCheck {
+        Problem::SeveralAppTypes { extension, types } => LoadError::SeveralAppTypes {
+            extension,
+            used_by,
+            types,
+        },
+        Problem::NoAppType(extension) => LoadError::NoAppType { extension, used_by },
+        Problem::BadAppValue {
+            extension,
             written,
             type_name,
             message,
             variants,
-        } => LoadError::BadAppCheck {
+        } => LoadError::BadAppValue {
+            extension,
             used_by,
-            check: written,
+            value: written,
             type_name,
             message,
             variants,
         },
-        Problem::Other(message) => LoadError::BadCheck { used_by, message },
-    }
-}
-
-/// Refuses a custom target whose resolver nobody registered.
-fn require_resolver(registry: &Registry, target: &Target, used_by: &str) -> Result<(), LoadError> {
-    match target {
-        Target::Custom { resolver, .. } if !registry.targets.contains(resolver) => {
-            Err(LoadError::UnknownTarget {
-                resolver: resolver.clone(),
-                used_by: used_by.to_owned(),
-            })
-        }
-        _ => Ok(()),
+        Problem::Other(message) if in_check => LoadError::BadCheck { used_by, message },
+        Problem::Other(message) => LoadError::Invalid { used_by, message },
     }
 }
 
 /// The targets a step acts on.
-fn step_targets(step: &Step) -> Vec<&Target> {
+fn step_targets(step: &mut Step) -> Vec<&mut Target> {
     match step {
         Step::MoveTo(target) | Step::Glide { target, .. } => vec![target],
         Step::Drag { from, to, .. } => vec![from, to],

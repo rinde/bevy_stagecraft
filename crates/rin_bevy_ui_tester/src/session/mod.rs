@@ -13,21 +13,25 @@
 //! * a press and release in place becomes a `Click`, a straight press, move
 //!   and release a `Drag`;
 //! * a click on a UI node with a label becomes `Target::text(..)`; anything
-//!   else is offered to the app's [`SessionHooks::resolve_target`] hook and
-//!   stays `screen(..)` if the app has no answer;
+//!   else is offered to the app's [`AppTarget::at`](crate::AppTarget::at)
+//!   and stays `screen(..)` if the app has no answer;
 //! * idle time beyond a threshold is shortened to a short `Wait`.
 //!
 //! # What the app plugs in
 //!
-//! The crate knows nothing about the app, so [`SessionHooks`] is the
-//! extension point:
+//! The crate knows nothing about the app, so it asks the app's own reflected
+//! types (see [`crate::extension`]), found with no registration call:
 //!
-//! * [`SessionHooks::capture_setup`] runs on start and writes whatever the
-//!   app needs to get back to this state (rails writes a save file into the
-//!   directory), returning what the script's `setup` should say;
-//! * [`SessionHooks::capture_view`] names the view the app is in;
-//! * [`SessionHooks::resolve_target`] turns a click position into an
-//!   app-defined target (rails turns ground clicks into lattice points);
+//! * [`AppSetup::capture`](crate::AppSetup::capture) runs on start and turns
+//!   the state into one of the app's setups, writing whatever it needs into
+//!   the directory (rails writes a save file); that is the script's `setup`;
+//! * [`AppView::current`](crate::AppView::current) names the view the app is
+//!   in, which is the script's `view`;
+//! * [`AppTarget::at`](crate::AppTarget::at) turns a click position into one
+//!   of the app's targets (rails turns ground clicks into lattice points).
+//!
+//! [`SessionHooks`] holds the rest:
+//!
 //! * [`SessionHooks::noise_filter`] says which types the world snapshots
 //!   leave out;
 //! * [`SessionHooks::checkpoint_key`] picks the checkpoint key (F8 unless
@@ -112,6 +116,7 @@ pub use log::{LoggedSteps, RecordedEvent, RecordedKind, StepOptions, read_log, s
 use crate::{
     check::Check,
     check::suggest::{WorldSnapshot, suggest_checks},
+    extension::{Setup, View, capture_setup, current_view},
     headless::FRAME_STEP,
     scenario::Step,
     script::{FORMAT_VERSION, Script},
@@ -137,7 +142,8 @@ pub enum SessionSystems {
 /// Where recordings go and what the app plugs in.
 #[derive(Resource, Debug, Clone)]
 pub struct SessionConfig {
-    /// The directory the script and whatever the setup hook wrote go to.
+    /// The directory the script and whatever the app's setup capture wrote
+    /// go to.
     pub dir: PathBuf,
     /// What the app plugs in.
     pub hooks: SessionHooks,
@@ -348,14 +354,14 @@ enum Request {
 struct Active {
     /// The scenario's name.
     name: String,
-    /// File name without extension, shared with the setup hook.
+    /// File name without extension, shared with the app's setup capture.
     stem: String,
     /// Window size at the start, in logical pixels.
     window_size: Option<(u32, u32)>,
-    /// What the setup hook said.
-    setup: Option<crate::script::Setup>,
-    /// What the view hook said.
-    view: Option<String>,
+    /// The app's setup, as captured at the start.
+    setup: Option<Setup>,
+    /// The app's view at the start.
+    view: Option<View>,
     /// The world at the last checkpoint, or at the start before the first.
     before: WorldSnapshot,
     /// What each checkpoint so far suggested, in order.
@@ -437,13 +443,14 @@ impl SessionRecorder {
 }
 
 /// Starts recording a session called `name`, straight away: the app's setup
-/// hook runs now and the state it captures is where playback will begin.
+/// capture ([`AppSetup::capture`](crate::AppSetup::capture)) runs now and the
+/// state it captures is where playback will begin.
 ///
 /// # Errors
 ///
 /// [`SessionError`] when a session is already on, when the plugin is not
-/// added, or when the setup hook or the directory fails; nothing is
-/// recorded then.
+/// added, or when the app's setup capture, its view or the directory fails;
+/// nothing is recorded then.
 pub fn start(world: &mut World, name: &str) -> Result<(), SessionError> {
     with_recorder(world, |world, recorder, config| {
         recorder.begin(world, config, name)
@@ -613,7 +620,7 @@ fn record_session(world: &mut World) {
     let Some(mut recorder) = world.remove_resource::<SessionRecorder>() else {
         return;
     };
-    recorder.log(world, &config);
+    recorder.log(world);
     match recorder.request.take() {
         Some(Request::Start(name)) => {
             let result = recorder.begin(world, &config, &name);
@@ -662,7 +669,7 @@ fn unread<M: Message + Clone>(world: &World, cursor: &mut MessageCursor<M>) -> V
 
 impl SessionRecorder {
     /// Logs this update's real input, or skips it when not recording.
-    fn log(&mut self, world: &mut World, config: &SessionConfig) {
+    fn log(&mut self, world: &mut World) {
         let moves = unread(world, &mut self.cursors.moved);
         let buttons = unread(world, &mut self.cursors.buttons);
         let wheel = unread(world, &mut self.cursors.wheel);
@@ -708,7 +715,7 @@ impl SessionRecorder {
                     button: press.button,
                     state: press.state,
                     position,
-                    target: target::classify(world, &config.hooks, position),
+                    target: target::classify(world, position),
                 },
             });
         }
@@ -763,11 +770,11 @@ impl SessionRecorder {
             SessionError::new(format!("cannot create {}: {error}", config.dir.display()))
         })?;
         let stem = free_stem(&config.dir, name);
-        let setup = config
-            .hooks
-            .run_capture_setup(world, &config.dir, &stem)
-            .map_err(|error| SessionError::new(format!("the setup hook failed: {error}")))?;
-        let view = config.hooks.run_capture_view(world);
+        let setup = capture_setup(world, &config.dir, &stem).map_err(|error| {
+            SessionError::new(format!("the app's setup could not be captured: {error}"))
+        })?;
+        let view = current_view(world)
+            .map_err(|error| SessionError::new(format!("the app's view is unknown: {error}")))?;
         let before = config.hooks.snapshot(world);
         let (_, cursor) = primary_window(world).unzip();
         let window_size = world

@@ -12,9 +12,9 @@
 mod common;
 
 use bevy::prelude::*;
-use common::{UiCheck, registry, spawn_ui};
+use common::{UiCheck, UiSetup, registry, spawn_ui};
 use rin_bevy_ui_tester::{
-    AppCheck, AppCheckField, Check, CheckResult, LoadError, Outcome, Probe, ReflectAppCheck,
+    AppCheck, AppField, Check, CheckResult, Extension, LoadError, Outcome, Probe, ReflectAppCheck,
     Registry, Scenario, Step, Target,
 };
 
@@ -73,7 +73,7 @@ fn an_app_check_in_a_file_is_found_with_no_registration_call_and_runs() {
 #[test]
 fn an_app_check_round_trips_through_ron_and_exports_stably() {
     let scenario = Scenario::new("round trip")
-        .setup_named("plain_ui", spawn_ui)
+        .app_setup(UiSetup::PlainUi)
         .steps([
             Step::check(Check::app(UiCheck::Found(Target::text("Pause")))),
             Step::check(!Check::app(UiCheck::ActivatedOnce)),
@@ -115,9 +115,10 @@ fn a_file_value_is_read_as_the_app_type_and_written_back_in_its_own_form() {
 #[test]
 fn a_misspelt_variant_is_a_load_error_naming_the_step_and_listing_the_variants() {
     let error = load("Check(App(Actvated(1)))").unwrap_err();
-    let LoadError::BadAppCheck {
+    let LoadError::BadAppValue {
+        extension,
         used_by,
-        check,
+        value,
         type_name,
         message,
         variants,
@@ -125,9 +126,10 @@ fn a_misspelt_variant_is_a_load_error_naming_the_step_and_listing_the_variants()
     else {
         panic!("{error:?}");
     };
+    assert_eq!(*extension, Extension::Check);
     assert_eq!(used_by, "step 1");
-    assert_eq!(check, "Actvated(1)");
-    assert_eq!(type_name, "UiCheck");
+    assert_eq!(value, "Actvated(1)");
+    assert_eq!(*type_name, "UiCheck");
     assert_eq!(
         message,
         "unknown variant `Actvated`, expected one of `ActivatedOnce`, `Activated`, `Found`, `ActivatedBetween`"
@@ -161,7 +163,7 @@ fn a_wrong_argument_is_a_load_error_naming_the_step_and_listing_the_variants() {
     ] {
         let error = load(steps).unwrap_err();
         assert!(
-            matches!(&error, LoadError::BadAppCheck { used_by, variants, .. }
+            matches!(&error, LoadError::BadAppValue { used_by, variants, .. }
                 if used_by == step && variants.len() == 4),
             "{steps}: {error:?}"
         );
@@ -179,7 +181,8 @@ fn a_second_app_check_type_is_a_load_error_naming_both() {
     .unwrap_err();
     assert_eq!(
         error,
-        LoadError::SeveralAppCheckTypes {
+        LoadError::SeveralAppTypes {
+            extension: Extension::Check,
             used_by: "the expect list".into(),
             types: vec![
                 "app_checks::OtherCheck".into(),
@@ -192,31 +195,37 @@ fn a_second_app_check_type_is_a_load_error_naming_both() {
         text.contains("`app_checks::OtherCheck` and `app_checks::common::UiCheck`"),
         "{text}"
     );
-    let several = registry.app_check_type().unwrap_err();
-    assert_eq!(several.0.len(), 2);
+    let several = registry.app_type(Extension::Check).unwrap_err();
+    assert_eq!(several.types.len(), 2);
 }
 
 #[test]
 fn an_app_check_with_no_app_check_type_is_a_load_error_saying_how_to_declare_one() {
     let registry = Registry {
         types: bevy::reflect::TypeRegistryArc::default(),
-        ..Registry::default()
     };
     let error = Scenario::from_ron_with(
         "(format_version: 3, name: \"x\", steps: [Check(App(Fine))])",
         &registry,
     )
     .unwrap_err();
-    assert!(
-        matches!(&error, LoadError::BadCheck { message, .. } if message.contains("#[reflect(AppCheck)]")),
-        "{error:?}"
+    assert_eq!(
+        error,
+        LoadError::NoAppType {
+            extension: Extension::Check,
+            used_by: "step 0".into()
+        }
     );
-    assert_eq!(registry.app_check_type(), Ok(None));
+    assert!(
+        error.to_string().contains("#[reflect(AppCheck)]"),
+        "{error}"
+    );
+    assert_eq!(registry.app_type(Extension::Check), Ok(None));
 }
 
 #[test]
 fn the_registry_lists_the_app_check_variants_and_their_field_types() {
-    let found = registry().app_check_type().unwrap().unwrap();
+    let found = registry().app_type(Extension::Check).unwrap().unwrap();
     assert_eq!(found.type_path, "app_checks::common::UiCheck");
     assert_eq!(found.short_type_path, "UiCheck");
     let names: Vec<&str> = found.variants.iter().map(|v| v.name.as_str()).collect();
@@ -232,7 +241,7 @@ fn the_registry_lists_the_app_check_variants_and_their_field_types() {
         found_target.type_path,
         "rin_bevy_ui_tester::targets::Target"
     );
-    let between: Vec<&AppCheckField> = found.variants[3].fields.iter().collect();
+    let between: Vec<&AppField> = found.variants[3].fields.iter().collect();
     assert_eq!(between[1].name.as_deref(), Some("at_most"));
     assert_eq!(between[1].short_type_path, "u32");
     assert!(found.variants[3].named_fields);

@@ -64,14 +64,15 @@ pub(super) enum Lookup {
 }
 
 /// The node `target` names: for a text target, the node showing the text;
-/// for a custom one, the widget its resolver reports.
+/// for one of the app's own, the widget its [`AppTarget`](crate::AppTarget)
+/// reports.
 pub(super) fn node(world: &World, target: &Target) -> Lookup {
     match target {
         Target::Text(text) => match text_node(world, text) {
             Ok(entity) => Lookup::Found(entity),
             Err(message) => Lookup::Missing(message),
         },
-        Target::Custom { .. } => match resolve(world, target) {
+        Target::App(_) => match resolve(world, target) {
             Ok(resolved) => resolved.widget.map_or_else(
                 || Lookup::NotANode(format!("{target:?} is a position, not a widget")),
                 Lookup::Found,

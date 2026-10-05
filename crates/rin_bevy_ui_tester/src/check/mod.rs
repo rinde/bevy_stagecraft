@@ -31,10 +31,7 @@ use ron::value::RawValue;
 use serde::{Deserialize, Serialize, de::DeserializeSeed};
 
 pub use self::{
-    app::{
-        AppCheck, AppCheckField, AppCheckType, AppCheckValue, AppCheckVariant, ReflectAppCheck,
-        SeveralAppCheckTypes, app_check_type,
-    },
+    app::{AppCheck, ReflectAppCheck},
     value::{Comparison, TextMatch, Value},
 };
 use self::{
@@ -43,6 +40,9 @@ use self::{
     widget::{Lookup, WidgetState},
 };
 use crate::{
+    extension::{
+        AppCheckValue, Extension, NO_CUSTOM_TARGET, bad_app_value, no_app_type, several_message,
+    },
     probe::{Probe, check_hover},
     scenario::{CheckResult, Scenario},
     targets::{Target, resolve},
@@ -300,8 +300,12 @@ fn parse(text: &str) -> Result<Check, String> {
     }
     options.from_str_seed(text, SpelledSeed).map_err(|error| {
         let message = error.code.to_string();
-        // A check nested in another has said this already.
-        if message.contains(FORMS) || message.contains(BY_NAME) {
+        // A check nested in another, or a target inside, has said this
+        // already.
+        if message.contains(FORMS)
+            || message.contains(BY_NAME)
+            || message.contains(NO_CUSTOM_TARGET)
+        {
             message
         } else if ["Named", "Custom"]
             .iter()
@@ -610,7 +614,7 @@ impl Check {
     }
 
     /// The target this check, not counting the checks inside it, looks at.
-    pub(crate) const fn target(&self) -> Option<&Target> {
+    const fn target_mut(&mut self) -> Option<&mut Target> {
         match self {
             Self::Hovered(target)
             | Self::Component { target, .. }
@@ -626,15 +630,18 @@ impl Check {
     }
 
     /// Reads every app check in this check, and in the checks inside it, as
-    /// the app's check type in `types`.
-    pub(crate) fn type_app_checks(&mut self, types: &TypeRegistry) -> Result<(), Problem> {
+    /// the app's check type in `types`, and every app target they look at as
+    /// the app's target type.
+    pub(crate) fn type_app_values(&mut self, types: &TypeRegistry) -> Result<(), Problem> {
         match self {
             Self::App(value) => value.type_against(types),
-            Self::Not(inner) | Self::Within(_, inner) => inner.type_app_checks(types),
+            Self::Not(inner) | Self::Within(_, inner) => inner.type_app_values(types),
             Self::All(checks) | Self::Any(checks) => checks
                 .iter_mut()
-                .try_for_each(|check| check.type_app_checks(types)),
-            _ => Ok(()),
+                .try_for_each(|check| check.type_app_values(types)),
+            leaf => leaf
+                .target_mut()
+                .map_or(Ok(()), |target| target.type_against(types)),
         }
     }
 
@@ -922,14 +929,24 @@ pub(crate) enum Problem {
         /// Why it does not fit.
         message: String,
     },
-    /// More than one registered type is an app check; their type paths.
-    SeveralAppCheckTypes(Vec<String>),
-    /// An app check does not read as the app's check type.
-    BadAppCheck {
-        /// The check as written.
+    /// More than one registered type is the app's type for an extension
+    /// point.
+    SeveralAppTypes {
+        /// The extension point.
+        extension: Extension,
+        /// Their type paths, in order.
+        types: Vec<String>,
+    },
+    /// No registered type is the app's type for an extension point.
+    NoAppType(Extension),
+    /// A value does not read as the app's type for its extension point.
+    BadAppValue {
+        /// The extension point.
+        extension: Extension,
+        /// The value as written.
         written: String,
-        /// The app's check type.
-        type_name: String,
+        /// The app's type, by its short type path.
+        type_name: &'static str,
         /// Why it does not read.
         message: String,
         /// The type's variants, as a file writes them.
@@ -955,31 +972,18 @@ impl Problem {
                 ..
             } => format!("{message}{}", did_you_mean(suggestions)),
             Self::BadValue { value, message } => format!("`{value}` does not fit: {message}"),
-            Self::SeveralAppCheckTypes(types) => app::several_message(types),
-            Self::BadAppCheck {
+            Self::SeveralAppTypes { extension, types } => several_message(*extension, types),
+            Self::NoAppType(extension) => no_app_type(*extension),
+            Self::BadAppValue {
                 written,
                 type_name,
                 message,
                 variants,
-            } => bad_app_check(written, type_name, message, variants),
+                ..
+            } => bad_app_value(written, type_name, message, variants),
             Self::Other(message) => message.clone(),
         }
     }
-}
-
-/// Why an app check does not read as the app's type, with the forms it can
-/// take.
-pub(crate) fn bad_app_check(
-    written: &str,
-    type_name: &str,
-    message: &str,
-    variants: &[String],
-) -> String {
-    let forms: Vec<String> = variants.iter().map(|form| format!("`{form}`")).collect();
-    format!(
-        "`{written}` is not a `{type_name}`: {message}; `{type_name}` is one of {}",
-        forms.join(", ")
-    )
 }
 
 /// A hint such as ``; did you mean `Ghost`?``, or nothing when no name is
@@ -1173,6 +1177,13 @@ mod tests {
     fn a_misspelt_target_is_not_taken_for_a_check_by_name() {
         let message = parse("Hovered(Custm(resolver: \"a\", argument: \"b\"))").unwrap_err();
         assert!(!message.contains("by name"), "{message}");
+    }
+
+    #[test]
+    fn a_custom_target_inside_a_check_says_what_to_write_instead() {
+        let message = parse("Hovered(Custom(resolver: \"a\", argument: \"b\"))").unwrap_err();
+        assert!(message.contains(NO_CUSTOM_TARGET), "{message}");
+        assert!(!message.contains(FORMS), "{message}");
     }
 
     #[test]

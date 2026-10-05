@@ -6,18 +6,18 @@ use bevy::{
     ui::{ComputedNode, UiGlobalTransform, widget::Text},
 };
 
-use super::SessionHooks;
 use crate::{
+    extension::app_target_at,
     probe::hovered_entities,
     targets::{Target, enclosing_button, is_tooling, resolve},
 };
 
 /// What a click at `position` should be called in the script: the label of
-/// the UI node under it, else what the app's hook makes of it, else the
-/// position.
-pub(super) fn classify(world: &World, hooks: &SessionHooks, position: Vec2) -> Target {
+/// the UI node under it, else the app's own target there
+/// ([`AppTarget::at`](crate::AppTarget::at)), else the position.
+pub(super) fn classify(world: &World, position: Vec2) -> Target {
     label_target(world, position)
-        .or_else(|| hooks.run_resolve_target(world, position))
+        .or_else(|| app_target_at(world, position))
         .unwrap_or_else(|| Target::screen(position))
 }
 

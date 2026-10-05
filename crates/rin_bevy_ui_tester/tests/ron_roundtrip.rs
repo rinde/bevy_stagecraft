@@ -4,24 +4,26 @@
     clippy::expect_used,
     clippy::unwrap_used,
     clippy::indexing_slicing,
+    clippy::panic,
     reason = "tests may panic on a broken setup"
 )]
 
 mod common;
 
 use bevy::{input::keyboard::KeyCode, math::Vec2};
-use common::{Activations, UiCheck, registry, spawn_ui};
+use common::{Activations, UiCheck, UiSetup, UiTarget, UiView, registry};
 use rin_bevy_ui_tester::{
-    Check, FORMAT_VERSION, LoadError, Modifiers, Scenario, Script, Setup, Step, Target,
-    files::run_ron_files,
+    Check, Extension, FORMAT_VERSION, LoadError, Modifiers, Scenario, Script, Setup, Step, Target,
+    View, files::run_ron_files,
 };
 
-/// A scenario written in Rust, with names where RON needs them and the
-/// app's own checks as values.
+/// A scenario written in Rust, with the app's own setup, view, targets and
+/// checks as values.
 fn in_rust() -> Scenario {
     Scenario::new("click pause")
         .window_size(800, 600)
-        .setup_named("plain_ui", spawn_ui)
+        .app_setup(UiSetup::PlainUi)
+        .app_view(UiView::Zoomed(1.5))
         .steps([
             Step::glide(Target::text("Pause"), 20),
             Step::click(),
@@ -30,7 +32,7 @@ fn in_rust() -> Scenario {
             Step::tap_with(KeyCode::KeyP, Modifiers::CTRL | Modifiers::SHIFT),
             Step::drag(
                 Target::screen(Vec2::new(1.0, 2.0)),
-                Target::custom("pause_button", "x"),
+                Target::app(UiTarget::Showing("Pause".into())),
                 5,
             ),
             Step::caption("done"),
@@ -62,7 +64,7 @@ fn modifiers_read_as_a_list_in_ron() {
 fn in_rust_playable() -> Scenario {
     Scenario::new("click pause")
         .window_size(800, 600)
-        .setup_named("plain_ui", spawn_ui)
+        .app_setup(UiSetup::PlainUi)
         .steps([
             Step::glide(Target::text("Pause"), 20),
             Step::click(),
@@ -101,27 +103,130 @@ fn mixed_use_adds_rust_assertions_to_a_recorded_file() {
 }
 
 #[test]
-fn unknown_names_are_load_errors() {
-    let registry = registry();
-    let load = |body: &str| {
-        Scenario::from_ron_with(
-            &format!("(format_version: 1, name: \"x\", {body})"),
-            &registry,
-        )
-        .unwrap_err()
+fn the_apps_setup_view_and_targets_are_written_inside_app() {
+    let ron = in_rust().to_ron().unwrap();
+    for written in [
+        "setup: App(PlainUi)",
+        "view: App(Zoomed(1.5))",
+        "to: App(Showing(\"Pause\"))",
+    ] {
+        assert!(ron.contains(written), "{written} in {ron}");
+    }
+}
+
+/// Loads a script of format version 3 with this body.
+fn load(body: &str) -> Result<Scenario, LoadError> {
+    Scenario::from_ron_with(
+        &format!("(format_version: 3, name: \"x\", {body})"),
+        &registry(),
+    )
+}
+
+#[test]
+fn a_misspelt_setup_view_or_target_is_a_load_error_naming_where_and_listing_the_variants() {
+    for (body, extension, used_by, variants) in [
+        (
+            "setup: App(PlainUj), steps: []",
+            Extension::Setup,
+            "the setup",
+            vec!["PlainUi", "Activated(u32)", "MissingSave(String)"],
+        ),
+        (
+            "view: App(Zoomed(\"far\")), steps: []",
+            Extension::View,
+            "the view",
+            vec!["Plain", "Zoomed(f32)"],
+        ),
+        (
+            "steps: [Wait(1), MoveTo(App(PauseButon))]",
+            Extension::Target,
+            "step 1",
+            vec!["PauseButton", "Showing(String)"],
+        ),
+        (
+            "steps: [Drag(from: Text(\"a\"), to: App(Showing(3)), frames: 2)]",
+            Extension::Target,
+            "step 0",
+            vec!["PauseButton", "Showing(String)"],
+        ),
+        (
+            "steps: [Check(Hovered(App(Showin(\"Pause\"))))]",
+            Extension::Target,
+            "step 0",
+            vec!["PauseButton", "Showing(String)"],
+        ),
+        (
+            "steps: [], expect: [App(Found(App(PauseButon)))]",
+            Extension::Target,
+            "the expect list",
+            vec!["PauseButton", "Showing(String)"],
+        ),
+    ] {
+        let error = load(body).unwrap_err();
+        let LoadError::BadAppValue {
+            extension: found,
+            used_by: at,
+            variants: listed,
+            ..
+        } = &error
+        else {
+            panic!("{body}: {error:?}");
+        };
+        assert_eq!((*found, at.as_str()), (extension, used_by), "{body}");
+        assert_eq!(listed, &variants, "{body}");
+        let text = error.to_string();
+        assert!(text.starts_with(&format!("{used_by}: `")), "{text}");
+        assert!(text.contains("is one of `"), "{text}");
+    }
+}
+
+#[test]
+fn the_old_named_setups_views_and_custom_targets_are_refused_saying_what_to_write_instead() {
+    for (body, hint) in [
+        ("setup: Named(\"plain_ui\"), steps: []", "`setup: App("),
+        ("setup: Some(File(\"a.ron\")), steps: []", "`setup: App("),
+        ("view: \"top_down\", steps: []", "`view: App("),
+        ("view: Some(\"top_down\"), steps: []", "`view: App("),
+        (
+            "steps: [MoveTo(Custom(resolver: \"nope\", argument: \"\"))]",
+            "`MoveTo(App(",
+        ),
+        (
+            "steps: [Check(Exists(Custom(resolver: \"nope\", argument: \"\")))]",
+            "`MoveTo(App(",
+        ),
+    ] {
+        let error = load(body).unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(error, LoadError::Syntax(_)), "{body}: {message}");
+        assert!(
+            message.contains("no longer looked up") && message.contains(hint),
+            "{body}: {message}"
+        );
+    }
+}
+
+#[test]
+fn an_app_value_with_no_type_for_it_is_a_load_error_saying_how_to_declare_one() {
+    let registry = rin_bevy_ui_tester::Registry {
+        types: bevy::reflect::TypeRegistryArc::default(),
     };
-    assert!(matches!(
-        load("steps: [], setup: Some(Named(\"nope\"))"),
-        LoadError::UnknownSetup(_)
-    ));
-    assert!(matches!(
-        load("steps: [], view: Some(\"nope\")"),
-        LoadError::UnknownView(_)
-    ));
-    assert!(matches!(
-        load("steps: [Click(Left), MoveTo(Custom(resolver: \"nope\", argument: \"\"))]"),
-        LoadError::UnknownTarget { ref used_by, .. } if used_by == "step 1"
-    ));
+    let error = Scenario::from_ron_with(
+        "(format_version: 3, name: \"x\", setup: App(PlainUi), steps: [])",
+        &registry,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        LoadError::NoAppType {
+            extension: Extension::Setup,
+            used_by: "the setup".into()
+        }
+    );
+    assert!(
+        error.to_string().contains("#[reflect(AppSetup)]"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -138,17 +243,18 @@ fn a_newer_format_is_refused_even_if_the_rest_is_unreadable() {
 }
 
 #[test]
-fn typos_are_syntax_errors_and_setup_files_pass_through() {
+fn typos_are_syntax_errors_and_the_apps_setup_and_view_load_as_its_values() {
     let error = Scenario::from_ron("(format_version: 1, name: \"x\", stpes: [])").unwrap_err();
     assert!(matches!(error, LoadError::Syntax(_)), "{error}");
     let scenario = Scenario::from_ron(
-        "(format_version: 1, name: \"x\", setup: Some(File(\"a.ron\")), steps: [])",
+        "(format_version: 1, name: \"x\", setup: Some(App( Activated( 2 ) )), view: App(Plain), steps: [])",
     )
     .unwrap();
     assert_eq!(
-        scenario.setup_reference(),
-        Some(&Setup::File("a.ron".into()))
+        scenario.setup_value(),
+        Some(&Setup::app(UiSetup::Activated(2)))
     );
+    assert_eq!(scenario.view_value(), Some(&View::app(UiView::Plain)));
     let script: Script = scenario.to_script();
     assert_eq!(script.format_version, FORMAT_VERSION);
 }
@@ -168,8 +274,8 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
         names,
         [
             "app_checks",
+            "app_target",
             "click_pause",
-            "custom_target",
             "reflected_checks",
             "typed_checks"
         ]

@@ -29,13 +29,13 @@ use bevy::{
 };
 
 use super::{
-    AppCheckField, AppCheckValue, AppCheckVariant, Check, Comparison, TextMatch, Value,
-    app_check_type,
+    Check, Comparison, TextMatch, Value,
     reflect::{self, Role},
     suggest::{NoiseFilter, flatten, holds, name_of, ron_of, widget_check},
     widget::{self, Lookup, WidgetState},
 };
 use crate::{
+    extension::{AppCheckValue, AppField, AppVariant, Extension, app_type},
     scenario::Scenario,
     targets::{Target, is_tooling, text_node},
 };
@@ -135,8 +135,7 @@ fn texts_within(world: &World, entity: Entity) -> Vec<String> {
 /// 2. `Screen(..)` of the widget's middle, which always works but follows no
 ///    layout change.
 ///
-/// The gallery adds what the app's
-/// [`SessionHooks::resolve_target`](crate::SessionHooks::resolve_target)
+/// The gallery adds what the app's [`AppTarget::at`](crate::AppTarget::at)
 /// makes of the position, before the screen position.
 #[must_use]
 pub fn target_alternatives(world: &World, subject: Entity) -> Vec<Target> {
@@ -379,7 +378,7 @@ impl FieldValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppCheckForm {
     /// The variant and its fields' types.
-    pub variant: AppCheckVariant,
+    pub variant: AppVariant,
     /// A value for each field, in order.
     pub values: Vec<FieldValue>,
 }
@@ -423,7 +422,7 @@ impl AppCheckForm {
         })?;
         let mut check = Check::App(AppCheckValue::from_ron(&ron)?);
         check
-            .type_app_checks(types)
+            .type_app_values(types)
             .map_err(|problem| problem.message())?;
         Ok(check)
     }
@@ -446,7 +445,7 @@ pub fn app_check_forms(
         return Vec::new();
     };
     let types = registry.read();
-    let Ok(Some(check_type)) = app_check_type(&types) else {
+    let Ok(Some(check_type)) = app_type(&types, Extension::Check) else {
         return Vec::new();
     };
     let text = widget::text_of(world, subject);
@@ -465,12 +464,7 @@ pub fn app_check_forms(
 }
 
 /// The first value of a form's field.
-fn fill(
-    types: &TypeRegistry,
-    field: &AppCheckField,
-    text: &str,
-    target: Option<&Target>,
-) -> FieldValue {
+fn fill(types: &TypeRegistry, field: &AppField, text: &str, target: Option<&Target>) -> FieldValue {
     let short = field.short_type_path.as_str();
     if field.type_path == Target::type_path() {
         return target.map_or_else(

@@ -21,9 +21,10 @@ use bevy::{
     window::{CursorMoved, PrimaryWindow, WindowEvent},
 };
 use rin_bevy_ui_tester::{
-    Check, HeadlessPlugins, Registry, Scenario, Script, SessionHooks, SessionPlugin,
-    SessionRecorder, Step, Target,
-    script::Setup,
+    AppSetup, AppTarget, AppView, Check, HeadlessPlugins, ReflectAppSetup, ReflectAppTarget,
+    ReflectAppView, Registry, ResolvedTarget, Scenario, Script, SessionPlugin, SessionRecorder,
+    Step, Target,
+    script::{Setup, View},
     session::{self, SessionConfig},
 };
 
@@ -59,6 +60,97 @@ fn spawn_ui(world: &mut World) {
     }
 }
 
+/// Where a recording of this app starts from, found by Bevy with no
+/// registration call.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+#[reflect(AppSetup)]
+enum SessionSetup {
+    /// The count saved in this file, by its full path.
+    Saved(String),
+}
+
+/// Present when this app cannot save its state.
+#[derive(Resource)]
+struct SaveFails;
+
+impl AppSetup for SessionSetup {
+    fn build(&self, world: &mut World) -> Result<(), String> {
+        let Self::Saved(path) = self;
+        let saved = fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+        let count = saved
+            .trim()
+            .parse()
+            .map_err(|_| format!("{path} holds no count"))?;
+        spawn_ui(world);
+        world.insert_resource(Count(count));
+        world.spawn(Camera2d);
+        Ok(())
+    }
+
+    /// Writes the count next to the script.
+    fn capture(
+        world: &mut World,
+        dir: &std::path::Path,
+        stem: &str,
+    ) -> Result<Option<Self>, String> {
+        if world.contains_resource::<SaveFails>() {
+            return Err("the save failed".into());
+        }
+        let count = world.get_resource::<Count>().map_or(0, |count| count.0);
+        let file = dir.join(format!("{stem}.setup.txt"));
+        fs::write(&file, count.to_string()).map_err(|error| error.to_string())?;
+        Ok(Some(Self::Saved(file.display().to_string())))
+    }
+}
+
+/// How this app is shown; it only ever has the one view.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+#[reflect(AppView)]
+enum SessionView {
+    /// Everything at once.
+    Overview,
+}
+
+impl AppView for SessionView {
+    fn arrange(&self, _world: &mut World) {}
+
+    fn current(_world: &World) -> Option<Self> {
+        Some(Self::Overview)
+    }
+}
+
+/// Present when the ground of this app is a lattice of 100 pixel cells.
+#[derive(Resource)]
+struct Lattice;
+
+/// This app's own targets, found by Bevy with no registration call.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+#[reflect(AppTarget)]
+enum SessionTarget {
+    /// A cell of the lattice, by column and row.
+    Cell(i32, i32),
+}
+
+impl AppTarget for SessionTarget {
+    fn resolve(&self, _world: &World) -> Result<ResolvedTarget, String> {
+        let Self::Cell(column, row) = self;
+        let centre = |cell: &i32| f32::from(i16::try_from(*cell).unwrap_or(0)) * 100.0 + 50.0;
+        Ok(ResolvedTarget::at(Vec2::new(centre(column), centre(row))))
+    }
+
+    /// The cell under a click, where the ground is a lattice.
+    fn at(world: &World, position: Vec2) -> Option<Self> {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a cell of the test window is a small whole number"
+        )]
+        let cell = |at: f32| (at / 100.0).floor() as i32;
+        world
+            .contains_resource::<Lattice>()
+            .then(|| Self::Cell(cell(position.x), cell(position.y)))
+    }
+}
+
 /// A fresh directory for one test's files.
 fn dir(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
@@ -68,16 +160,10 @@ fn dir(name: &str) -> PathBuf {
 
 /// The app, with a session plugin that writes into `dir`.
 fn app(dir: &std::path::Path) -> App {
-    let hooks = SessionHooks::new().capture_setup(|world, dir, stem| {
-        let count = world.get_resource::<Count>().map_or(0, |count| count.0);
-        let file = format!("{stem}.setup.txt");
-        fs::write(dir.join(&file), count.to_string()).map_err(|error| error.to_string())?;
-        Ok(Some(Setup::File(file)))
-    });
     let mut app = App::new();
     app.add_plugins((
         HeadlessPlugins::default().with_window_size(640, 480),
-        SessionPlugin::new(dir).with_hooks(hooks),
+        SessionPlugin::new(dir),
     ));
     spawn_ui(app.world_mut());
     app.world_mut().spawn(Camera2d);
@@ -164,27 +250,16 @@ fn use_the_app(app: &mut App) {
     }
 }
 
-/// Plays a recorded file the way an app would: the registry resolves names,
-/// and the app loads the setup file the script names.
+/// Plays a recorded file the way an app would: it loads against the app's
+/// types, and its setup reads the file the recording wrote.
 fn play(path: &std::path::Path) -> Result<(rin_bevy_ui_tester::ScenarioReport, u32), String> {
     let text = fs::read_to_string(path).expect("the file was written");
     let script = Script::from_ron(&text).expect("the file reads back");
-    let file = match &script.setup {
-        Some(Setup::File(file)) => file.clone(),
-        other => return Err(format!("the script names a setup file, not {other:?}")),
-    };
-    let start: u32 = fs::read_to_string(path.with_file_name(&file))
-        .expect("the setup file was written")
-        .parse()
-        .expect("a number");
+    if script.setup.is_none() {
+        return Err(format!("the script has no setup: {text}"));
+    }
     let registry = Registry::default();
-    let scenario = Scenario::from_script(script, &registry)
-        .expect("the names resolve")
-        .setup(move |world| {
-            spawn_ui(world);
-            world.insert_resource(Count(start));
-            world.spawn(Camera2d);
-        });
+    let scenario = Scenario::from_script(script, &registry).map_err(|error| error.to_string())?;
     let mut app = scenario.headless_app();
     let report = scenario.run_in(&mut app);
     let count = app.world().resource::<Count>().0;
@@ -223,8 +298,11 @@ fn the_recorded_file_reads_as_a_few_labelled_steps() {
     assert_eq!(script.window_size, Some((640, 480)));
     assert_eq!(
         script.setup,
-        Some(Setup::File("three_clicks.setup.txt".into()))
+        Some(Setup::app(SessionSetup::Saved(
+            dir.join("three_clicks.setup.txt").display().to_string()
+        )))
     );
+    assert_eq!(script.view, Some(View::app(SessionView::Overview)));
     assert!(
         script
             .expect
@@ -331,17 +409,14 @@ fn starting_twice_or_stopping_nothing_is_an_error_not_a_panic() {
 }
 
 #[test]
-fn a_failing_setup_hook_stops_the_recording_from_starting() {
-    let dir = dir("session-bad-hook");
+fn a_failing_setup_capture_stops_the_recording_from_starting() {
+    let dir = dir("session-bad-capture");
     let mut app = App::new();
-    app.add_plugins((
-        HeadlessPlugins::default(),
-        SessionPlugin::new(&dir)
-            .with_hooks(SessionHooks::new().capture_setup(|_, _, _| Err("the save failed".into()))),
-    ));
+    app.add_plugins((HeadlessPlugins::default(), SessionPlugin::new(&dir)))
+        .insert_resource(SaveFails);
     app.finish();
     app.cleanup();
-    let error = session::start(app.world_mut(), "x").expect_err("the hook failed");
+    let error = session::start(app.world_mut(), "x").expect_err("the capture failed");
     assert!(error.to_string().contains("the save failed"), "{error}");
     assert!(!app.world().resource::<SessionRecorder>().is_recording());
 }
@@ -390,19 +465,11 @@ fn a_click_that_landed_on_nothing_labelled_stays_a_screen_position() {
 }
 
 #[test]
-fn the_apps_target_hook_is_offered_clicks_that_hit_no_label() {
-    let dir = dir("session-hook");
-    let hooks = SessionHooks::new().resolve_target(|_world, at| {
-        Some(Target::custom(
-            "lattice",
-            format!("{},{}", (at.x / 100.0).floor(), (at.y / 100.0).floor()),
-        ))
-    });
+fn the_apps_own_target_is_offered_clicks_that_hit_no_label() {
+    let dir = dir("session-app-target");
     let mut app = App::new();
-    app.add_plugins((
-        HeadlessPlugins::default(),
-        SessionPlugin::new(&dir).with_hooks(hooks),
-    ));
+    app.add_plugins((HeadlessPlugins::default(), SessionPlugin::new(&dir)))
+        .insert_resource(Lattice);
     app.world_mut().spawn(Camera2d);
     app.finish();
     app.cleanup();
@@ -416,7 +483,7 @@ fn the_apps_target_hook_is_offered_clicks_that_hit_no_label() {
         saved
             .script
             .steps
-            .contains(&Step::MoveTo(Target::custom("lattice", "2,1"))),
+            .contains(&Step::MoveTo(Target::app(SessionTarget::Cell(2, 1)))),
         "{:?}",
         saved.script.steps
     );

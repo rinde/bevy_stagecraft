@@ -500,7 +500,7 @@ impl fmt::Debug for Recorder {
 impl Recorder {
     /// A recorder for an app. `build` runs on a fresh app that already has
     /// [`RecorderPlugins`]: it adds the app's own plugins and resources, and
-    /// anything its scenarios' named setups and checks need (for example
+    /// anything its scenarios' setups and checks need (for example
     /// [`crate::script::Registry::install`]).
     pub fn new(build: impl Fn(&mut App) + Send + Sync + 'static) -> Self {
         Self {
@@ -537,7 +537,7 @@ impl Recorder {
 
     /// Lets the app say when its world has settled (for example, terrain
     /// chunks have loaded), before step 1, so frame 0 is the same on every
-    /// run. It is called once per update, after the setup and view hooks, and
+    /// run. It is called once per update, after the setup and the view, and
     /// returns `true` when settled. At least [`MIN_SETTLE_FRAMES`] updates run
     /// whatever it says.
     #[must_use]
@@ -592,8 +592,12 @@ impl Recorder {
         app.finish();
         app.cleanup();
 
-        scenario.run_setup(app.world_mut());
-        scenario.run_view(app.world_mut());
+        let setup = scenario.run_setup(app.world_mut());
+        if setup.is_ok()
+            && let Err(error) = scenario.run_view(app.world_mut())
+        {
+            bevy::log::warn!("scenario `{name}`: the view could not be arranged: {error}");
+        }
         self.settle_app(&mut app, &name)?;
 
         if let Some(mut captures) = app.world_mut().get_resource_mut::<Captures>() {
@@ -613,7 +617,7 @@ impl Recorder {
         );
         app.update();
         if let Some(mut player) = app.world_mut().get_resource_mut::<ScenarioPlayer>() {
-            player.start(scenario.clone());
+            player.start_after_setup(scenario.clone(), setup);
         }
         let mut frames = 0;
         while app
