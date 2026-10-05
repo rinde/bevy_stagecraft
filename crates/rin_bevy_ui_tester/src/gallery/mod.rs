@@ -49,12 +49,19 @@
 //! which writes a `.ron` file into the export directory. Nothing in the
 //! Scenarios window is recorded, and its nodes are never named as targets.
 //!
+//! While recording, the checkpoint key (F8 unless the session hooks set
+//! another) takes a [checkpoint](crate::session#checkpoints): the overlay
+//! flashes and names it, and the app never sees the key.
+//!
 //! When recording stops, the checks the world's changes suggest (see
-//! [`crate::check::suggest`]) are listed in the Scenarios window as a checklist,
-//! all ticked, in a fixed order. Clicking one ticks or unticks it and writes
-//! the file again, its `expect` the ticked checks
-//! ([`GalleryAction::ToggleSuggestion`] does the same from code). The list
-//! stays until another scenario is selected or recorded.
+//! [`crate::check::suggest`]) are listed in the Scenarios window as
+//! checklists, all ticked, in a fixed order: one per checkpoint, then one for
+//! the end. Clicking one ticks or unticks it and writes the file again, a
+//! checkpoint's ticked checks as `Check` steps where it was taken and the
+//! end's as its `expect` ([`GalleryAction::ToggleCheckpointSuggestion`] and
+//! [`GalleryAction::ToggleSuggestion`] do the same from code). The wheel
+//! scrolls the lists while the pointer is over them. They stay until another
+//! scenario is selected or recorded.
 //! Selecting, restarting, playing or stepping is refused while recording.
 //!
 //! The app's reset hook must put the app's own state back and nothing else:
@@ -244,7 +251,10 @@ impl Plugin for GalleryPlugin {
         // Real input the gallery removed must not end up in a recording.
         .configure_sets(
             PreUpdate,
-            SessionSystems::Record.after(GallerySystems::Requests),
+            (
+                SessionSystems::Record.after(GallerySystems::Requests),
+                SessionSystems::Checkpoint.after(GallerySystems::Input),
+            ),
         )
         .add_systems(Startup, (ui::spawn_window, input::spawn_scenarios_pointer))
         .add_systems(

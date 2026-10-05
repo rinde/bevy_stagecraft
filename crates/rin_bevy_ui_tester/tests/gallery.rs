@@ -28,7 +28,10 @@ use bevy::{
 use rin_bevy_ui_tester::{
     Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState, HeadlessPlugins,
     Registry, Scenario, ScenariosCamera, ScenariosWindow, Script, SessionHooks, Speed, Step,
-    Target, overlay::OverlayRoot, player::ScenarioReport, script::Setup,
+    Target,
+    overlay::{OverlayCheckpointFlash, OverlayRoot},
+    player::ScenarioReport,
+    script::Setup,
 };
 
 /// How often the "Add" button was activated.
@@ -1048,6 +1051,155 @@ fn stopping_a_recording_lists_the_suggested_checks_and_a_click_unticks_one_in_th
             .is_none(),
         "the checklist goes once something else is picked"
     );
+}
+
+#[test]
+fn a_checkpoint_while_recording_in_the_gallery_gets_its_own_checklist_and_a_click_unticks_it() {
+    let dir = fresh_dir("gallery-record-checkpoint");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    ask(&mut app, GalleryAction::Record);
+    assert!(
+        app.world()
+            .resource::<GalleryState>()
+            .status()
+            .contains("F8 takes a checkpoint"),
+        "the status says how to take one"
+    );
+    app.update();
+    let window = primary(&mut app);
+    let add = centre_of_button_with(&mut app, "Add");
+    real_move(&mut app, window, add);
+    app.update();
+    app.update();
+    real_click(&mut app, window);
+    for _ in 0..5 {
+        app.update();
+    }
+    let start = count(app.world());
+
+    real_key(&mut app, window, KeyCode::F8);
+    app.update();
+    {
+        let world = app.world_mut();
+        let mut flash = world.query_filtered::<&Visibility, With<OverlayCheckpointFlash>>();
+        let shown = flash.single(world).expect("the overlay's flash");
+        assert_ne!(*shown, Visibility::Hidden, "the overlay flashes");
+    }
+    assert!(
+        !app.world()
+            .resource::<ButtonInput<KeyCode>>()
+            .pressed(KeyCode::F8),
+        "the app never sees the checkpoint key"
+    );
+    real_click(&mut app, window);
+    for _ in 0..5 {
+        app.update();
+    }
+    ask(&mut app, GalleryAction::StopRecording);
+    app.update();
+
+    let state = app.world().resource::<GalleryState>();
+    let suggestions = state.suggestions().expect("checklists");
+    assert_eq!(suggestions.checkpoints(), 1);
+    let at_checkpoint = Check::resource::<Count>(".0").eq(start);
+    let index = suggestions
+        .checkpoint_entries(0)
+        .position(|(check, _)| *check == at_checkpoint)
+        .expect("the count at the checkpoint is suggested there");
+    assert!(
+        suggestions
+            .ticked()
+            .contains(&Check::resource::<Count>(".0").eq(start + 1)),
+        "the end's list is compared with the checkpoint"
+    );
+    let path = suggestions.session().path.clone();
+    let read = |path: &std::path::Path| {
+        Script::from_ron(&std::fs::read_to_string(path).expect("written")).expect("reads back")
+    };
+    let check_step = Step::check(at_checkpoint.clone());
+    assert!(read(&path).steps.contains(&check_step));
+
+    // Untick it with the real mouse, in the Scenarios window.
+    let second = scenarios_window(&mut app);
+    let row = centre_of_button_with(&mut app, &format!("[x] {at_checkpoint}"));
+    real_move(&mut app, second, row);
+    app.update();
+    app.update();
+    real_click(&mut app, second);
+    app.update();
+    let state = app.world().resource::<GalleryState>();
+    let suggestions = state.suggestions().expect("still listed");
+    assert!(
+        !suggestions.is_checkpoint_ticked(0, index),
+        "the click unticked it"
+    );
+    assert!(state.status().starts_with("Saved"), "{}", state.status());
+    let script = read(&path);
+    assert!(!script.steps.contains(&check_step), "{:#?}", script.steps);
+    assert_eq!(script.expect, suggestions.ticked(), "the end's list stays");
+
+    ask(
+        &mut app,
+        GalleryAction::ToggleCheckpointSuggestion {
+            checkpoint: 0,
+            index,
+        },
+    );
+    assert!(read(&path).steps.contains(&check_step), "ticked again");
+}
+
+#[test]
+fn the_wheel_scrolls_long_checklists_while_the_pointer_is_over_them() {
+    let dir = fresh_dir("gallery-record-scroll");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Record);
+    for _ in 0..16 {
+        rin_bevy_ui_tester::session::checkpoint(app.world_mut()).expect("taken");
+        app.update();
+    }
+    ask(&mut app, GalleryAction::StopRecording);
+    app.update();
+    app.update();
+
+    let label = {
+        let world = app.world_mut();
+        world
+            .query::<(Entity, &Text)>()
+            .iter(world)
+            .find(|(_, text)| text.0 == "Checkpoint 1: nothing changed")
+            .expect("a line per checkpoint")
+            .0
+    };
+    let panel = app
+        .world()
+        .get::<ChildOf>(label)
+        .expect("in the details panel")
+        .parent();
+    let at = centre_of_button_with(&mut app, "Checkpoint 2: nothing changed");
+    let second = scenarios_window(&mut app);
+    real_move(&mut app, second, at);
+    app.update();
+    app.update();
+    real_wheel_down(&mut app, second);
+    app.update();
+    let scrolled = |app: &App, entity: Entity| {
+        app.world()
+            .get::<ScrollPosition>(entity)
+            .map_or(0.0, |position| position.0.y)
+    };
+    assert!(scrolled(&app, panel) > 0.0, "the checklists moved");
+    let others = {
+        let world = app.world_mut();
+        world
+            .query::<(Entity, &ScrollPosition)>()
+            .iter(world)
+            .filter(|(entity, _)| *entity != panel)
+            .map(|(_, position)| position.0.y)
+            .fold(0.0, f32::max)
+    };
+    assert!(others <= 0.0, "the catalogue stayed put");
 }
 
 /// How many checks the gallery's checklist has.
