@@ -247,7 +247,9 @@ fn role_target(world: &World, subject: Entity) -> Option<Target> {
 ///   `Hovered`;
 /// * each field of each reflected component on the target's node and the
 ///   nodes above it up to the widget, as `Component(..)`, leaving out the
-///   types `filter` ignores.
+///   types `filter` ignores;
+/// * last, `Tree(..)` with the snapshot of the node's tree, to snapshot the
+///   node whole.
 ///
 /// A target that is only a position names no node; then only `Shows(..)` of
 /// the texts the widget shows is offered. Every check is kept only if it
@@ -283,6 +285,11 @@ pub fn checks_that_hold(
         candidates.push(widget_check(WidgetState::Focused, target.clone()));
         candidates.push(Check::hovered(target.clone()));
         candidates.extend(component_checks(world, subject, target, filter));
+        // Last: the snapshot of the node, for when the person wants the whole
+        // of what is below it rather than one fact.
+        if let Ok(tree) = super::tree_snapshot(world, target) {
+            candidates.push(Check::tree(target.clone(), tree));
+        }
     } else {
         candidates.extend(texts_within(world, subject).into_iter().map(Check::shows));
     }

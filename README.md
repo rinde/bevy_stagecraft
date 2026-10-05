@@ -233,10 +233,64 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
   laid-out size. A text target names the nearest widget at or above the text.
 - `TextOf` reads every text node at or below the target's widget, spans
   included, joined by spaces, and matches `Exact`, `Contains` or `StartsWith`.
+- `Tree(of: .., matches: "..")` compares the UI at and below the target's node
+  with an expected tree, a snapshot in the manner of Playwright's aria
+  snapshots (see "Tree snapshots" below).
 - `Within(frames, check)` holds if the check holds now or on one of the next
   `frames` frames (Playwright's `expect.poll`), so a step waits for something
   without a guessed `Wait`, and takes only the frames it waited. It works in
   the expect list too.
+
+#### Tree snapshots
+
+`Tree` checks the shape of a piece of UI in one step: the node a target names
+and everything below it, as indented lines of role, label and states.
+
+```ron
+Check(Tree(of: Name("Toolbar"), matches: r#"
+    - panel:
+      - button "Pause"
+      - button "Lay" [pressed]
+      - slider "Speed" [value=0.5]
+"#)),
+```
+
+- A line is `- role "label" [state] [state]`, with a colon after it when lines
+  follow below. Roles are `panel` (a node that groups others, labelled by its
+  `Name` if it has one), `text`, and the widget roles written in kebab case:
+  `button`, `checkbox`, `radio`, `slider`, `menu-button`, `menu-item`,
+  `list-item`, read from the same components as `Role(..)` targets, not from
+  AccessKit. A widget's label is its text, as `TextOf` reads it, and the text
+  nodes inside a widget are not lines of their own. Widgets show states:
+  `disabled`, `checked`, `pressed`, `focused`, and `value=..` on a slider.
+- The expected tree is partial. A line matches an actual line of the same
+  role, with the same label if it gives one, and at least its states (a
+  value compares as a number, so `0.50` is `0.5`); the lines below it match
+  lines below the actual one as an ordered subsequence, so siblings that do
+  not matter are left out, but their order must hold. Parents are not
+  skipped: write every level from the root down.
+- A snapshot leaves out what is not on screen (`Display::None`, hidden in the
+  hierarchy), what is marked `NotUnderTest`, and panels with nothing in them.
+- A tree that differs fails with a line diff, `-` for what was expected and `+`
+  for what is there:
+
+  ```text
+  the tree of Name("Toolbar") differs (- expected, + actual):
+    - panel:
+      - button "Pause"
+  -   - button "Lie"
+  +   - button "Lay" [disabled]
+      - slider [value=0.5]
+  ```
+
+- The tree is read when the script loads, so a misspelt role (`buton`) or a
+  line that is not indented properly is a load error naming the line. As
+  everywhere, a target that matches several nodes is a mistake in the script
+  and fails even inside `Not(..)`.
+- `tree_snapshot(world, &target)` writes the current tree of a target, and
+  `Check::tree(target, text)` builds the check in Rust. In pick mode the
+  checks offered for a node end with `Tree(..)`, the snapshot of that node:
+  click it to take the tree as it is now, then trim it to what matters.
 
 A check step takes no frames unless it waits. A failed one fails its step but
 does not stop the script. Reports name each check in words, such as `"1" is
@@ -394,6 +448,7 @@ version 3 and only add forms. Any other older file is also a newer one.
         Check(InState(state: "Mode", value: Editing)),
         Check(Disabled(Text("Save"))),
         Check(TextOf(Text("Score"), StartsWith("Score: "))),
+        Check(Tree(of: Name("Toolbar"), matches: "- panel:\n  - button \"Pause\"")),
         Check(Within(30, Shows("Saved"))),
     ],
     expect: [
@@ -712,8 +767,10 @@ The Scenarios window then shows, for the picked node:
   out again through it;
 - the checks that hold for it now: `Shows(..)` or `TextOf(..)`, `Visible`,
   `Disabled` or `Not(Disabled)`, `Checked` or `Not(Checked)`, `Focused`,
-  `Hovered`, and each field of its reflected components as
-  `Component(target: .., path: "Level.0", is: Eq(3))`;
+  `Hovered`, each field of its reflected components as
+  `Component(target: .., path: "Level.0", is: Eq(3))`, and last
+  `Tree(of: .., matches: "..")`, the snapshot of the node and what is below
+  it, to take whole;
 - a form per variant of the app's check type (`#[reflect(AppCheck)]`), each
   field filled from the node: a `Target` field with the chosen target, a
   `String` with its text, a number with the first number in its text, with
