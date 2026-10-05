@@ -526,6 +526,15 @@ mouse drives a pointer of its own. **Take over** pauses the script and hands
 the window back; **Resume script** carries on.
 
 Try it with `cargo run --example gallery --features gallery` (needs a display).
+
+To run the whole catalogue unattended, add `.with_run_all()` to the plugin
+(the example does so with `--run-all`; `just gallery-test` is the one command).
+Every entry is reset, set up and played once, in order, with the controls off.
+A failing scenario does not stop the rest. At the end the outcome is logged
+(a `PASS` or `FAIL` line per scenario, the failed steps and checks under each
+failure), kept in the `GalleryRunReport` resource, and the app exits, closing
+both windows: `AppExit::Success` if everything passed, else `AppExit::error()`,
+which `App::run` returns, so a `main` that returns it gives a non-zero exit code.
 The gallery feature turns on the windowing backends and the renderer that draws
 UI into a window, which a library test never needs.
 

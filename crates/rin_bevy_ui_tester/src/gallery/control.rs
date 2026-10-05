@@ -3,8 +3,10 @@
 use std::fs;
 
 use bevy::{
+    app::AppExit,
     ecs::world::World,
     input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
+    log::{error, info, warn},
     picking::input::PointerInputSettings,
     window::{PrimaryWindow, Window},
 };
@@ -14,7 +16,8 @@ use super::{
     catalogue::Gallery,
     pick::spelled,
     state::{
-        GalleryAction, GalleryPhase, GalleryState, PendingStep, Picking, Recording, Suggestions,
+        GalleryAction, GalleryPhase, GalleryState, PendingStep, Picking, Recording,
+        ScenarioOutcome, Suggestions,
     },
 };
 use crate::{
@@ -353,6 +356,11 @@ fn forget_for(state: &mut GalleryState, action: GalleryAction) {
 
 /// Carries out one request.
 fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
+    if state.is_running_all() {
+        "Running every scenario: the controls are off until it is done"
+            .clone_into(&mut state.status);
+        return;
+    }
     let recording = world
         .get_resource::<SessionRecorder>()
         .is_some_and(SessionRecorder::is_recording);
@@ -486,7 +494,11 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
         return;
     }
     match state.phase {
-        GalleryPhase::Idle => {}
+        GalleryPhase::Idle => {
+            if state.is_running_all() {
+                run_next(world, state);
+            }
+        }
         GalleryPhase::Settling(left) => {
             if left > 1 {
                 state.phase = GalleryPhase::Settling(left - 1);
@@ -561,6 +573,64 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
             state.results.insert(index, passed);
         }
         state.step = None;
+        if state.is_running_all() {
+            record_outcome(world, state);
+            run_next(world, state);
+            return;
+        }
         state.phase = GalleryPhase::Finished(state.loop_pause);
+    }
+}
+
+/// Adds the scenario that just finished to the run of the whole catalogue.
+fn record_outcome(world: &World, state: &mut GalleryState) {
+    let Some(report) = world.get_resource::<ScenarioReport>() else {
+        return;
+    };
+    let mut failures = report.failures();
+    if failures.is_empty() && !report.passed() {
+        failures.push("the scenario did not finish".into());
+    }
+    if let Some(run) = state.run_all.as_mut() {
+        run.outcomes.push(ScenarioOutcome {
+            name: report.name.clone(),
+            failures,
+        });
+    }
+}
+
+/// Plays the entry after the last one that finished in a run of the whole
+/// catalogue, or ends the run when there is none.
+fn run_next(world: &mut World, state: &mut GalleryState) {
+    let Some(next) = state.run_all.as_ref().map(|run| run.outcomes.len()) else {
+        return;
+    };
+    if world
+        .get_resource::<Gallery>()
+        .is_some_and(|gallery| gallery.get(next).is_some())
+    {
+        select(world, state, next);
+        return;
+    }
+    let report = state.run_all.take().unwrap_or_default();
+    if report.outcomes.is_empty() {
+        warn!("the gallery has no scenarios to run");
+    } else if report.passed() {
+        info!("{}", report.summary());
+    } else {
+        error!("{}", report.summary());
+    }
+    state.status = format!(
+        "Done: {}",
+        report.summary().lines().next().unwrap_or_default()
+    );
+    let exit = if report.passed() {
+        AppExit::Success
+    } else {
+        AppExit::error()
+    };
+    world.insert_resource(report);
+    if world.write_message(exit).is_none() {
+        warn!("could not end the app after running every scenario");
     }
 }
