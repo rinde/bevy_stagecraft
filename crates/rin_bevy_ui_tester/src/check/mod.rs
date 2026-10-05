@@ -22,7 +22,11 @@ use core::{fmt, ops::Not};
 
 use bevy::{
     ecs::{
-        component::Component, entity::Entity, hierarchy::ChildOf, resource::Resource, world::World,
+        component::{Component, ComponentId},
+        entity::Entity,
+        hierarchy::ChildOf,
+        resource::Resource,
+        world::World,
     },
     reflect::{GetPath, GetTypeRegistration, PartialReflect, Reflect, TypePath, TypeRegistry},
     state::state::States,
@@ -37,7 +41,7 @@ pub use self::{
 use self::{
     reflect::{Reflected, Role, find_type},
     value::{Counted, Measure},
-    widget::{Lookup, WidgetState},
+    widget::WidgetState,
 };
 use crate::{
     extension::{
@@ -45,7 +49,7 @@ use crate::{
     },
     probe::{Probe, check_hover},
     scenario::{CheckResult, Scenario},
-    targets::{Target, resolve},
+    targets::{Lookup, Target, resolve},
 };
 
 /// What a check asks of the world.
@@ -148,8 +152,8 @@ pub enum Check {
     /// The target's widget is visible in the hierarchy and takes up room on
     /// screen.
     Visible(Target),
-    /// The target can be found: for a text target, exactly one node shows
-    /// the text.
+    /// The target can be found: exactly one widget matches it (for a text
+    /// target, exactly one node shows the text).
     Exists(Target),
     /// The text the target's widget shows, which is every text node at or
     /// below it in order, joined by spaces, matches.
@@ -766,6 +770,16 @@ impl Check {
                 Err(format!("no UI node shows \"{text}\""))
             }),
             Self::Hovered(target) => {
+                // Only a target that names widgets by what they are can match
+                // several; the error from `resolve` would not tell that apart
+                // from a miss.
+                if !matches!(
+                    target,
+                    Target::Screen(_) | Target::World(_) | Target::App(_)
+                ) && let Lookup::Ambiguous(message) = widget::node(world, target)
+                {
+                    return Err(message);
+                }
                 let resolved = match resolve(world, target) {
                     Ok(resolved) => resolved,
                     Err(message) => return Ok(Err(message)),
@@ -792,7 +806,7 @@ impl Check {
                 let node = match widget::node(world, target) {
                     Lookup::Found(node) => node,
                     Lookup::Missing(message) => return Ok(Err(message)),
-                    Lookup::NotANode(message) => return Err(message),
+                    Lookup::Ambiguous(message) | Lookup::NotANode(message) => return Err(message),
                 };
                 let text = widget::text_of(world, widget::widget(world, node));
                 Ok(if matching.matches(&text) {
@@ -851,7 +865,7 @@ impl Check {
                 let node = match widget::node(world, target) {
                     Lookup::Found(node) => node,
                     Lookup::Missing(message) => return Ok(Err(message)),
-                    Lookup::NotANode(message) => return Err(message),
+                    Lookup::Ambiguous(message) | Lookup::NotANode(message) => return Err(message),
                 };
                 let Some(component) = self_and_ancestors(world, node)
                     .into_iter()
@@ -901,6 +915,43 @@ impl Check {
             other => other.to_string(),
         }
     }
+}
+
+/// The component id of the reflected component called `name` in `world`'s
+/// app, `None` when the type is registered but no entity ever had it: for
+/// [`Target::Component`].
+pub(crate) fn component_id(world: &World, name: &str) -> Result<Option<ComponentId>, String> {
+    let registry = reflect::app_types(world)?;
+    let id = find_type(&registry.read(), name, Role::Component)
+        .map(bevy::reflect::TypeRegistration::type_id)
+        .map_err(|problem| problem.message())?;
+    Ok(world.components().get_id(id))
+}
+
+/// Checks, from type information alone, that `name` is a reflected
+/// component in `types`: for [`Target::Component`] when a script loads.
+pub(crate) fn check_component_type(types: &TypeRegistry, name: &str) -> Result<(), Problem> {
+    find_type(types, name, Role::Component).map(|_| ())
+}
+
+/// The candidates closest to `wanted`, closest first, for a hint.
+pub(crate) fn close_matches<'a>(
+    wanted: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    reflect::close_names(wanted, candidates)
+}
+
+/// The text the widget `entity` shows: every text node at or below it, in
+/// order, joined by spaces, as [`Check::TextOf`] reads it.
+pub(crate) fn text_of(world: &World, entity: Entity) -> String {
+    widget::text_of(world, entity)
+}
+
+/// The widget `node` belongs to: the nearest widget at or above it,
+/// otherwise `node` itself.
+pub(crate) fn widget_of(world: &World, node: Entity) -> Entity {
+    widget::widget(world, node)
 }
 
 /// Something a check names that is not there, or not usable.
@@ -1068,7 +1119,7 @@ fn widget_state(world: &World, target: &Target, state: WidgetState) -> Result<Ch
             &format!("{target:?}"),
         )),
         Lookup::Missing(message) => Ok(Err(message)),
-        Lookup::NotANode(message) => Err(message),
+        Lookup::Ambiguous(message) | Lookup::NotANode(message) => Err(message),
     }
 }
 

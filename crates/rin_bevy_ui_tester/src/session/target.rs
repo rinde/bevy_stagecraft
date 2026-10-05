@@ -1,57 +1,45 @@
 //! Working out what a click landed on while recording.
 
 use bevy::{
-    ecs::{entity::Entity, hierarchy::Children, world::World},
+    ecs::{entity::Entity, world::World},
     math::Vec2,
-    ui::{ComputedNode, UiGlobalTransform, widget::Text},
+    ui::widget::Text,
 };
 
 use crate::{
-    extension::app_target_at,
-    probe::hovered_entities,
-    targets::{Target, enclosing_button, is_tooling, resolve},
+    check::{
+        pick::{node_at, target_alternatives},
+        widget_of,
+    },
+    targets::{Target, WidgetRole},
 };
 
-/// What a click at `position` should be called in the script: the label of
-/// the UI node under it, else the app's own target there
+/// What a click at `position` should be called in the script: the first of
+/// [`target_alternatives`] for the widget under it, the one ranking pick
+/// mode uses too (a test id, then role and label, then text, then name),
+/// else the app's own target there
 /// ([`AppTarget::at`](crate::AppTarget::at)), else the position.
 pub(super) fn classify(world: &World, position: Vec2) -> Target {
-    label_target(world, position)
-        .or_else(|| app_target_at(world, position))
+    let subject = node_at(world, position).and_then(|hit| clicked(world, hit));
+    target_alternatives(world, subject, Some(position))
+        .into_iter()
+        .next()
         .unwrap_or_else(|| Target::screen(position))
 }
 
-/// The first text at or below `entity`, depth first.
-fn label_within(world: &World, entity: Entity) -> Option<String> {
-    if let Some(text) = world.get::<Text>(entity) {
-        return Some(text.0.clone());
+/// What a click on the node `hit` is for, when that can be named rather
+/// than placed: the widget it belongs to when that has a role (see
+/// [`WidgetRole`]) and where on it the click lands does not matter, else
+/// `hit` itself when it is a text. A click anywhere else (on a slider's
+/// track, on a bare panel) keeps its position.
+fn clicked(world: &World, hit: Entity) -> Option<Entity> {
+    let owner = widget_of(world, hit);
+    let role = world
+        .get_entity(owner)
+        .ok()
+        .and_then(|entity| WidgetRole::of(&entity));
+    match role {
+        Some(role) if !role.is_positional() => Some(owner),
+        _ => world.get::<Text>(hit).map(|_| hit),
     }
-    let children = world.get::<Children>(entity)?;
-    children
-        .iter()
-        .find_map(|child| label_within(world, *child))
-}
-
-/// `Target::text(..)` for the labelled node under `position`, if there is one
-/// and the label really leads back to it.
-///
-/// A label is only used when looking it up gives the same widget again, which
-/// also means it is unique and not the gallery's own.
-fn label_target(world: &World, position: Vec2) -> Option<Target> {
-    let hit = hovered_entities(world)
-        .into_iter()
-        .find(|entity| !is_tooling(world, *entity))?;
-    // The widget a click on `hit` is meant for: its button, or the text
-    // itself.
-    let widget = enclosing_button(world, hit).or_else(|| world.get::<Text>(hit).map(|_| hit))?;
-    let label = label_within(world, widget)?;
-    // The hover map is from before this update's cursor moves; make sure the
-    // click is really on the node.
-    let node = world.get::<ComputedNode>(widget)?;
-    let transform = world.get::<UiGlobalTransform>(widget)?;
-    if !node.contains_point(*transform, position / node.inverse_scale_factor) {
-        return None;
-    }
-    let target = Target::text(label);
-    (resolve(world, &target).ok()?.widget == Some(widget)).then_some(target)
 }

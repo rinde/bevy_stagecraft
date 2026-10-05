@@ -243,7 +243,41 @@ does not stop the script. Reports name each check in words, such as `"1" is
 shown`.
 
 Targets are `Target::screen`, `Target::text` (any Bevy UI toolkit),
-`Target::world` and `Target::app`, one of the app's own targets (see above).
+`Target::world` and `Target::app`, one of the app's own targets (see above),
+and locators in the manner of Playwright's:
+
+| Rust                                              | RON                                              | Finds                                                     |
+| ------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------- |
+| `Target::component::<PauseButton>()`              | `Component("PauseButton")`                       | the entity with this reflected marker component (a test id, Playwright's `getByTestId`) |
+| `Target::name("pause")`                           | `Name("pause")`                                  | the entity whose Bevy `Name` is exactly this               |
+| `Target::role(WidgetRole::Button, "Pause")`       | `Role(role: Button, label: "Pause")`             | the widget of this role showing exactly this text (`getByRole(.., { name })`) |
+| `Target::of_role(WidgetRole::Slider)`             | `Role(role: Slider)`                             | the widget of this role, whatever it shows                 |
+| `Target::within(outer, inner)`                    | `Within(Name("second row"), Text("Delete"))`     | the match of `inner` below a match of `outer`             |
+| `Target::nth(1, target)`                          | `Nth(1, Text("Delete"))`                         | the match at this index, from 0, in hierarchy order        |
+
+A test id is a unit struct with `#[derive(Component, Reflect)]` and
+`#[reflect(Component)]`, written by its short type path (its full one where
+two registered types share the short one); a misspelt or non-component type is
+a load error naming the step, with close names. Roles come from the
+components of `bevy_ui_widgets`, not from AccessKit, so they work headless:
+`Button` (`bevy_ui_widgets` or `bevy_ui`'s `Button`), `Checkbox`,
+`RadioButton`, `Slider`, `MenuButton`, `MenuItem` and `ListItem`. A label is
+every text at or below the widget, joined by spaces, as `TextOf` reads it.
+Every target that names a widget is strict, like Playwright's strict mode: if
+it matches several, the step or check fails listing each match and where it
+is, unless it is wrapped in `Nth(..)`; if it matches none, the failure
+suggests close matches (`no widget shows "Pasue"; did you mean "Pause"?`).
+An ambiguous target is a mistake in the script, not a state of the app, so a
+check over one fails even inside `Not(..)` or `Any(..)` and does not wait
+inside `Within(..)`; a target that matches nothing is a state, so
+`Not(Exists(Text("Quit")))` holds while nothing shows "Quit". "Hierarchy
+order" is depth first, roots by `Entity` and children by their index: stable
+from run to run, but not the order on screen. A `Name`, `Component` or `Role`
+that matches an entity outside the UI (a named camera, say) is reported as not
+a UI node.
+The locators work wherever a target does: in steps, in checks and in a
+`Target` field of an app check.
+
 After moving onto a widget target the player
 checks that the widget, or a descendant, is under the pointer, and otherwise
 fails naming what covers it. A failed step skips the rest of the script.
@@ -292,6 +326,9 @@ older file is also a newer one.
         Check(Hovered(Text("Pause"))),
         Click(Left),
         MoveTo(App(PauseButton)),                // the app's own targets
+        MoveTo(Component("PauseButton")),        // locators
+        MoveTo(Within(Name("second row"), Role(role: Button, label: "Delete"))),
+        MoveTo(Nth(1, Text("Delete"))),
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
         Check(App(ActivatedOnce)),               // the app's own checks
         Check(App(Activated(1))),
@@ -451,8 +488,11 @@ command-line flag is a system that calls one of them (see the example's
 
 On stop the log becomes steps: runs of moves become `Glide`s along a path
 simplified with Ramer-Douglas-Peucker (3 px by default), a press and release in
-place is a `Click`, a straight press, move and release is a `Drag`, a click on
-a UI node with a label is `Target::text(..)`, idle time over 1.5 s is shortened
+place is a `Click`, a straight press, move and release is a `Drag`, a click is
+named by the sturdiest target for the widget under it (a test id
+`Component(..)`, then `Role(..)` with its label, then `Text(..)`, then
+`Name(..)`; the same ranking as pick mode, `target_alternatives`), idle time
+over 1.5 s is shortened
 to a 30 frame `Wait`, and a modifier held around a key folds into a `Tap`. The
 thresholds are `StepOptions`. The app plugs in through its own reflected
 types (see [The app's own setups, views and targets](#the-apps-own-setups-views-and-targets)):
@@ -462,8 +502,11 @@ types (see [The app's own setups, views and targets](#the-apps-own-setups-views-
   file); that is the script's `setup: App(..)`. An error stops the recording
   from starting.
 - `AppView::current` names the view, the script's `view: App(..)`.
-- `AppTarget::at` is offered every click that hit no label (rails turns ground
-  clicks into lattice points); the rest stay `screen(..)`.
+- `AppTarget::at` is offered every click that hit no widget it can name
+  (rails turns ground clicks into lattice points); the rest stay
+  `screen(..)`. Only a click on a widget with a role (not a slider, where the
+  position matters) or on a text is named; a click on a bare panel keeps its
+  position.
 
 and through `SessionHooks`:
 
@@ -481,7 +524,7 @@ and through `SessionHooks`:
     setup: App(Counter(count: 0, switch: false)),
     steps: [
         MoveTo(Screen((22.5, 27.8))),
-        Glide(target: Text("+1"), frames: 12),
+        Glide(target: Role(role: Button, label: "+1"), frames: 12),
         Click(Left),
         Wait(26),
         Click(Left),
@@ -544,7 +587,7 @@ last checkpoint.
 
 ```ron
 steps: [
-    MoveTo(Text("+1")),
+    MoveTo(Role(role: Button, label: "+1")),
     Click(Left),
     Wait(11),
     Check(Resource(path: "Counter.0", is: Eq(1))),
@@ -595,10 +638,12 @@ ends it.
 
 The Scenarios window then shows, for the picked node:
 
-- its targets, best first: `Text(..)` of each label that only it shows, then
-  what the app's `AppTarget::at` makes of the position, then
-  `Screen(..)` of its middle. Clicking another one works the checks out again
-  through it;
+- its targets, best first: `Component(..)` of each test id only it has,
+  `Role(..)` with its label, `Text(..)` of each label that only it shows,
+  `Name(..)`, then what the app's `AppTarget::at` makes of the position, then
+  `Screen(..)` of where it was clicked. A target that is ambiguous, or leads
+  to another widget, is never offered. Clicking another one works the checks
+  out again through it;
 - the checks that hold for it now: `Shows(..)` or `TextOf(..)`, `Visible`,
   `Disabled` or `Not(Disabled)`, `Checked` or `Not(Checked)`, `Focused`,
   `Hovered`, and each field of its reflected components as
@@ -616,7 +661,7 @@ code), which stays whatever is ticked in the checklists afterwards:
 ```ron
 steps: [
     Wait(30),
-    Check(Disabled(Text("Save"))),
+    Check(Disabled(Role(role: Button, label: "Save"))),
 ],
 ```
 
@@ -625,8 +670,8 @@ the catalogue and in the run being played, so it runs at the end; **Export
 RON** writes it out. The lists behind the panel are `check::pick`
 (`node_at`, `target_alternatives`, `checks_that_hold`, `app_check_forms`,
 `Picked`), which read the world only, so picking changes nothing in the app.
-Ranking the targets is one function, `target_alternatives`, where better
-locators plug in.
+Ranking the targets is one function, `target_alternatives`, which the session
+recorder uses for clicks too.
 
 Limits: only the primary window is recorded and nothing marked `NotUnderTest`
 is ever named as a target; a click on a label replays on the middle of the

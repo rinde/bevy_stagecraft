@@ -8,7 +8,8 @@
 //! * [`subject_of`] goes from that node to the widget it belongs to, as the
 //!   built-in checks do;
 //! * [`target_alternatives`] lists the targets that find the widget again,
-//!   best first;
+//!   best first: the one ranking of targets, which the session recorder
+//!   uses too;
 //! * [`checks_that_hold`] lists the built-in checks about it that hold now:
 //!   its text, its states and its reflected component fields;
 //! * [`app_check_forms`] fills a form for each variant of the app's check
@@ -21,10 +22,10 @@ use alloc::collections::BTreeSet;
 
 use bevy::{
     camera::visibility::InheritedVisibility,
-    ecs::{entity::Entity, hierarchy::ChildOf, reflect::AppTypeRegistry, world::World},
+    ecs::{entity::Entity, hierarchy::ChildOf, name::Name, reflect::AppTypeRegistry, world::World},
     math::Vec2,
     picking::Pickable,
-    reflect::{TypePath, TypeRegistry, std_traits::ReflectDefault},
+    reflect::{TypeInfo, TypePath, TypeRegistration, TypeRegistry, std_traits::ReflectDefault},
     ui::{CalculatedClip, Checkable, ComputedNode, UiGlobalTransform, UiStack, widget::Text},
 };
 
@@ -32,12 +33,12 @@ use super::{
     Check, Comparison, TextMatch, Value,
     reflect::{self, Role},
     suggest::{NoiseFilter, flatten, holds, name_of, ron_of, widget_check},
-    widget::{self, Lookup, WidgetState},
+    widget::{self, WidgetState},
 };
 use crate::{
-    extension::{AppCheckValue, AppField, AppVariant, Extension, app_type},
+    extension::{AppCheckValue, AppField, AppVariant, Extension, app_target_at, app_type},
     scenario::Scenario,
-    targets::{Target, is_tooling, text_node},
+    targets::{Lookup, Target, WidgetRole, is_tooling, locate},
 };
 
 /// How a position is rounded in a screen target: to a tenth of a pixel, as
@@ -125,31 +126,115 @@ fn texts_within(world: &World, entity: Entity) -> Vec<String> {
     texts
 }
 
-/// The targets that name `subject`, best first.
+/// The targets that name `subject`, best first, ending with what names the
+/// position `at` (or the widget's middle when there is none).
 ///
-/// This is the one place that ranks targets for a picked node, so a better
-/// locator (by component, name, role or nesting) plugs in here. Today:
+/// This is the one place targets are ranked: pick mode offers the whole
+/// list, and the session recorder writes the first for a click (see
+/// [`crate::session`]). The order is the sturdiest first:
 ///
-/// 1. `Text(..)` of each text at or below the widget, depth first, that only
-///    one node of the app shows and that leads back to this widget;
-/// 2. `Screen(..)` of the widget's middle, which always works but follows no
-///    layout change.
+/// 1. `Component(..)` of each test id on the widget, by name: a reflected
+///    marker component, that is a unit struct (`struct PauseButton;`) with
+///    `#[reflect(Component)]`, that is not Bevy's or this crate's (the
+///    default [`NoiseFilter`] decides) and that no other entity of the app
+///    has;
+/// 2. `Role(..)` of the widget's role (see [`WidgetRole`])
+///    with its text as the label, or with no label when it shows none;
+/// 3. `Text(..)` of each text at or below the widget, depth first;
+/// 4. `Name(..)` of the widget's Bevy `Name`;
+/// 5. what the app's [`AppTarget::at`](crate::AppTarget::at) makes of the
+///    position;
+/// 6. `Screen(..)` of the position, which always works but follows no layout
+///    change.
 ///
-/// The gallery adds what the app's [`AppTarget::at`](crate::AppTarget::at)
-/// makes of the position, before the screen position.
+/// Each of the first four is kept only if it names exactly one node and that
+/// node is `subject` or lies in it, so a target that is ambiguous, or that
+/// leads to another widget, is never offered. With no `subject` only the
+/// last two are left.
 #[must_use]
-pub fn target_alternatives(world: &World, subject: Entity) -> Vec<Target> {
-    let mut targets: Vec<Target> = texts_within(world, subject)
-        .into_iter()
-        .filter(|text| {
-            text_node(world, text).is_ok_and(|node| widget::widget(world, node) == subject)
-        })
-        .map(Target::text)
-        .collect();
-    if let Some(centre) = centre_of(world, subject) {
-        targets.push(Target::screen(centre));
+pub fn target_alternatives(
+    world: &World,
+    subject: Option<Entity>,
+    at: Option<Vec2>,
+) -> Vec<Target> {
+    let mut targets: Vec<Target> = Vec::new();
+    if let Some(subject) = subject {
+        let leads_back = |target: &Target| {
+            matches!(
+                locate(world, target),
+                Lookup::Found(node) if node == subject || widget::widget(world, node) == subject
+            )
+        };
+        let candidates = marker_targets(world, subject)
+            .into_iter()
+            .chain(role_target(world, subject))
+            .chain(texts_within(world, subject).into_iter().map(Target::text))
+            .chain(
+                world
+                    .get::<Name>(subject)
+                    .map(|name| Target::name(name.as_str())),
+            );
+        for candidate in candidates {
+            if !targets.contains(&candidate) && leads_back(&candidate) {
+                targets.push(candidate);
+            }
+        }
+    }
+    let position = at.or_else(|| subject.and_then(|subject| centre_of(world, subject)));
+    if let Some(position) = position {
+        if let Some(app) = app_target_at(world, position)
+            && !targets.contains(&app)
+        {
+            targets.push(app);
+        }
+        targets.push(Target::screen(position));
     }
     targets
+}
+
+/// `Component(..)` of every test id on `subject`, by name (see
+/// [`target_alternatives`]), whether or not another entity has it too.
+fn marker_targets(world: &World, subject: Entity) -> Vec<Target> {
+    let Some(registry) = world.get_resource::<AppTypeRegistry>() else {
+        return Vec::new();
+    };
+    let types = registry.read();
+    let filter = NoiseFilter::default();
+    let mut names: Vec<String> = world
+        .inspect_entity(subject)
+        .map(|infos| {
+            infos
+                .filter_map(|info| types.get(info.type_id()?))
+                .filter(|registration| is_test_id(registration, &filter))
+                .map(|registration| name_of(&types, registration))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort_unstable();
+    names.dedup();
+    names.into_iter().map(Target::Component).collect()
+}
+
+/// Whether the type `registration` describes can be a test id: a reflected
+/// component that is a unit struct and that `filter` does not leave out.
+fn is_test_id(registration: &TypeRegistration, filter: &NoiseFilter) -> bool {
+    Role::Component.fits(registration)
+        && !Role::Resource.fits(registration)
+        && matches!(registration.type_info(), TypeInfo::Struct(info) if info.field_len() == 0)
+        && !filter.ignores(registration.type_info().type_path_table())
+}
+
+/// `Role(..)` of `subject`'s role, labelled with its text, if it is a widget
+/// with a role.
+fn role_target(world: &World, subject: Entity) -> Option<Target> {
+    let entity = world.get_entity(subject).ok()?;
+    let role = WidgetRole::of(&entity)?;
+    let label = widget::text_of(world, subject);
+    Some(if label.is_empty() {
+        Target::of_role(role)
+    } else {
+        Target::role(role, label)
+    })
 }
 
 /// The built-in checks about `subject`, named through `target`, that hold in
@@ -229,7 +314,7 @@ fn component_checks(
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut checks = Vec::new();
     for entity in chain_up_to(world, start, subject) {
-        let mut found: Vec<(String, &bevy::reflect::TypeRegistration)> = world
+        let mut found: Vec<(String, &TypeRegistration)> = world
             .inspect_entity(entity)
             .map(|infos| {
                 infos
@@ -554,22 +639,14 @@ pub struct Picked {
 }
 
 impl Picked {
-    /// Picks `node`: works out its widget, the targets that name it (with
-    /// `extra`, an app-defined one, before the screen position), the checks
-    /// that hold and the app's check forms.
+    /// Picks `node`, clicked at `at` (its widget's middle when `None`): works
+    /// out its widget, the targets that name it (see
+    /// [`target_alternatives`]), the checks that hold and the app's check
+    /// forms.
     #[must_use]
-    pub fn new(world: &World, node: Entity, filter: &NoiseFilter, extra: Option<Target>) -> Self {
+    pub fn new(world: &World, node: Entity, filter: &NoiseFilter, at: Option<Vec2>) -> Self {
         let subject = subject_of(world, node);
-        let mut targets = target_alternatives(world, subject);
-        if let Some(extra) = extra
-            && !targets.contains(&extra)
-        {
-            let at = targets
-                .iter()
-                .position(|target| matches!(target, Target::Screen(_)))
-                .unwrap_or(targets.len());
-            targets.insert(at, extra);
-        }
+        let targets = target_alternatives(world, Some(subject), at);
         let mut picked = Self {
             node,
             subject,

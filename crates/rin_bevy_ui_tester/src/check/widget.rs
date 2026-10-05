@@ -7,7 +7,7 @@
 
 use crate::{
     probe::{describe_entity, is_within},
-    targets::{Target, resolve, text_node},
+    targets::{Lookup, Target, locate},
 };
 use bevy::{
     camera::visibility::InheritedVisibility,
@@ -52,37 +52,11 @@ impl WidgetState {
     }
 }
 
-/// What looking a target up came to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Lookup {
-    /// The node the target names.
-    Found(Entity),
-    /// Nothing is there right now; it may be later.
-    Missing(String),
-    /// The target can never name a node: it is a position.
-    NotANode(String),
-}
-
-/// The node `target` names: for a text target, the node showing the text;
-/// for one of the app's own, the widget its [`AppTarget`](crate::AppTarget)
-/// reports.
+/// The node `target` names, found strictly: for a text target, the node
+/// showing the text; for one of the app's own, the widget its
+/// [`AppTarget`](crate::AppTarget) reports.
 pub(super) fn node(world: &World, target: &Target) -> Lookup {
-    match target {
-        Target::Text(text) => match text_node(world, text) {
-            Ok(entity) => Lookup::Found(entity),
-            Err(message) => Lookup::Missing(message),
-        },
-        Target::App(_) => match resolve(world, target) {
-            Ok(resolved) => resolved.widget.map_or_else(
-                || Lookup::NotANode(format!("{target:?} is a position, not a widget")),
-                Lookup::Found,
-            ),
-            Err(message) => Lookup::Missing(message),
-        },
-        Target::Screen(_) | Target::World(_) => {
-            Lookup::NotANode(format!("{target:?} is a position, not a widget"))
-        }
-    }
+    locate(world, target)
 }
 
 /// The widget `node` belongs to: the nearest widget that is `node` or above
