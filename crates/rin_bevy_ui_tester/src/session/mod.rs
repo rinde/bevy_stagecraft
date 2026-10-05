@@ -29,7 +29,9 @@
 //! * [`SessionHooks::resolve_target`] turns a click position into an
 //!   app-defined target (rails turns ground clicks into lattice points);
 //! * [`SessionHooks::noise_filter`] says which types the world snapshots
-//!   leave out.
+//!   leave out;
+//! * [`SessionHooks::checkpoint_key`] picks the checkpoint key (F8 unless
+//!   set).
 //!
 //! # Suggested checks
 //!
@@ -42,6 +44,25 @@
 //! the ones the person wants. The gallery shows them as a checklist. An app
 //! that keeps state outside the ECS publishes what matters of it as a
 //! reflected resource, which the snapshot then reads.
+//!
+//! # Checkpoints
+//!
+//! Checks at the end cannot say what was true half-way through. Pressing the
+//! checkpoint key (F8 unless [`SessionHooks::checkpoint_key`] sets another)
+//! in the primary window while recording, or calling [`checkpoint`], takes a
+//! snapshot there. It is compared with the snapshot of the checkpoint before,
+//! or of the start for the first one, and what changed becomes `Check` steps
+//! at that point in the script, each one a check that held when the
+//! checkpoint was taken. The end's `expect` is then what changed since the
+//! last checkpoint. [`SavedSession::checkpoints`] keeps every checkpoint's
+//! candidates and [`SavedSession::save_checks`] writes the file again with the
+//! ones the person wants; the gallery shows one checklist per checkpoint.
+//!
+//! The key never reaches the app while a session is recorded: its presses
+//! and releases in the primary window are taken out of Bevy's keyboard
+//! messages before `InputSystems` reads them, and are not logged as steps.
+//! Each checkpoint also writes a [`CheckpointTaken`] message, which the
+//! cursor overlay shows as a flash and a caption.
 //!
 //! # Limits
 //!
@@ -57,33 +78,35 @@ use bevy::{
     app::{App, Plugin, PreUpdate},
     ecs::{
         entity::Entity,
-        message::{MessageCursor, Messages},
+        message::{Message, MessageCursor, Messages},
         query::With,
         resource::Resource,
         schedule::{IntoScheduleConfigs, SystemSet},
+        system::Local,
         world::World,
     },
     input::{
-        ButtonState,
+        ButtonState, InputSystems,
         keyboard::{KeyCode, KeyboardInput},
         mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
     },
     math::Vec2,
     time::{Real, Time},
-    window::{CursorMoved, PrimaryWindow, Window},
+    window::{CursorMoved, PrimaryWindow, Window, WindowEvent},
 };
 
 mod hooks;
 mod log;
 mod target;
 
-pub use hooks::SessionHooks;
-pub use log::{RecordedEvent, RecordedKind, StepOptions, steps_from_events};
+pub use hooks::{DEFAULT_CHECKPOINT_KEY, SessionHooks};
+pub use log::{LoggedSteps, RecordedEvent, RecordedKind, StepOptions, read_log, steps_from_events};
 
 use crate::{
     check::Check,
     check::suggest::{WorldSnapshot, suggest_checks},
     headless::FRAME_STEP,
+    scenario::Step,
     script::{FORMAT_VERSION, Script},
 };
 
@@ -94,6 +117,10 @@ pub const LINE_PIXELS: f32 = 24.0;
 /// System sets of the session recorder, in `PreUpdate`.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionSystems {
+    /// Takes the checkpoint key out of the keyboard messages while recording
+    /// and takes a checkpoint for each press. Before `InputSystems`, so the
+    /// app never sees the key, and before [`SessionSystems::Record`].
+    Checkpoint,
     /// Logs the real input of this update and carries out start and stop
     /// requests. After the gallery has sorted the real input, so what it
     /// removed is not logged.
@@ -150,7 +177,20 @@ impl Plugin for SessionPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.config.clone())
             .init_resource::<SessionRecorder>()
-            .add_systems(PreUpdate, record_session.in_set(SessionSystems::Record));
+            .add_message::<CheckpointTaken>()
+            .configure_sets(
+                PreUpdate,
+                SessionSystems::Checkpoint
+                    .before(InputSystems)
+                    .before(SessionSystems::Record),
+            )
+            .add_systems(
+                PreUpdate,
+                (
+                    take_checkpoints.in_set(SessionSystems::Checkpoint),
+                    record_session.in_set(SessionSystems::Record),
+                ),
+            );
     }
 }
 
@@ -173,6 +213,26 @@ impl fmt::Display for SessionError {
 
 impl core::error::Error for SessionError {}
 
+/// A checkpoint taken while recording, as the overlay hears of it.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckpointTaken {
+    /// Which checkpoint of the session it is, counting from 1.
+    pub number: usize,
+    /// How many checks the changes since the checkpoint before suggested.
+    pub candidates: usize,
+}
+
+/// A checkpoint of a saved session: where it is and what it suggested.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Checkpoint {
+    /// How many of the recorded steps, not counting any checkpoint's checks,
+    /// come before it.
+    pub at: usize,
+    /// The checks the world's changes since the checkpoint before (or the
+    /// start) suggested, in order; each held when the checkpoint was taken.
+    pub candidates: Vec<Check>,
+}
+
 /// A session that was written out.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavedSession {
@@ -180,14 +240,21 @@ pub struct SavedSession {
     pub path: PathBuf,
     /// What was written to it.
     pub script: Script,
-    /// The checks the world's changes suggested, in order; the file's
-    /// `expect` starts as all of them.
+    /// The checks the world's changes since the last checkpoint (or the
+    /// start) suggested, in order; the file's `expect` starts as all of them.
     pub candidates: Vec<Check>,
+    /// The checkpoints, in order; the file starts with all of each one's
+    /// candidates as `Check` steps where it was taken.
+    pub checkpoints: Vec<Checkpoint>,
+    /// The steps without any checkpoint's checks, which
+    /// [`Self::save_checks`] puts them back into.
+    recorded: Vec<Step>,
 }
 
 impl SavedSession {
     /// Writes the file again with `expect` as the script's expect list, such
-    /// as the candidates the person ticked.
+    /// as the candidates the person ticked. The checkpoints' checks stay as
+    /// they are.
     ///
     /// # Errors
     ///
@@ -197,6 +264,58 @@ impl SavedSession {
         self.script.expect = expect;
         write_script(&self.path, &self.script)
     }
+
+    /// Writes the file again with `at_checkpoints[n]` as the `Check` steps of
+    /// checkpoint `n` and `expect` as the expect list, such as the candidates
+    /// the person ticked. A checkpoint `at_checkpoints` has no entry for gets
+    /// no checks.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError`] when the script cannot be written as RON or the file
+    /// cannot be written.
+    pub fn save_checks(
+        &mut self,
+        at_checkpoints: &[Vec<Check>],
+        expect: Vec<Check>,
+    ) -> Result<(), SessionError> {
+        let at: Vec<usize> = self
+            .checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.at)
+            .collect();
+        self.script.steps = with_checks(&self.recorded, &at, at_checkpoints);
+        self.script.expect = expect;
+        write_script(&self.path, &self.script)
+    }
+}
+
+/// `steps` with each checkpoint's checks put in as `Check` steps: those of
+/// checkpoint `n` after the first `at[n]` steps.
+fn with_checks(steps: &[Step], at: &[usize], checks: &[Vec<Check>]) -> Vec<Step> {
+    let mut out = Vec::with_capacity(steps.len() + checks.iter().map(Vec::len).sum::<usize>());
+    let checks_before = |before: usize, out: &mut Vec<Step>| {
+        for (_, checks) in at
+            .iter()
+            .zip(checks)
+            .filter(|(position, _)| **position == before)
+        {
+            out.extend(checks.iter().cloned().map(Step::Check));
+        }
+    };
+    for (index, step) in steps.iter().enumerate() {
+        checks_before(index, &mut out);
+        out.push(step.clone());
+    }
+    // A checkpoint past the last step, and one counted past the end, go last.
+    for (_, checks) in at
+        .iter()
+        .zip(checks)
+        .filter(|(position, _)| **position >= steps.len())
+    {
+        out.extend(checks.iter().cloned().map(Step::Check));
+    }
+    out
 }
 
 /// Writes `script` to `path`, after the [`HEADER`].
@@ -230,8 +349,10 @@ struct Active {
     setup: Option<crate::script::Setup>,
     /// What the view hook said.
     view: Option<String>,
-    /// The world at the start.
+    /// The world at the last checkpoint, or at the start before the first.
     before: WorldSnapshot,
+    /// What each checkpoint so far suggested, in order.
+    checkpoints: Vec<Vec<Check>>,
     /// Real time spent recording.
     elapsed: Duration,
     /// The log so far.
@@ -322,6 +443,21 @@ pub fn start(world: &mut World, name: &str) -> Result<(), SessionError> {
     })
 }
 
+/// Takes a checkpoint now, as the checkpoint key does.
+///
+/// The world is compared with the last checkpoint (or the start) and what
+/// changed becomes `Check` steps at this point of the script, before any
+/// input of the next update.
+///
+/// # Errors
+///
+/// [`SessionError`] when no session is on or the plugin is not added.
+pub fn checkpoint(world: &mut World) -> Result<CheckpointTaken, SessionError> {
+    with_recorder(world, |world, recorder, config| {
+        recorder.checkpoint(world, config, FRAME_STEP)
+    })
+}
+
 /// Stops the session and writes it out.
 ///
 /// # Errors
@@ -354,6 +490,89 @@ fn with_recorder<T>(
 fn frame_of(elapsed: Duration) -> u32 {
     let step = FRAME_STEP.as_nanos().max(1);
     u32::try_from((elapsed.as_nanos() + step / 2) / step).unwrap_or(u32::MAX)
+}
+
+/// Messages of kind `M` written since `cursor` last read, taking those
+/// `is_key` picks out of `messages` and returning them.
+///
+/// Messages are taken out by emptying the buffer and writing the rest back.
+/// Only those not yet read go back: the older ones every reader has already
+/// had, and written again they would be read twice.
+fn take_out<M: Message + Clone>(
+    world: &mut World,
+    cursor: &mut MessageCursor<M>,
+    is_key: impl Fn(&M) -> bool,
+) -> Vec<M> {
+    let Some(mut messages) = world.get_resource_mut::<Messages<M>>() else {
+        return Vec::new();
+    };
+    let unread = cursor.len(&messages);
+    let found = cursor.read(&messages).any(&is_key);
+    if !found {
+        return Vec::new();
+    }
+    let all: Vec<M> = messages.drain().collect();
+    let older = all.len().saturating_sub(unread);
+    let mut taken = Vec::new();
+    for message in all.into_iter().skip(older) {
+        if is_key(&message) {
+            taken.push(message);
+        } else {
+            messages.write(message);
+        }
+    }
+    *cursor = messages.get_cursor_current();
+    taken
+}
+
+/// The system: while recording, takes the checkpoint key out of the primary
+/// window's keyboard messages and takes a checkpoint for each press.
+fn take_checkpoints(
+    world: &mut World,
+    mut keys: Local<MessageCursor<KeyboardInput>>,
+    mut window_events: Local<MessageCursor<WindowEvent>>,
+) {
+    let recording = world
+        .get_resource::<SessionRecorder>()
+        .is_some_and(SessionRecorder::is_recording);
+    let config = recording
+        .then(|| world.get_resource::<SessionConfig>().cloned())
+        .flatten();
+    let window = primary_window(world).map(|(window, _)| window);
+    let (Some(config), Some(window), true) = (config, window, recording) else {
+        // Reading on keeps the cursors current, so a session that starts later
+        // does not take old messages for new ones.
+        drop(take_out(world, &mut keys, |_| false));
+        drop(take_out(world, &mut window_events, |_| false));
+        return;
+    };
+    let key = config.hooks.checkpoint();
+    let presses = take_out(world, &mut keys, |input| {
+        input.window == window && input.key_code == key
+    })
+    .into_iter()
+    .filter(|input| input.state == ButtonState::Pressed && !input.repeat)
+    .count();
+    // Apps can read the keyboard through the window events too.
+    drop(take_out(world, &mut window_events, |event| {
+        matches!(event, WindowEvent::KeyboardInput(input)
+            if input.window == window && input.key_code == key)
+    }));
+    if presses == 0 {
+        return;
+    }
+    let delta = world
+        .get_resource::<Time<Real>>()
+        .map_or(FRAME_STEP, Time::delta);
+    let Some(mut recorder) = world.remove_resource::<SessionRecorder>() else {
+        return;
+    };
+    for _ in 0..presses {
+        if let Err(error) = recorder.checkpoint(world, &config, delta) {
+            bevy::log::warn!("cannot take a checkpoint: {error}");
+        }
+    }
+    world.insert_resource(recorder);
 }
 
 /// The system: logs this update's real input and carries out requests.
@@ -404,10 +623,7 @@ fn primary_window(world: &mut World) -> Option<(Entity, Option<Vec2>)> {
 }
 
 /// Takes what `cursor` has not read yet out of the world's messages.
-fn unread<M: bevy::ecs::message::Message + Clone>(
-    world: &World,
-    cursor: &mut MessageCursor<M>,
-) -> Vec<M> {
+fn unread<M: Message + Clone>(world: &World, cursor: &mut MessageCursor<M>) -> Vec<M> {
     world
         .get_resource::<Messages<M>>()
         .map(|messages| cursor.read(messages).cloned().collect())
@@ -544,6 +760,7 @@ impl SessionRecorder {
             setup,
             view,
             before,
+            checkpoints: Vec::new(),
             elapsed: Duration::ZERO,
             events: Vec::new(),
             cursor: cursor.flatten(),
@@ -551,6 +768,36 @@ impl SessionRecorder {
             held_keys: Vec::new(),
         });
         Ok(())
+    }
+
+    /// Takes a checkpoint, logged in the frame `ahead` after the last one
+    /// logged: before whatever input comes in that frame.
+    fn checkpoint(
+        &mut self,
+        world: &mut World,
+        config: &SessionConfig,
+        ahead: Duration,
+    ) -> Result<CheckpointTaken, SessionError> {
+        let active = self
+            .active
+            .as_mut()
+            .ok_or_else(|| SessionError::new("no session is being recorded"))?;
+        let now = config.hooks.snapshot(world);
+        let candidates = suggest_checks(&active.before, &now, world);
+        active.before = now;
+        active.events.push(RecordedEvent {
+            frame: frame_of(active.elapsed + ahead),
+            kind: RecordedKind::Checkpoint,
+        });
+        let taken = CheckpointTaken {
+            number: active.checkpoints.len() + 1,
+            candidates: candidates.len(),
+        };
+        active.checkpoints.push(candidates);
+        if world.write_message(taken).is_none() {
+            bevy::log::warn!("checkpoint {} taken, but nothing can show it", taken.number);
+        }
+        Ok(taken)
     }
 
     /// Ends the session and writes the script.
@@ -587,7 +834,7 @@ impl SessionRecorder {
                 },
             });
         }
-        let steps = steps_from_events(&active.events, end, &config.options);
+        let logged = read_log(&active.events, end, &config.options);
         let after = config.hooks.snapshot(world);
         let candidates = suggest_checks(&active.before, &after, world);
         let script = Script {
@@ -596,15 +843,23 @@ impl SessionRecorder {
             window_size: active.window_size,
             setup: active.setup,
             view: active.view,
-            steps,
+            steps: with_checks(&logged.steps, &logged.checkpoints, &active.checkpoints),
             expect: candidates.clone(),
         };
         let path = config.dir.join(format!("{}.ron", active.stem));
         write_script(&path, &script)?;
+        let checkpoints = logged
+            .checkpoints
+            .into_iter()
+            .zip(active.checkpoints)
+            .map(|(at, candidates)| Checkpoint { at, candidates })
+            .collect();
         let saved = SavedSession {
             path,
             script,
             candidates,
+            checkpoints,
+            recorded: logged.steps,
         };
         self.last = Some(Ok(saved.clone()));
         Ok(saved)
@@ -616,8 +871,10 @@ impl SessionRecorder {
 const HEADER: &str = "\
 // Recorded from a session. Edit freely.
 // `steps` are what was done: glides, clicks and drags, with long idle time
-// shortened. `expect` holds the checks suggested by what changed in the
-// world while recording; keep the ones you want checked and delete the rest.
+// shortened. `Check` steps among them were suggested at a checkpoint by what
+// changed since the one before; `expect` holds the checks suggested by what
+// changed since the last checkpoint (or the start). Keep the ones you want
+// checked and delete the rest.
 ";
 
 /// A file-name-safe version of `name` that no file in `dir` has yet.

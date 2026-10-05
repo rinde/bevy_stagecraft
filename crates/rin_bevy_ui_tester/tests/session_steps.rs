@@ -11,7 +11,7 @@ use bevy::{
     math::Vec2,
 };
 use rin_bevy_ui_tester::{
-    Modifiers, RecordedEvent, RecordedKind, Step, StepOptions, Target, steps_from_events,
+    Modifiers, RecordedEvent, RecordedKind, Step, StepOptions, Target, read_log, steps_from_events,
 };
 
 const fn at(frame: u32, kind: RecordedKind) -> RecordedEvent {
@@ -347,4 +347,89 @@ fn wheel_messages_of_one_frame_add_up() {
         ),
     ];
     assert!(convert(&events).contains(&Step::wheel(0.0, 48.0)));
+}
+
+#[test]
+fn a_checkpoint_falls_between_the_steps_around_it_and_is_no_step_itself() {
+    let label = Target::text("+1");
+    let events = [
+        moved(0, 50.0, 50.0),
+        button(10, ButtonState::Pressed, 50.0, 50.0, label.clone()),
+        button(11, ButtonState::Released, 50.0, 50.0, label.clone()),
+        at(30, RecordedKind::Checkpoint),
+        button(40, ButtonState::Pressed, 50.0, 50.0, label.clone()),
+        button(41, ButtonState::Released, 50.0, 50.0, label),
+        at(60, RecordedKind::Checkpoint),
+    ];
+    let logged = read_log(&events, 70, &StepOptions::default());
+    assert_eq!(
+        logged.steps,
+        steps_from_events(&events, 70, &StepOptions::default())
+    );
+    assert_eq!(logged.checkpoints.len(), 2);
+    let clicks: Vec<usize> = logged
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| **step == Step::click())
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(clicks.len(), 2, "{:?}", logged.steps);
+    assert!(
+        clicks[0] < logged.checkpoints[0] && logged.checkpoints[0] <= clicks[1],
+        "the first checkpoint is between the clicks: {logged:?}"
+    );
+    assert!(clicks[1] < logged.checkpoints[1], "{logged:?}");
+    // The script's clock reaches the checkpoint's frame before its checks.
+    let frames_before = |count: usize| -> u32 {
+        logged.steps[..count]
+            .iter()
+            .map(|step| match step {
+                Step::Wait(frames) | Step::Glide { frames, .. } => u32::from(*frames),
+                _ => 1,
+            })
+            .sum()
+    };
+    assert_eq!(frames_before(logged.checkpoints[0]), 30, "{logged:?}");
+}
+
+#[test]
+fn a_checkpoint_while_a_button_is_held_keeps_the_press_and_release_apart() {
+    let label = Target::text("+1");
+    let events = [
+        moved(0, 50.0, 50.0),
+        button(10, ButtonState::Pressed, 50.0, 50.0, label.clone()),
+        at(12, RecordedKind::Checkpoint),
+        button(14, ButtonState::Released, 50.0, 50.0, label),
+    ];
+    let logged = read_log(&events, 20, &StepOptions::default());
+    let press = logged
+        .steps
+        .iter()
+        .position(|step| *step == Step::press())
+        .unwrap();
+    let release = logged
+        .steps
+        .iter()
+        .position(|step| *step == Step::release())
+        .unwrap();
+    assert!(press < logged.checkpoints[0] && logged.checkpoints[0] <= release);
+}
+
+#[test]
+fn a_checkpoint_inside_a_folded_chord_moves_after_it() {
+    let events = [
+        key(0, KeyCode::ControlLeft, ButtonState::Pressed),
+        at(1, RecordedKind::Checkpoint),
+        key(2, KeyCode::KeyS, ButtonState::Pressed),
+        key(3, KeyCode::KeyS, ButtonState::Released),
+        key(4, KeyCode::ControlLeft, ButtonState::Released),
+    ];
+    let logged = read_log(&events, 20, &StepOptions::default());
+    let tap = logged
+        .steps
+        .iter()
+        .position(|step| *step == Step::tap_with(KeyCode::KeyS, Modifiers::CTRL))
+        .unwrap();
+    assert_eq!(logged.checkpoints, vec![tap + 1], "{logged:?}");
 }

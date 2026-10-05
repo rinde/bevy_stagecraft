@@ -1,6 +1,9 @@
 //! What a person watching a scenario sees: the script's cursor and a caption
 //! strip naming the step and the checks.
 //!
+//! While a session is recorded, a checkpoint (see [`crate::session`]) shows as
+//! a short flash over the window and a line in the caption strip.
+//!
 //! Only the gallery and the recorder add [`CursorOverlayPlugin`]; headless
 //! tests never do. Everything it draws is screen-space UI with
 //! [`Pickable::IGNORE`], so it can never take a picking hit from the UI under
@@ -17,6 +20,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
+        message::MessageReader,
         query::{With, Without},
         resource::Resource,
         schedule::{IntoScheduleConfigs, SystemSet},
@@ -39,6 +43,7 @@ use bevy::{
 use crate::{
     player::{CheckRecord, Outcome, ScenarioReport},
     scenario::{Modifiers, Step},
+    session::CheckpointTaken,
     targets::{NotUnderTest, Target},
 };
 
@@ -66,6 +71,10 @@ pub const CAPTION_HEIGHT: f32 = 56.0;
 pub const CAPTION_FONT_SIZE: f32 = 18.0;
 /// Padding inside the caption strip, in logical pixels.
 pub const CAPTION_PADDING: f32 = 8.0;
+/// How many frames the flash of a checkpoint takes to fade.
+pub const CHECKPOINT_FLASH_FRAMES: u16 = 24;
+/// How many frames the caption of a checkpoint stays.
+pub const CHECKPOINT_CAPTION_FRAMES: u16 = 150;
 /// Stacking order of everything the overlay draws, above any app UI.
 pub const OVERLAY_Z_INDEX: i32 = i32::MAX - 16;
 
@@ -100,6 +109,11 @@ pub struct OverlayTheme {
     pub pass_text: Color,
     /// Colour of a check mark that failed.
     pub fail_text: Color,
+    /// Colour of the flash over the window when a checkpoint is taken; it
+    /// fades to nothing.
+    pub checkpoint_flash: Color,
+    /// Colour of the caption saying a checkpoint was taken.
+    pub checkpoint_text: Color,
     /// Size of the caption text.
     pub font_size: f32,
     /// Font of the caption text. The bundled default font only has ASCII, so
@@ -127,6 +141,8 @@ impl Default for OverlayTheme {
             caption_text: Color::srgb(0.7, 0.85, 1.0),
             pass_text: Color::srgb(0.4, 0.9, 0.5),
             fail_text: Color::srgb(1.0, 0.4, 0.4),
+            checkpoint_flash: Color::srgba(1.0, 0.85, 0.3, 0.35),
+            checkpoint_text: Color::srgb(1.0, 0.85, 0.3),
             font_size: CAPTION_FONT_SIZE,
             font: FontSource::default(),
             pass_mark: PASS_MARK.into(),
@@ -355,6 +371,32 @@ pub struct OverlayStepText;
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct OverlayChecksText;
 
+/// The flash over the window when a checkpoint is taken.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OverlayCheckpointFlash;
+
+/// The line in the strip saying a checkpoint was taken.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OverlayCheckpointText;
+
+/// The last checkpoint, while it is still on show.
+#[derive(Resource, Debug, Default)]
+struct CheckpointNotice {
+    /// Frames since it was taken, and its caption; `None` once it is gone.
+    shown: Option<(u16, String)>,
+}
+
+/// The caption for a checkpoint, such as `Checkpoint 2: 3 checks suggested`.
+#[must_use]
+pub fn checkpoint_text(taken: &CheckpointTaken) -> String {
+    let checks = match taken.candidates {
+        0 => "nothing changed".to_owned(),
+        1 => "1 check suggested".to_owned(),
+        many => format!("{many} checks suggested"),
+    };
+    format!("Checkpoint {}: {checks}", taken.number)
+}
+
 /// The camera the overlay draws through, for apps that do not leave it to the
 /// default UI camera.
 ///
@@ -391,7 +433,9 @@ impl Plugin for CursorOverlayPlugin {
             .init_resource::<TargetDescriptions>()
             .init_resource::<TrailHistory>()
             .init_resource::<ScenarioReport>()
-            .add_systems(Startup, spawn_overlay)
+            .init_resource::<CheckpointNotice>()
+            .add_message::<CheckpointTaken>()
+            .add_systems(Startup, (spawn_overlay, spawn_checkpoint_flash))
             .add_systems(
                 Update,
                 (
@@ -400,6 +444,7 @@ impl Plugin for CursorOverlayPlugin {
                     spawn_rings,
                     animate_rings,
                     update_trail,
+                    show_checkpoint,
                     update_caption,
                 )
                     .chain()
@@ -539,12 +584,35 @@ fn spawn_overlay(
                     LineMarker::Caption => line.insert(OverlayCaptionText),
                     LineMarker::Step => line.insert(OverlayStepText),
                     LineMarker::Checks => line.insert(OverlayChecksText),
+                    LineMarker::Checkpoint => line.insert(OverlayCheckpointText),
                 };
             };
             line(LineMarker::Caption, theme.caption_text);
             line(LineMarker::Step, theme.step_text);
             line(LineMarker::Checks, theme.pass_text);
+            line(LineMarker::Checkpoint, theme.checkpoint_text);
         });
+}
+
+/// Spawns the flash a checkpoint shows, hidden until one is taken.
+fn spawn_checkpoint_flash(mut commands: Commands, theme: Res<OverlayTheme>) {
+    commands.spawn((
+        OverlayCheckpointFlash,
+        OverlayRoot,
+        NotUnderTest,
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0),
+            right: px(0),
+            top: px(0),
+            bottom: px(0),
+            ..Node::default()
+        },
+        BackgroundColor(theme.checkpoint_flash.with_alpha(0.0)),
+        Pickable::IGNORE,
+        Visibility::Hidden,
+        GlobalZIndex(OVERLAY_Z_INDEX),
+    ));
 }
 
 /// Points every overlay root at [`OverlayCamera`], when one is named.
@@ -572,6 +640,8 @@ enum LineMarker {
     Step,
     /// The checks.
     Checks,
+    /// The last checkpoint.
+    Checkpoint,
 }
 
 /// The pointer's position, or `None` before the script has moved it.
@@ -722,9 +792,56 @@ fn update_trail(
     }
 }
 
+/// Flashes the window and names the checkpoint when one is taken, and fades
+/// both out. Counts frames, not seconds, so every runner draws the same thing.
+fn show_checkpoint(
+    mut taken: MessageReader<CheckpointTaken>,
+    mut notice: ResMut<CheckpointNotice>,
+    theme: Res<OverlayTheme>,
+    mut flash: Query<(&mut BackgroundColor, &mut Visibility), With<OverlayCheckpointFlash>>,
+    mut line: Query<(&mut Text, &mut TextColor), With<OverlayCheckpointText>>,
+) {
+    if let Some(latest) = taken.read().last() {
+        notice.shown = Some((0, checkpoint_text(latest)));
+    } else if let Some((age, _)) = notice.shown.as_mut() {
+        *age = age.saturating_add(1);
+    }
+    if notice
+        .shown
+        .as_ref()
+        .is_some_and(|(age, _)| *age >= CHECKPOINT_CAPTION_FRAMES)
+    {
+        notice.shown = None;
+    }
+    let age = notice.shown.as_ref().map(|(age, _)| *age);
+    let fading = age.filter(|age| *age < CHECKPOINT_FLASH_FRAMES);
+    for (mut colour, mut visibility) in &mut flash {
+        if let Some(age) = fading {
+            let left = 1.0 - f32::from(age) / f32::from(CHECKPOINT_FLASH_FRAMES);
+            colour.0 = theme
+                .checkpoint_flash
+                .with_alpha(theme.checkpoint_flash.alpha() * left);
+            *visibility = Visibility::Inherited;
+        } else if *visibility != Visibility::Hidden {
+            *visibility = Visibility::Hidden;
+        }
+    }
+    let caption = notice
+        .shown
+        .as_ref()
+        .map_or("", |(_, caption)| caption.as_str());
+    for (mut text, mut colour) in &mut line {
+        if text.0 != caption {
+            caption.clone_into(&mut text.0);
+        }
+        colour.0 = theme.checkpoint_text;
+    }
+}
+
 /// Rewrites the strip from the report.
 fn update_caption(
     report: Res<ScenarioReport>,
+    notice: Res<CheckpointNotice>,
     theme: Res<OverlayTheme>,
     descriptions: Res<TargetDescriptions>,
     mut strip: Query<&mut Node, With<OverlayCaptionStrip>>,
@@ -775,7 +892,7 @@ fn update_caption(
         };
     }
     for mut node in &mut strip {
-        node.display = if step_text.is_empty() && checks_text.is_empty() {
+        node.display = if step_text.is_empty() && checks_text.is_empty() && notice.shown.is_none() {
             Display::None
         } else {
             Display::Flex
