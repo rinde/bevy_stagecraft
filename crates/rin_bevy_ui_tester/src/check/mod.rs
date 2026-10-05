@@ -770,6 +770,16 @@ impl Check {
                 Err(format!("no UI node shows \"{text}\""))
             }),
             Self::Hovered(target) => {
+                // Only a target that names widgets by what they are can match
+                // several; the error from `resolve` would not tell that apart
+                // from a miss.
+                if !matches!(
+                    target,
+                    Target::Screen(_) | Target::World(_) | Target::App(_)
+                ) && let Lookup::Ambiguous(message) = widget::node(world, target)
+                {
+                    return Err(message);
+                }
                 let resolved = match resolve(world, target) {
                     Ok(resolved) => resolved,
                     Err(message) => return Ok(Err(message)),
@@ -796,7 +806,7 @@ impl Check {
                 let node = match widget::node(world, target) {
                     Lookup::Found(node) => node,
                     Lookup::Missing(message) => return Ok(Err(message)),
-                    Lookup::NotANode(message) => return Err(message),
+                    Lookup::Ambiguous(message) | Lookup::NotANode(message) => return Err(message),
                 };
                 let text = widget::text_of(world, widget::widget(world, node));
                 Ok(if matching.matches(&text) {
@@ -855,7 +865,7 @@ impl Check {
                 let node = match widget::node(world, target) {
                     Lookup::Found(node) => node,
                     Lookup::Missing(message) => return Ok(Err(message)),
-                    Lookup::NotANode(message) => return Err(message),
+                    Lookup::Ambiguous(message) | Lookup::NotANode(message) => return Err(message),
                 };
                 let Some(component) = self_and_ancestors(world, node)
                     .into_iter()
@@ -1109,7 +1119,7 @@ fn widget_state(world: &World, target: &Target, state: WidgetState) -> Result<Ch
             &format!("{target:?}"),
         )),
         Lookup::Missing(message) => Ok(Err(message)),
-        Lookup::NotANode(message) => Err(message),
+        Lookup::Ambiguous(message) | Lookup::NotANode(message) => Err(message),
     }
 }
 

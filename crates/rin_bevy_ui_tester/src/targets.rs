@@ -19,7 +19,7 @@ use bevy::{
         GetTypeRegistration, Reflect, ReflectDeserialize, ReflectSerialize, TypePath, TypeRegistry,
     },
     transform::components::GlobalTransform,
-    ui::{ComputedNode, UiGlobalTransform},
+    ui::{ComputedNode, Node, UiGlobalTransform},
     ui_widgets::Button,
 };
 use serde::{Deserialize, Serialize, de::Error as _};
@@ -28,6 +28,7 @@ pub use self::role::WidgetRole;
 use crate::{
     check::{Problem, check_component_type},
     extension::{AppTarget, AppTargetValue, AppValue, NO_CUSTOM_TARGET},
+    probe::describe_entity,
 };
 
 /// Where a step acts.
@@ -38,6 +39,8 @@ use crate::{
 /// nth of several. A target that names a widget is strict: if it matches
 /// several, the step or check fails and lists them, unless it is wrapped in
 /// [`Target::Nth`]; if it matches none, the failure suggests close matches.
+/// An ambiguous target fails a check even inside `Not(..)` or `Any(..)`,
+/// where a plain miss would not.
 ///
 /// ```ron
 /// MoveTo(Component("PauseButton")),
@@ -91,7 +94,9 @@ pub enum Target {
     Within(Box<Self>, Box<Self>),
     /// The match at this index, counting from 0 in the order the UI
     /// hierarchy reads: the explicit way out of a target that matches
-    /// several.
+    /// several. That order is depth first, roots sorted by `Entity` and
+    /// children by their index among their parent's children: the same on
+    /// every run, but not the order of layout on screen nor of `UiStack`.
     Nth(usize, Box<Self>),
 }
 
@@ -271,8 +276,12 @@ impl Target {
 pub(crate) enum Lookup {
     /// The one node the target names.
     Found(Entity),
-    /// No node, or more than one, matches right now; that may change.
+    /// No node matches right now; that may change.
     Missing(String),
+    /// More than one node matches, listed in the message. Unlike a miss, a
+    /// check cannot hold or fail on it, so not even inside `Not(..)` or
+    /// `Any(..)` does it pass: the target is the mistake.
+    Ambiguous(String),
     /// The target can never name a node: it is a position, or it names a
     /// type that is not a reflected component.
     NotANode(String),
@@ -350,7 +359,7 @@ pub(crate) fn is_tooling(world: &World, entity: Entity) -> bool {
 ///
 /// A message saying why the target cannot be found right now: nothing
 /// matches it (with close matches), several do (listing them), or it is not
-/// laid out yet.
+/// laid out yet, or it is not a UI node at all.
 pub fn resolve(world: &World, target: &Target) -> Result<ResolvedTarget, String> {
     match target {
         Target::Screen(position) => Ok(ResolvedTarget::at(*position)),
@@ -363,7 +372,9 @@ pub fn resolve(world: &World, target: &Target) -> Result<ResolvedTarget, String>
         | Target::Within(..)
         | Target::Nth(..) => match locate(world, target) {
             Lookup::Found(node) => resolve_node(world, target, node),
-            Lookup::Missing(message) | Lookup::NotANode(message) => Err(message),
+            Lookup::Missing(message) | Lookup::Ambiguous(message) | Lookup::NotANode(message) => {
+                Err(message)
+            }
         },
     }
 }
@@ -373,6 +384,14 @@ fn resolve_node(world: &World, target: &Target, node: Entity) -> Result<Resolved
     // A label is usually a child of the button it names; the button is what
     // the user wants to hit.
     let widget = enclosing_button(world, node).unwrap_or(node);
+    // `Name`, `Component` and `Role` can match any entity, a camera say,
+    // which no layout will ever place.
+    if world.get::<Node>(widget).is_none() {
+        return Err(format!(
+            "{target:?} names {} ({widget}), which is not a UI node",
+            describe_entity(world, widget)
+        ));
+    }
     let (Some(computed), Some(transform)) = (
         world.get::<ComputedNode>(widget),
         world.get::<UiGlobalTransform>(widget),

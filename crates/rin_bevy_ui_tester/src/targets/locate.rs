@@ -44,7 +44,7 @@ pub(super) fn locate(world: &World, target: &Target) -> Lookup {
         Matches::Nodes(nodes) => match nodes.as_slice() {
             [one] => Lookup::Found(*one),
             [] => Lookup::Missing(nothing_matches(world, target)),
-            several => Lookup::Missing(ambiguous(world, target, several)),
+            several => Lookup::Ambiguous(ambiguous(world, target, several)),
         },
         Matches::Missing(message) => Lookup::Missing(message),
         Matches::NotANode(message) => Lookup::NotANode(message),

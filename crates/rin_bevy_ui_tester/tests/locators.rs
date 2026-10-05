@@ -217,6 +217,70 @@ fn a_target_that_matches_several_fails_the_step_and_lists_them() {
 }
 
 #[test]
+fn an_ambiguous_target_fails_a_check_even_inside_not_or_any() {
+    let deletes = Target::role(WidgetRole::Button, "Delete");
+    let checks = [
+        !Check::exists(Target::text("Delete")),
+        !Check::disabled(deletes.clone()),
+        !Check::hovered(Target::component::<Row>()),
+        Check::any([Check::exists(deletes), Check::exists(Target::text("Pause"))]),
+    ];
+    // A failed step skips the rest, so each check plays on its own.
+    for check in checks {
+        let (report, _) = run(&Scenario::new("ambiguous inverted")
+            .setup(spawn)
+            .steps([Step::check(check.clone())]));
+        let outcomes = outcomes(&report);
+        let [Outcome::Fail(message)] = outcomes.as_slice() else {
+            panic!("{check} should fail, but came to {outcomes:?}");
+        };
+        assert!(
+            message.contains(" is ambiguous: it matches 2 widgets: ")
+                && message.ends_with("; pick one with Nth(..) or narrow it with Within(..)"),
+            "{check} lists the matches: {message}"
+        );
+    }
+}
+
+#[test]
+fn a_target_that_names_an_entity_outside_the_ui_says_it_is_not_a_ui_node() {
+    let (report, _) = run(&Scenario::new("camera")
+        .setup(|world: &mut World| {
+            spawn(world);
+            world.spawn((
+                Camera2d,
+                Name::new("spare camera"),
+                Camera {
+                    is_active: false,
+                    ..Camera::default()
+                },
+            ));
+        })
+        .steps([Step::move_to(Target::name("spare camera"))]));
+    let outcomes = outcomes(&report);
+    let [Outcome::Fail(message)] = outcomes.as_slice() else {
+        panic!("{outcomes:?}");
+    };
+    assert!(
+        message.starts_with("Name(\"spare camera\") names `spare camera` (")
+            && message.ends_with("), which is not a UI node"),
+        "{message}"
+    );
+}
+
+#[test]
+fn not_exists_over_a_target_that_matches_nothing_still_holds() {
+    let (report, _) = run(&Scenario::new("absent").setup(spawn).steps([
+        Step::check(!Check::exists(Target::text("Quit"))),
+        Step::check(!Check::exists(Target::within(
+            Target::name("first row"),
+            Target::text("Pears"),
+        ))),
+    ]));
+    assert_eq!(outcomes(&report), [Outcome::Pass, Outcome::Pass]);
+}
+
+#[test]
 fn a_target_that_matches_nothing_suggests_close_matches() {
     let misses = [
         (
