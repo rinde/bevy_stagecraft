@@ -41,12 +41,13 @@ use bevy::{
 };
 
 use super::{
-    AppCheckValue, Check, Comparison, Value,
+    Check, Comparison, Value,
     app::app_facts,
     reflect::{self, Role},
     widget::{self, WidgetState},
 };
 use crate::{
+    extension::AppCheckValue,
     probe::Probe,
     scenario::Scenario,
     targets::{Target, is_tooling},

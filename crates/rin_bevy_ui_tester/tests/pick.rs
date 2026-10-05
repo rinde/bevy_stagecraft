@@ -17,7 +17,7 @@ use bevy::{
     ui::{ComputedNode, InteractionDisabled, UiGlobalTransform, px},
     ui_widgets::Button,
 };
-use common::{Activations, spawn_ui};
+use common::{Activations, UiTarget, spawn_ui};
 use rin_bevy_ui_tester::{
     AppCheckForm, Check, FieldValue, HeadlessPlugins, NoiseFilter, NotUnderTest, Picked,
     RecordedEvent, RecordedKind, Step, StepOptions, Target, TextMatch, WorldSnapshot,
@@ -222,27 +222,11 @@ fn through_a_screen_target_only_the_texts_shown_are_offered() {
 fn a_label_that_is_not_its_own_target_offers_its_text_through_text_of() {
     let mut app = form_app();
     let label = text_node(&mut app, "Score: 3");
-    let resolver_target = Target::custom("score", "");
-    // The app names the label with a resolver of its own.
-    app.world_mut()
-        .get_resource_or_init::<rin_bevy_ui_tester::TargetResolvers>()
-        .register("score", move |_world, _argument| {
-            Ok(rin_bevy_ui_tester::ResolvedTarget::on_widget(
-                Vec2::ZERO,
-                label,
-            ))
-        });
-    let checks = checks_that_hold(
-        app.world(),
-        label,
-        &resolver_target,
-        &NoiseFilter::default(),
-    );
+    // The app names the label with a target of its own.
+    let app_target = Target::app(UiTarget::Showing("Score: 3".into()));
+    let checks = checks_that_hold(app.world(), label, &app_target, &NoiseFilter::default());
     assert!(
-        checks.contains(&Check::text_of(
-            resolver_target,
-            TextMatch::exact("Score: 3")
-        )),
+        checks.contains(&Check::text_of(app_target, TextMatch::exact("Score: 3"))),
         "{checks:?}"
     );
 }

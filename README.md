@@ -33,8 +33,8 @@ app.update();
 ## Example scenario
 
 A scenario is plain data: steps, with time counted in frames of 1/60 s, and
-checks. `run_headless` builds a headless app, runs the setup hook, plays the
-steps and returns a `ScenarioReport`.
+checks. `run_headless` builds a headless app, builds the world with the
+scenario's setup, plays the steps and returns a `ScenarioReport`.
 
 ```rust,ignore
 use rin_bevy_ui_tester::{Check, Scenario, Step, Target};
@@ -123,12 +123,80 @@ of `TrackRaisedOnBridge`, `StationNamed(String)`, `Joined(from: Target, to: Targ
   best in a file.
 - One app check type per app: a second type with `#[reflect(AppCheck)]` is a
   load error naming both.
-- `Registry::app_check_type()` (or `app_check_type(&types)`) lists the type's
-  variants and their field types, for offering app checks with a form.
+- `Registry::app_type(Extension::Check)` (or `app_type(&types, ..)`) lists
+  the type's variants and their field types, for offering app checks with a
+  form.
 - Automatic registration needs Bevy's `reflect_auto_register` feature, which
   is part of Bevy's default features and which this crate turns on. A type
   that is not found that way can still be added with
   `registry.register_type::<T>()`.
+
+### The app's own setups, views and targets
+
+Setups, views and targets follow the same pattern: one enum per extension
+point, deriving `Reflect` and carrying the attribute, found by Bevy with no
+registration call.
+
+```rust,ignore
+use rin_bevy_ui_tester::{
+    AppSetup, AppTarget, AppView, ReflectAppSetup, ReflectAppTarget, ReflectAppView,
+    ResolvedTarget,
+};
+
+#[derive(Reflect, Debug, Clone)]
+#[reflect(AppSetup)]
+enum RailSetup { Empty, SavedWorld(String) }
+
+impl AppSetup for RailSetup {
+    // Builds the world the scenario starts from; an error fails the scenario
+    // before its first step.
+    fn build(&self, world: &mut World) -> Result<(), String> { /* .. */ }
+}
+
+#[derive(Reflect, Debug, Clone)]
+#[reflect(AppView)]
+enum RailView { Standard, TopDown }
+
+impl AppView for RailView {
+    // Arranges the camera and layout; the recorder and the gallery call it.
+    fn arrange(&self, world: &mut World) { /* .. */ }
+}
+
+#[derive(Reflect, Debug, Clone)]
+#[reflect(AppTarget)]
+enum RailTarget { Piece(u32), Station(String) }
+
+impl AppTarget for RailTarget {
+    fn resolve(&self, world: &World) -> Result<ResolvedTarget, String> { /* .. */ }
+}
+
+Scenario::new("two stops")
+    .app_setup(RailSetup::SavedWorld("two_stops_and_a_train.ron".into()))
+    .app_view(RailView::TopDown)
+    .step(Step::move_to(Target::app(RailTarget::Station("Alpha".into()))))
+```
+
+A file writes each inside `App(..)`: `setup: App(SavedWorld("two_stops_and_a_train.ron"))`,
+`view: App(TopDown)`, `MoveTo(App(Station("Alpha")))`, and the same anywhere
+a target goes (`Check(Hovered(App(Piece(3))))`, a `Target` field of an app
+check). As with checks, the value is read as the app's type when the scenario
+loads, so a misspelt variant or a wrong argument is a load error naming where
+it is (`the setup`, `the view`, `step 3`) and listing the variants; one type
+per extension point, and a second one is a load error naming both.
+
+- A setup closure (`Scenario::setup(|world| ..)`) and a view closure still
+  work for scenarios written in Rust. They run after the app's setup and view
+  and are never written to a file.
+- A setup variant that names a file is the app's to find: the crate passes the
+  name along, so resolve it against the directory the app keeps its scenarios
+  in.
+- Each trait has an optional associated function for recordings:
+  `AppSetup::capture(world, dir, stem)` turns the app's state into a setup
+  when a recording starts (writing a save into `dir` if it needs one),
+  `AppView::current(world)` names the view, and `AppTarget::at(world, position)`
+  names a click that hit no label. They replace the session hooks of earlier
+  versions.
+- `Registry::app_type(Extension::Setup)` and so on list the variants.
 
 Most questions about plain Bevy data are built in, typed in Rust and found
 through Bevy's type registry (`AppTypeRegistry`), so writing app code for a
@@ -175,8 +243,8 @@ does not stop the script. Reports name each check in words, such as `"1" is
 shown`.
 
 Targets are `Target::screen`, `Target::text` (any Bevy UI toolkit),
-`Target::world` and `Target::custom`, which an app backs with a resolver
-registered in `TargetResolvers`. After moving onto a widget target the player
+`Target::world` and `Target::app`, one of the app's own targets (see above).
+After moving onto a widget target the player
 checks that the widget, or a descendant, is under the pointer, and otherwise
 fails naming what covers it. A failed step skips the rest of the script.
 
@@ -185,10 +253,10 @@ fails naming what covers it. A failed step skips the rest of the script.
 `Scenario::to_script()` gives a `Script`, plain serde data (format version,
 name, window size, setup, view, steps, expect list), and `Scenario::from_ron`
 reads one back, so a scenario can be written in Rust or as a file and
-converted either way. Closures cannot be serialised, so a script names its
-setups, views and custom targets, and a `Registry` maps the names to code.
-Types that checks name, and
-the app's check type, are looked up in `Registry::types`, so a whole file is
+converted either way. Closures cannot be serialised, so a script holds the
+app's setup, view, targets and checks as values of its own reflected enums,
+inside `App(..)`; nothing is looked up by a name. Types that checks name, and
+the app's own types, are looked up in `Registry::types`, so a whole file is
 checked when it loads, with no world at hand. It starts with every type that
 derives `Reflect`; share the app's own registry instead with
 `Registry::default().with_types_of(app.world())`, or add types one by one with
@@ -206,19 +274,24 @@ app's own checks as `App(..)`. Version 3 also dropped checks looked up by name
 refused with a load error saying to write `App(..)` instead. The string state
 probe is gone too: a file with `expect_state` or a `State(key: .., value: ..)`
 check is refused with a load error saying to publish the state as a reflected
-resource and check it with `Resource(..)`. Any other older file is also a
-newer one.
+resource and check it with `Resource(..)`. Setups, views and targets went
+the same way later in version 3: a `Named(..)` or `File(..)` setup, a view
+given by name (`view: "top_down"`) and a `Custom(resolver: .., argument: ..)`
+target are refused with a load error saying to write `App(..)`. Any other
+older file is also a newer one.
 
 ```ron
 (
     format_version: 3,
     name: "click pause",
-    setup: Named("plain_ui"),
+    setup: App(PlainUi),                        // the app's own setup
+    view: App(Zoomed(2.0)),                     // and view
     steps: [
         Check(Not(Hovered(Text("Pause")))),
         Glide(target: Text("Pause"), frames: 20),
         Check(Hovered(Text("Pause"))),
         Click(Left),
+        MoveTo(App(PauseButton)),                // the app's own targets
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
         Check(App(ActivatedOnce)),               // the app's own checks
         Check(App(Activated(1))),
@@ -272,8 +345,9 @@ tests do not.
 Replace the `OverlayTheme` resource to change colours, sizes, font and marks.
 The default marks are the words `PASS` and `FAIL`, because the bundled font has
 no `\u{2714}` or `\u{2718}` (they render as empty boxes); set a font that has
-them if you want the glyphs. Add describers to `TargetDescriptions` to word an
-app's own custom targets.
+them if you want the glyphs. The app's own targets read as their RON
+(`Station("Alpha")`); add describers to `TargetDescriptions` to word them
+otherwise.
 
 The overlay draws through Bevy's default UI camera, which is never a camera
 that renders to an image. If your cameras have custom targets, set the
@@ -342,7 +416,8 @@ App::new()
 ```
 
 Picking a scenario calls the app's reset hook, then the scenario's setup and
-view, resizes the primary window to the scenario's window size and plays it
+view (a setup that fails is shown in the status line, and the run fails with
+every step skipped), resizes the primary window to the scenario's window size and plays it
 with the cursor overlay. The reset hook must only put the app's own state back:
 it must not despawn the gallery's, the overlay's or the Scenarios window's
 entities. Everything the gallery spawns carries `NotUnderTest`, which target
@@ -379,14 +454,19 @@ simplified with Ramer-Douglas-Peucker (3 px by default), a press and release in
 place is a `Click`, a straight press, move and release is a `Drag`, a click on
 a UI node with a label is `Target::text(..)`, idle time over 1.5 s is shortened
 to a 30 frame `Wait`, and a modifier held around a key folds into a `Tap`. The
-thresholds are `StepOptions`. The app plugs in through `SessionHooks`:
+thresholds are `StepOptions`. The app plugs in through its own reflected
+types (see [The app's own setups, views and targets](#the-apps-own-setups-views-and-targets)):
 
-- `capture_setup` runs on start and writes what the app needs to get back to
-  this state into the output directory (rails writes a save file), returning
-  the script's `setup` (`Setup::File(..)`).
-- `capture_view` names the view.
-- `resolve_target` is offered every click that hit no label (rails turns
-  ground clicks into lattice points); the rest stay `screen(..)`.
+- `AppSetup::capture` runs on start and turns the state into one of the app's
+  setups, writing what it needs into the output directory (rails writes a save
+  file); that is the script's `setup: App(..)`. An error stops the recording
+  from starting.
+- `AppView::current` names the view, the script's `view: App(..)`.
+- `AppTarget::at` is offered every click that hit no label (rails turns ground
+  clicks into lattice points); the rest stay `screen(..)`.
+
+and through `SessionHooks`:
+
 - `noise_filter` says which types the snapshots behind the suggested checks
   leave out (below).
 - `checkpoint_key` picks the key that takes a checkpoint (below); F8 unless
@@ -398,7 +478,7 @@ thresholds are `StepOptions`. The app plugs in through `SessionHooks`:
     format_version: 3,
     name: "Recording",
     window_size: (640, 360),
-    setup: File("recording.setup.txt"),
+    setup: App(Counter(count: 0, switch: false)),
     steps: [
         MoveTo(Screen((22.5, 27.8))),
         Glide(target: Text("+1"), frames: 12),
@@ -497,10 +577,10 @@ frame; the snapshot reads it like any other, and the suggested
 `Resource(..)` checks read it back on playback. This replaces the string
 `StateProbe` of earlier versions.
 
-The file and the setup file go to the gallery's export directory (or the
-`SessionPlugin`'s). Load it like any other script: the app reads the setup file
-the script names and calls `.setup(..)` on the loaded scenario; see
-`tests/gallery.rs` and the example.
+The file, and whatever the app's `AppSetup::capture` wrote, go to the
+gallery's export directory (or the `SessionPlugin`'s). Load it like any other
+script: its setup is the app's own value, so it plays with nothing else added;
+see `tests/session.rs`, `tests/gallery.rs` and the example.
 
 ### Picking a check by clicking a node
 
@@ -516,7 +596,7 @@ ends it.
 The Scenarios window then shows, for the picked node:
 
 - its targets, best first: `Text(..)` of each label that only it shows, then
-  what the app's `resolve_target` hook makes of the position, then
+  what the app's `AppTarget::at` makes of the position, then
   `Screen(..)` of its middle. Clicking another one works the checks out again
   through it;
 - the checks that hold for it now: `Shows(..)` or `TextOf(..)`, `Visible`,

@@ -1,4 +1,5 @@
-//! A plain Bevy UI shared by the RON tests.
+//! A plain Bevy UI shared by the RON tests, with its own setups, views,
+//! targets and checks.
 
 #![allow(
     dead_code,
@@ -12,7 +13,8 @@ use bevy::{
     ui_widgets::{Activate, Button},
 };
 use rin_bevy_ui_tester::{
-    AppCheck, CheckResult, Probe, ReflectAppCheck, Registry, ResolvedTarget, Target, resolve,
+    AppCheck, AppSetup, AppTarget, AppView, CheckResult, Probe, ReflectAppCheck, ReflectAppSetup,
+    ReflectAppTarget, ReflectAppView, Registry, ResolvedTarget, Target, resolve,
 };
 
 /// How many times the button was activated.
@@ -88,12 +90,73 @@ impl AppCheck for UiCheck {
     }
 }
 
-/// The registry the RON scenarios are loaded with.
+/// The test UI's own setups, found by Bevy with no registration call.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq)]
+#[reflect(AppSetup)]
+pub enum UiSetup {
+    /// A camera and the "Pause" button.
+    PlainUi,
+    /// The same, with the button activated this many times already.
+    Activated(u32),
+    /// A setup that cannot be built: the save it names is missing.
+    MissingSave(String),
+}
+
+impl AppSetup for UiSetup {
+    fn build(&self, world: &mut World) -> Result<(), String> {
+        match self {
+            Self::PlainUi => spawn_ui(world),
+            Self::Activated(count) => {
+                spawn_ui(world);
+                world.insert_resource(Activations(*count));
+            }
+            Self::MissingSave(file) => return Err(format!("there is no save `{file}`")),
+        }
+        Ok(())
+    }
+}
+
+/// Which of the test UI's views was arranged last.
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct Arranged(pub UiView);
+
+/// The test UI's own views, found by Bevy with no registration call.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+#[reflect(AppView)]
+pub enum UiView {
+    /// As spawned.
+    Plain,
+    /// Magnified this many times.
+    Zoomed(f32),
+}
+
+impl AppView for UiView {
+    fn arrange(&self, world: &mut World) {
+        world.insert_resource(Arranged(self.clone()));
+    }
+}
+
+/// The test UI's own targets, found by Bevy with no registration call.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq)]
+#[reflect(AppTarget)]
+pub enum UiTarget {
+    /// Where the "Pause" button is spawned, as a bare position.
+    PauseButton,
+    /// The node showing exactly this text, as its own widget.
+    Showing(String),
+}
+
+impl AppTarget for UiTarget {
+    fn resolve(&self, world: &World) -> Result<ResolvedTarget, String> {
+        match self {
+            Self::PauseButton => Ok(ResolvedTarget::at(Vec2::new(150.0, 50.0))),
+            Self::Showing(text) => resolve(world, &Target::text(text.clone())),
+        }
+    }
+}
+
+/// The registry the RON scenarios are loaded with: the default one, as
+/// every type the tests read is found by Bevy.
 pub fn registry() -> Registry {
-    let mut registry = Registry::default();
-    registry.setups.register("plain_ui", spawn_ui);
-    registry.targets.register("pause_button", |_world, _arg| {
-        Ok(ResolvedTarget::at(Vec2::new(150.0, 50.0)))
-    });
-    registry
+    Registry::default()
 }

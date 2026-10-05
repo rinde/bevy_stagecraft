@@ -14,8 +14,8 @@ use bevy::{
     ui_widgets::{Activate, Button},
 };
 use rin_bevy_ui_tester::{
-    HeadlessPlugins, Modifiers, Outcome, ResolvedTarget, Scenario, ScenarioPlayerPlugin,
-    ScenarioReport, Step, Target, TargetResolvers,
+    AppTarget, AppTargetValue, HeadlessPlugins, Modifiers, Outcome, ReflectAppTarget,
+    ResolvedTarget, Scenario, ScenarioPlayerPlugin, ScenarioReport, Step, Target,
 };
 
 /// How many times a button was activated.
@@ -223,24 +223,33 @@ fn dragging_across_a_pad_reports_the_distance() {
     assert!(report.passed(), "{:?}", report.failures());
 }
 
+/// This app's own targets, found by Bevy with no registration call.
+#[derive(Reflect, Debug, Clone)]
+#[reflect(AppTarget)]
+enum LatticeTarget {
+    /// A row of the lattice, counted in pixels below the top of the button.
+    Row(f32),
+}
+
+impl AppTarget for LatticeTarget {
+    fn resolve(&self, _world: &World) -> Result<ResolvedTarget, String> {
+        match self {
+            Self::Row(row) if *row < 0.0 => Err(format!("there is no row {row}")),
+            Self::Row(row) => Ok(ResolvedTarget::at(Vec2::new(150.0, 40.0 + row))),
+        }
+    }
+}
+
 #[test]
-fn custom_targets_resolve_through_a_registered_resolver() {
+fn the_apps_own_targets_resolve_with_no_registration_call() {
     let mut app = App::new();
     app.add_plugins((HeadlessPlugins::default(), ScenarioPlayerPlugin));
     app.finish();
     app.cleanup();
-    app.world_mut()
-        .resource_mut::<TargetResolvers>()
-        .register("lattice", |_, argument| {
-            let cell: f32 = argument
-                .parse()
-                .map_err(|_| format!("`{argument}` is not a cell"))?;
-            Ok(ResolvedTarget::at(Vec2::new(150.0, 40.0 + cell)))
-        });
-    let report = Scenario::new("custom")
+    let report = Scenario::new("app target")
         .setup(spawn_ui)
         .steps([
-            Step::move_to(Target::custom("lattice", "10")),
+            Step::move_to(Target::app(LatticeTarget::Row(10.0))),
             Step::click(),
             Step::wait(1),
         ])
@@ -250,10 +259,40 @@ fn custom_targets_resolve_through_a_registered_resolver() {
         .run_in(&mut app);
     assert!(report.passed(), "{:?}", report.failures());
 
-    let unknown = Scenario::new("unknown")
-        .step(Step::move_to(Target::custom("nope", "")))
+    let nowhere = Scenario::new("nowhere")
+        .step(Step::move_to(Target::app(LatticeTarget::Row(-1.0))))
         .run_in(&mut app);
-    assert!(unknown.failures()[0].contains("no target resolver named `nope`"));
+    assert!(
+        nowhere.failures()[0].contains("there is no row -1"),
+        "{:?}",
+        nowhere.failures()
+    );
+}
+
+#[test]
+fn an_app_target_written_as_ron_in_rust_is_read_as_the_apps_type_when_it_is_used() {
+    let written = |ron: &str| Target::App(AppTargetValue::from_ron(ron).expect("one RON value"));
+    let report = Scenario::new("from RON")
+        .setup(spawn_ui)
+        .steps([
+            Step::move_to(written("Row( 10.0 )")),
+            Step::click(),
+            Step::wait(1),
+        ])
+        .expect("button activated", |probe| {
+            probe.resource::<Activations>().is_some_and(|a| a.0 == 1)
+        })
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+
+    let misspelt = Scenario::new("misspelt")
+        .step(Step::move_to(written("Rwo(1.0)")))
+        .run_headless();
+    let failure = &misspelt.failures()[0];
+    assert!(
+        failure.contains("`Rwo(1.0)` is not a `LatticeTarget`") && failure.contains("`Row(f32)`"),
+        "{failure}"
+    );
 }
 
 #[test]

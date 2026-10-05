@@ -12,13 +12,15 @@ use bevy::{
     ecs::world::World,
     input::{keyboard::KeyCode, mouse::MouseButton},
     math::Vec2,
+    reflect::{GetTypeRegistration, Reflect, TypePath},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     check::Check,
+    extension::{AppSetup, AppView, Setup, View},
     probe::Probe,
-    script::{FORMAT_VERSION, LoadError, Registry, Script, Setup},
+    script::{FORMAT_VERSION, LoadError, Registry, Script},
     targets::Target,
 };
 
@@ -322,8 +324,8 @@ impl Step {
     }
 }
 
-/// What a hook does to the world.
-pub(crate) type HookFn = dyn Fn(&mut World) + Send + Sync;
+/// What a setup or view closure does to the world.
+type HookFn = dyn Fn(&mut World) + Send + Sync;
 
 /// What a check does with a probe.
 type CheckFn = dyn Fn(&Probe<'_>) -> CheckResult + Send + Sync;
@@ -356,7 +358,13 @@ impl NamedCheck {
     }
 }
 
-/// A scenario: a name, hooks the app gives meaning to, a script and checks.
+/// A scenario: a name, how its world is set up and shown, a script and
+/// checks.
+///
+/// The setup and the view are the app's own values (see
+/// [`crate::extension`]), which a file holds, or closures, which only a
+/// scenario in Rust can hold; a scenario may have both, and the app's value
+/// runs first.
 ///
 /// ```
 /// use rin_bevy_ui_tester::{Scenario, Step, Target};
@@ -371,17 +379,18 @@ impl NamedCheck {
 pub struct Scenario {
     /// What the scenario is called.
     name: String,
-    /// Builds the world the script runs against.
+    /// A closure that builds the world the script runs against, after the
+    /// app's setup.
     setup: Option<Arc<HookFn>>,
-    /// Arranges how the world is shown (camera, window); the recorder and the
-    /// gallery decide what that means.
+    /// A closure that arranges how the world is shown (camera, window), after
+    /// the app's view; the recorder and the gallery call it.
     view: Option<Arc<HookFn>>,
     /// The size of the window the scenario wants, in logical pixels.
     window: Option<(u32, u32)>,
-    /// The setup as the script refers to it, for the app to resolve.
-    setup_ref: Option<Setup>,
-    /// The name the view hook is referred to by in a script.
-    view_ref: Option<String>,
+    /// The app's setup, which the script holds.
+    app_setup: Option<Setup>,
+    /// The app's view, which the script holds.
+    app_view: Option<View>,
     /// The script.
     steps: Vec<Step>,
     /// What [`Check::Named`] refers to, one per label.
@@ -397,8 +406,8 @@ impl fmt::Debug for Scenario {
             .field("setup", &self.setup.is_some())
             .field("view", &self.view.is_some())
             .field("window", &self.window)
-            .field("setup_ref", &self.setup_ref)
-            .field("view_ref", &self.view_ref)
+            .field("app_setup", &self.app_setup)
+            .field("app_view", &self.app_view)
             .field("steps", &self.steps)
             .field("checks", &self.checks)
             .field("expects", &self.expects)
@@ -415,61 +424,51 @@ impl Scenario {
             setup: None,
             view: None,
             window: None,
-            setup_ref: None,
-            view_ref: None,
+            app_setup: None,
+            app_view: None,
             steps: Vec::new(),
             checks: Vec::new(),
             expects: Vec::new(),
         }
     }
 
-    /// Sets the hook that builds the world, for example spawning a UI.
+    /// Sets a closure that builds the world, for example spawning a UI. It
+    /// runs after the app's setup, if there is one, and is not part of the
+    /// script: a file holds the app's setup only ([`Scenario::app_setup`]).
     #[must_use]
     pub fn setup(mut self, hook: impl Fn(&mut World) + Send + Sync + 'static) -> Self {
         self.setup = Some(Arc::new(hook));
         self
     }
 
-    /// Sets the hook that arranges how the world is shown. Headless runs do
-    /// not call it; the recorder and the gallery do.
+    /// Sets a closure that arranges how the world is shown. Headless runs do
+    /// not call it; the recorder and the gallery do, after the app's view.
+    /// Like [`Scenario::setup`], it is not part of the script.
     #[must_use]
     pub fn view(mut self, hook: impl Fn(&mut World) + Send + Sync + 'static) -> Self {
         self.view = Some(Arc::new(hook));
         self
     }
 
-    /// Sets the setup hook and gives it a name, so an exported script refers
-    /// to it as [`Setup::Named`] and an app that registers a hook of that name
-    /// gets the same setup when it loads the file.
+    /// Sets the app's setup: a value of its `#[reflect(AppSetup)]` enum (see
+    /// [`AppSetup`]), which an exported script holds as `setup: App(..)`.
     #[must_use]
-    pub fn setup_named(
+    pub fn app_setup<T: AppSetup + Reflect + GetTypeRegistration + TypePath>(
         mut self,
-        name: impl Into<String>,
-        hook: impl Fn(&mut World) + Send + Sync + 'static,
+        setup: T,
     ) -> Self {
-        self.setup = Some(Arc::new(hook));
-        self.setup_ref = Some(Setup::Named(name.into()));
+        self.app_setup = Some(Setup::app(setup));
         self
     }
 
-    /// Sets the view hook and gives it a name, like [`Scenario::setup_named`].
+    /// Sets the app's view: a value of its `#[reflect(AppView)]` enum (see
+    /// [`AppView`]), which an exported script holds as `view: App(..)`.
     #[must_use]
-    pub fn view_named(
+    pub fn app_view<T: AppView + Reflect + GetTypeRegistration + TypePath>(
         mut self,
-        name: impl Into<String>,
-        hook: impl Fn(&mut World) + Send + Sync + 'static,
+        view: T,
     ) -> Self {
-        self.view = Some(Arc::new(hook));
-        self.view_ref = Some(name.into());
-        self
-    }
-
-    /// Refers to a setup the app resolves itself, for example
-    /// `Setup::File("saves/start.ron".into())`. The crate only stores it; no
-    /// setup hook is set.
-    #[must_use]
-    pub fn setup_ref(mut self, setup: Setup) -> Self {
-        self.setup_ref = Some(setup);
+        self.app_view = Some(View::app(view));
         self
     }
 
@@ -561,16 +560,16 @@ impl Scenario {
         self.window
     }
 
-    /// The setup reference the script carries, if any.
+    /// The app's setup, which the script carries, if any.
     #[must_use]
-    pub const fn setup_reference(&self) -> Option<&Setup> {
-        self.setup_ref.as_ref()
+    pub const fn setup_value(&self) -> Option<&Setup> {
+        self.app_setup.as_ref()
     }
 
-    /// The name of the view hook the script carries, if any.
+    /// The app's view, which the script carries, if any.
     #[must_use]
-    pub fn view_reference(&self) -> Option<&str> {
-        self.view_ref.as_deref()
+    pub const fn view_value(&self) -> Option<&View> {
+        self.app_view.as_ref()
     }
 
     /// The script.
@@ -591,29 +590,45 @@ impl Scenario {
         self.expects.clone()
     }
 
-    /// Runs the setup hook, if there is one. Returns whether there was.
-    pub fn run_setup(&self, world: &mut World) -> bool {
-        self.setup.as_ref().is_some_and(|hook| {
+    /// Builds the scenario's world: the app's setup, then the setup
+    /// closure, each if there is one. Returns whether there was either.
+    ///
+    /// # Errors
+    ///
+    /// Why the app's setup failed; the closure does not run then.
+    pub fn run_setup(&self, world: &mut World) -> Result<bool, String> {
+        if let Some(setup) = &self.app_setup {
+            setup.build(world)?;
+        }
+        if let Some(hook) = &self.setup {
             hook(world);
-            true
-        })
+        }
+        Ok(self.app_setup.is_some() || self.setup.is_some())
     }
 
-    /// Runs the view hook, if there is one. Returns whether there was.
-    pub fn run_view(&self, world: &mut World) -> bool {
-        self.view.as_ref().is_some_and(|hook| {
+    /// Arranges the view: the app's view, then the view closure, each if
+    /// there is one. Returns whether there was either.
+    ///
+    /// # Errors
+    ///
+    /// Why the app's view could not be arranged, such as a value that does
+    /// not read as the app's view type; the closure does not run then.
+    pub fn run_view(&self, world: &mut World) -> Result<bool, String> {
+        if let Some(view) = &self.app_view {
+            view.arrange(world)?;
+        }
+        if let Some(hook) = &self.view {
             hook(world);
-            true
-        })
+        }
+        Ok(self.app_view.is_some() || self.view.is_some())
     }
 }
 
 impl Scenario {
     /// The serialisable form of this scenario. Closures cannot be written
-    /// out, so of the code only names survive: the hooks set with
-    /// [`Scenario::setup_named`] and [`Scenario::view_named`]. Anything set
-    /// with the plain [`Scenario::setup`] or [`Scenario::view`] is not part
-    /// of the script, and a [`Check::Named`] label stays in it only to make
+    /// out, so the setup and view closures ([`Scenario::setup`],
+    /// [`Scenario::view`]) are not part of the script, while the app's own
+    /// setup and view are; a [`Check::Named`] label stays in it only to make
     /// writing it out fail, naming the closure.
     #[must_use]
     pub fn to_script(&self) -> Script {
@@ -621,31 +636,31 @@ impl Scenario {
             format_version: FORMAT_VERSION,
             name: self.name.clone(),
             window_size: self.window,
-            setup: self.setup_ref.clone(),
-            view: self.view_ref.clone(),
+            setup: self.app_setup.clone(),
+            view: self.app_view.clone(),
             steps: self.steps.clone(),
             expect: self.expects.clone(),
         }
     }
 
-    /// Builds a scenario from `script`, finding every named setup, view and
-    /// target resolver in `registry`, and reading every app check as the
-    /// app's check type in [`Registry::types`].
+    /// Builds a scenario from `script`, reading its setup, view, targets and
+    /// checks inside `App(..)` as the app's types in [`Registry::types`], and
+    /// checking the types and fields its checks name.
     ///
     /// # Errors
     ///
     /// [`LoadError`] when the format version is not one this crate reads,
-    /// when the script names a setup, view, target or type that `registry`
-    /// does not have, when an app check does not read as the app's check
-    /// type. Nothing is ever skipped.
+    /// when a value inside `App(..)` does not read as the app's type, or when
+    /// a check names a type or field that `registry` does not have. Nothing
+    /// is ever skipped.
     pub fn from_script(script: Script, registry: &Registry) -> Result<Self, LoadError> {
         crate::script::build_scenario(script, registry)
     }
 
-    /// Reads a scenario from RON text, with a default [`Registry`]: no setups,
-    /// views or target resolvers, and every type that derives `Reflect`,
-    /// the app's check type among them. Chain `.expect(..)` to add Rust
-    /// assertions to a recorded file.
+    /// Reads a scenario from RON text, with a default [`Registry`]: every
+    /// type that derives `Reflect`, the app's own setup, view, target and
+    /// check types among them. Chain `.expect(..)` to add Rust assertions to
+    /// a recorded file.
     ///
     /// # Errors
     ///
@@ -654,7 +669,7 @@ impl Scenario {
         Self::from_ron_with(text, &Registry::default())
     }
 
-    /// Reads a scenario from RON text, resolving names in `registry`.
+    /// Reads a scenario from RON text, against the types in `registry`.
     ///
     /// # Errors
     ///
@@ -672,19 +687,15 @@ impl Scenario {
         crate::script::export_ron(&self.to_script())
     }
 
-    /// Puts a scenario together from a script and what the loader resolved.
-    pub(crate) fn assemble(
-        script: Script,
-        setup: Option<Arc<HookFn>>,
-        view: Option<Arc<HookFn>>,
-    ) -> Self {
+    /// Puts a scenario together from a script the loader has read.
+    pub(crate) fn assemble(script: Script) -> Self {
         Self {
             name: script.name,
-            setup,
-            view,
+            setup: None,
+            view: None,
             window: script.window_size,
-            setup_ref: script.setup,
-            view_ref: script.view,
+            app_setup: script.setup,
+            app_view: script.view,
             steps: script.steps,
             checks: Vec::new(),
             expects: script.expect,

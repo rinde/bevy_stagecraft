@@ -16,7 +16,8 @@ use bevy::{
     ui_widgets::{Activate, Button},
 };
 use rin_bevy_ui_tester::{
-    HeadlessPlugins, Probe, Scenario, Step, Target, TargetDescriptions, describe_step,
+    AppTarget, HeadlessPlugins, Probe, ReflectAppTarget, ResolvedTarget, Scenario, Step, Target,
+    TargetDescriptions, describe_step,
     overlay::{
         CursorOverlayPlugin, OverlayCamera, OverlayCaptionStrip, OverlayChecksText, OverlayCursor,
         OverlayHeld, OverlayRing, OverlayRoot, OverlayStepText, OverlayTheme, OverlayTrailDot,
@@ -236,19 +237,38 @@ fn steps_read_in_words() {
     );
 }
 
+/// An app's own targets, for the caption strip's words.
+#[derive(Reflect, Debug, Clone)]
+#[reflect(AppTarget)]
+enum LatticeTarget {
+    /// A lattice point.
+    Point(i32, i32),
+}
+
+impl AppTarget for LatticeTarget {
+    fn resolve(&self, _world: &World) -> Result<ResolvedTarget, String> {
+        Err("not on screen in this test".into())
+    }
+}
+
 #[test]
-fn an_app_can_override_how_its_targets_read() {
+fn an_apps_target_reads_as_its_ron_unless_the_app_words_it() {
+    let step = Step::glide(Target::app(LatticeTarget::Point(3, 4)), 5);
+    assert_eq!(
+        describe_step(&step, &[], &TargetDescriptions::default()),
+        "Glide to Point(3,4)"
+    );
     let mut words = TargetDescriptions::default();
     words.add(|target| match target {
-        Target::Custom { resolver, argument } if resolver == "lattice" => {
-            Some(format!("lattice point {argument}"))
-        }
+        Target::App(value) => value
+            .value()?
+            .downcast_ref::<LatticeTarget>()
+            .map(|LatticeTarget::Point(x, y)| format!("lattice point {x}, {y}")),
         _ => None,
     });
-    let step = Step::glide(Target::custom("lattice", "3,4"), 5);
     assert_eq!(
         describe_step(&step, &[], &words),
-        "Glide to lattice point 3,4"
+        "Glide to lattice point 3, 4"
     );
     let other = Step::glide(Target::text("Rail"), 5);
     assert_eq!(describe_step(&other, &[], &words), "Glide to Rail");

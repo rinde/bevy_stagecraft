@@ -9,6 +9,7 @@
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::disallowed_methods,
+    clippy::panic,
     reason = "tests may panic on a broken setup"
 )]
 
@@ -28,9 +29,9 @@ use bevy::{
     window::{CursorMoved, PrimaryWindow, WindowEvent},
 };
 use rin_bevy_ui_tester::{
-    Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState, HeadlessPlugins,
-    Registry, Scenario, ScenariosCamera, ScenariosWindow, Script, SessionHooks, Speed, Step,
-    Target,
+    AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState,
+    HeadlessPlugins, Probe, ReflectAppSetup, Registry, Scenario, ScenariosCamera, ScenariosWindow,
+    Script, Speed, Step, Target,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
@@ -126,6 +127,56 @@ fn spawn_form(world: &mut World) {
         BackgroundColor(Color::WHITE),
         children![Text::new("Save")],
     ));
+}
+
+/// Where a recording of this app starts from, found by Bevy with no
+/// registration call.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+#[reflect(AppSetup)]
+enum GallerySetup {
+    /// The app with the count at `count`, and the form if `form`.
+    Counted {
+        /// The count.
+        count: u32,
+        /// Whether the disabled "Save" button is there too.
+        form: bool,
+    },
+    /// A save that is gone, so the setup fails.
+    Lost,
+}
+
+/// Present when this app cannot capture its state.
+#[derive(Resource)]
+struct CaptureFails;
+
+impl AppSetup for GallerySetup {
+    fn build(&self, world: &mut World) -> Result<(), String> {
+        let Self::Counted { count, form } = self else {
+            return Err("the save is gone".into());
+        };
+        world.spawn(Camera2d);
+        world.insert_resource(Count(*count));
+        if *form {
+            spawn_form(world);
+        } else {
+            spawn_app(world);
+        }
+        Ok(())
+    }
+
+    fn capture(
+        world: &mut World,
+        _dir: &std::path::Path,
+        _stem: &str,
+    ) -> Result<Option<Self>, String> {
+        if world.contains_resource::<CaptureFails>() {
+            return Err("no way to save this app".into());
+        }
+        Ok(Some(Self::Counted {
+            count: world.get_resource::<Count>().map_or(0, |count| count.0),
+            form: Probe::new(world).has_text("Save"),
+        }))
+    }
 }
 
 /// Shows the form and waits.
@@ -876,19 +927,13 @@ fn a_real_click_reaches_the_app_once_and_is_not_replayed_every_update() {
     );
 }
 
-/// The gallery with recording hooks that write into `dir`.
+/// The gallery, recording into `dir`; the app's setup is captured as a
+/// [`GallerySetup`].
 fn recording_app(dir: &std::path::Path) -> App {
-    let hooks = SessionHooks::new().capture_setup(|world, dir, stem| {
-        let file = format!("{stem}.setup.txt");
-        std::fs::write(dir.join(&file), world.resource::<Count>().0.to_string())
-            .map_err(|error| error.to_string())?;
-        Ok(Some(Setup::File(file)))
-    });
     app_with(
         GalleryPlugin::new(gallery())
             .with_reset(reset_app)
-            .with_export_dir(dir)
-            .with_session_hooks(hooks),
+            .with_export_dir(dir),
     )
 }
 
@@ -958,9 +1003,14 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
     let path = dir.join("recording.ron");
     let text = std::fs::read_to_string(&path).expect("the file was written");
     let script = Script::from_ron(&text).expect("it reads back");
-    assert_eq!(
-        script.setup,
-        Some(Setup::File("recording.setup.txt".into()))
+    let Some(Setup::App(setup)) = &script.setup else {
+        panic!("the app's setup was captured: {text}");
+    };
+    assert!(
+        setup
+            .ron()
+            .is_ok_and(|ron| ron.starts_with("Counted(count:")),
+        "{text}"
     );
     assert_eq!(script.window_size, Some((640, 480)));
     let clicks = script.steps.iter().filter(|s| **s == Step::click()).count();
@@ -984,19 +1034,10 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
         "{text}"
     );
 
-    // The file runs like any other: load it, give it the app's setup, play it.
-    let start: u32 = std::fs::read_to_string(dir.join("recording.setup.txt"))
-        .expect("the setup was captured")
-        .parse()
-        .expect("a number");
+    // The file runs like any other: load it and play it; its setup is the
+    // app's own value.
     let registry = Registry::default();
-    let scenario = Scenario::from_script(script, &registry)
-        .expect("the names resolve")
-        .setup(move |world| {
-            world.spawn(Camera2d);
-            world.insert_resource(Count(start));
-            spawn_app(world);
-        });
+    let scenario = Scenario::from_script(script, &registry).expect("the file loads");
     let mut played = scenario.headless_app();
     played.insert_resource(Resets::default());
     let report = scenario.run_in(&mut played);
@@ -1282,13 +1323,8 @@ fn recording_can_be_started_and_stopped_without_the_buttons_and_reports_where_it
 #[test]
 fn a_failing_capture_leaves_the_gallery_as_it_was() {
     let dir = fresh_dir("gallery-record-fails");
-    let hooks = SessionHooks::new().capture_setup(|_, _, _| Err("no way to save this app".into()));
-    let mut app = app_with(
-        GalleryPlugin::new(gallery())
-            .with_reset(reset_app)
-            .with_export_dir(&dir)
-            .with_session_hooks(hooks),
-    );
+    let mut app = recording_app(&dir);
+    app.insert_resource(CaptureFails);
     ask(&mut app, GalleryAction::Select(0));
     run_until(&mut app, 100, |world| frames(world) >= 4);
     ask(&mut app, GalleryAction::Record);
@@ -1406,15 +1442,10 @@ fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_p
         !script.steps.iter().any(|step| *step == Step::click()),
         "the pick click is not part of the recording: {text}"
     );
-    let scenario = Scenario::from_script(script, &Registry::default())
-        .expect("the names resolve")
-        .setup(|world| {
-            world.spawn(Camera2d);
-            spawn_form(world);
-        });
+    // The app's setup brings the form back.
+    let scenario = Scenario::from_script(script, &Registry::default()).expect("the file loads");
     let mut played = scenario.headless_app();
     played.insert_resource(Resets::default());
-    played.insert_resource(Count(0));
     let report = scenario.run_in(&mut played);
     assert!(report.passed(), "{:?}", report.failures());
 }
@@ -1553,4 +1584,27 @@ fn pick_mode_needs_a_recording_or_a_selected_scenario() {
         "{}",
         state.status()
     );
+}
+
+#[test]
+fn a_scenario_whose_setup_fails_says_so_and_plays_no_step() {
+    let lost = Scenario::new("lost save")
+        .app_setup(GallerySetup::Lost)
+        .window_size(640, 480)
+        .steps([Step::wait(2), Step::check(Check::shows("Add"))]);
+    let mut app =
+        app_with(GalleryPlugin::new(Gallery::new().group("Broken", [lost])).with_reset(reset_app));
+    ask(&mut app, GalleryAction::Select(0));
+    let status = app.world().resource::<GalleryState>().status().to_owned();
+    assert_eq!(
+        status,
+        "Setup failed: the setup `Lost` failed: the save is gone"
+    );
+    run_until(&mut app, 100, |world| {
+        world.resource::<ScenarioReport>().finished
+    });
+    let report = app.world().resource::<ScenarioReport>();
+    assert!(!report.passed());
+    assert!(report.setup_failure.is_some(), "{report:?}");
+    assert!(report.checks.is_empty(), "no step played: {report:?}");
 }

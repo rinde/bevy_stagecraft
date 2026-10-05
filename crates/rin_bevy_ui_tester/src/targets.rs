@@ -3,30 +3,31 @@
 //! Targets are plain data. They are turned into pixels on the frame a step
 //! uses them, so layout changes between steps are followed.
 
-use alloc::{collections::BTreeMap, sync::Arc};
-use core::fmt;
-
 use bevy::{
     camera::Camera,
-    ecs::{
-        component::Component, entity::Entity, hierarchy::ChildOf, resource::Resource, world::World,
-    },
+    ecs::{component::Component, entity::Entity, hierarchy::ChildOf, world::World},
     math::{Vec2, Vec3},
-    reflect::Reflect,
+    reflect::{GetTypeRegistration, Reflect, TypePath, TypeRegistry},
     transform::components::GlobalTransform,
     ui::{ComputedNode, UiGlobalTransform, widget::Text},
     ui_widgets::Button,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Error as _};
+
+use crate::{
+    check::Problem,
+    extension::{AppTarget, AppTargetValue, AppValue, NO_CUSTOM_TARGET},
+};
 
 /// Where a step acts.
 ///
-/// App-defined targets are [`Target::Custom`]: a resolver name (the tag) and a
-/// string payload, which survive a round trip through RON unchanged.
+/// Targets the crate knows nothing about are the app's own: values of the
+/// one enum it marks with `#[reflect(AppTarget)]` (see [`AppTarget`]),
+/// written inside `App(..)`.
 ///
 /// It is `Reflect`, so a variant of the app's check type (see
 /// [`crate::AppCheck`]) can take one.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Reflect)]
+#[derive(Debug, Clone, PartialEq, Serialize, Reflect)]
 #[non_exhaustive]
 pub enum Target {
     /// A logical pixel position in the window.
@@ -36,14 +37,40 @@ pub enum Target {
     Text(String),
     /// A world position, seen through the first active camera.
     World(Vec3),
-    /// A target an app defines itself: the resolver registered in
-    /// [`TargetResolvers`] under `resolver` is asked about `argument`.
-    Custom {
-        /// Name the resolver is registered under.
-        resolver: String,
-        /// What to find, in a form the resolver understands.
-        argument: String,
-    },
+    /// One of the app's own targets: a value of the type the app marks with
+    /// `#[reflect(AppTarget)]` (see [`AppTarget`]). Written as
+    /// `App(Station("Alpha"))`.
+    App(AppTargetValue),
+}
+
+/// [`Target`] as serde's derive reads it, which [`Target`]'s own impl adds
+/// the hint for the old custom target to.
+#[derive(Deserialize)]
+#[serde(remote = "Target", rename = "Target")]
+enum Written {
+    /// See [`Target::Screen`].
+    Screen(Vec2),
+    /// See [`Target::Text`].
+    Text(String),
+    /// See [`Target::World`].
+    World(Vec3),
+    /// See [`Target::App`].
+    App(AppTargetValue),
+}
+
+/// The old `Custom(resolver: .., argument: ..)` is refused saying what to
+/// write instead.
+impl<'de> Deserialize<'de> for Target {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Written::deserialize(deserializer).map_err(|error| {
+            let message = error.to_string();
+            if message.contains("variant named `Custom`") {
+                D::Error::custom(format!("{message}: {NO_CUSTOM_TARGET}"))
+            } else {
+                error
+            }
+        })
+    }
 }
 
 impl Target {
@@ -65,12 +92,19 @@ impl Target {
         Self::World(position)
     }
 
-    /// An app-defined target.
+    /// One of the app's own targets, for example
+    /// `Target::app(RailTarget::Station("Alpha".into()))`.
     #[must_use]
-    pub fn custom(resolver: impl Into<String>, argument: impl Into<String>) -> Self {
-        Self::Custom {
-            resolver: resolver.into(),
-            argument: argument.into(),
+    pub fn app<T: AppTarget + Reflect + GetTypeRegistration + TypePath>(target: T) -> Self {
+        Self::App(AppValue::of(target))
+    }
+
+    /// Reads an app target as the app's target type in `types`; any other
+    /// target is left as it is.
+    pub(crate) fn type_against(&mut self, types: &TypeRegistry) -> Result<(), Problem> {
+        match self {
+            Self::App(value) => value.type_against(types),
+            Self::Screen(_) | Self::Text(_) | Self::World(_) => Ok(()),
         }
     }
 }
@@ -129,52 +163,6 @@ pub(crate) fn is_tooling(world: &World, entity: Entity) -> bool {
     }
 }
 
-/// What an app-defined resolver is: the world and an argument in, a pixel out.
-type ResolverFn = dyn Fn(&World, &str) -> Result<ResolvedTarget, String> + Send + Sync;
-
-/// App-defined target resolvers: the extension point for targets this crate
-/// knows nothing about, such as a lattice point or a panel action.
-#[derive(Resource, Default, Clone)]
-pub struct TargetResolvers {
-    /// Resolvers by name, ordered so nothing depends on hash order.
-    resolvers: BTreeMap<String, Arc<ResolverFn>>,
-}
-
-impl fmt::Debug for TargetResolvers {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.resolvers.keys()).finish()
-    }
-}
-
-impl TargetResolvers {
-    /// Registers `resolver` under `name`, replacing any earlier one.
-    pub fn register(
-        &mut self,
-        name: impl Into<String>,
-        resolver: impl Fn(&World, &str) -> Result<ResolvedTarget, String> + Send + Sync + 'static,
-    ) {
-        self.resolvers.insert(name.into(), Arc::new(resolver));
-    }
-}
-
-impl TargetResolvers {
-    /// Whether a resolver is registered under `name`.
-    #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
-        self.resolvers.contains_key(name)
-    }
-
-    /// Adds every resolver of `other`, replacing those with the same name.
-    pub fn extend_from(&mut self, other: &Self) {
-        self.resolvers.extend(
-            other
-                .resolvers
-                .iter()
-                .map(|(name, resolver)| (name.clone(), Arc::clone(resolver))),
-        );
-    }
-}
-
 /// Works `target` out to a pixel using the current state of `world`.
 ///
 /// # Errors
@@ -185,13 +173,7 @@ pub fn resolve(world: &World, target: &Target) -> Result<ResolvedTarget, String>
         Target::Screen(position) => Ok(ResolvedTarget::at(*position)),
         Target::Text(text) => resolve_text(world, text),
         Target::World(position) => resolve_world(world, *position),
-        Target::Custom { resolver, argument } => {
-            let resolver = world
-                .get_resource::<TargetResolvers>()
-                .and_then(|resolvers| resolvers.resolvers.get(resolver))
-                .ok_or_else(|| format!("no target resolver named `{resolver}`"))?;
-            resolver(world, argument)
-        }
+        Target::App(value) => value.resolve(world),
     }
 }
 

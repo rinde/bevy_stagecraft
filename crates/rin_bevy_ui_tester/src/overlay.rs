@@ -181,7 +181,8 @@ impl Default for OverlayTheme {
 type DescribeFn = dyn Fn(&Target) -> Option<String> + Send + Sync;
 
 /// Words for targets in the caption strip: the extension point for apps whose
-/// custom targets would otherwise read as `resolver: argument`.
+/// own targets would otherwise read as the RON a file writes, such as
+/// `Station("Alpha")`.
 #[derive(Resource, Default, Clone)]
 pub struct TargetDescriptions {
     /// Describers, asked in order; the first to answer wins.
@@ -223,7 +224,7 @@ pub fn describe_target(target: &Target) -> String {
         Target::Screen(position) => format!("({}, {})", position.x, position.y),
         Target::Text(text) => text.clone(),
         Target::World(position) => format!("({}, {}, {})", position.x, position.y, position.z),
-        Target::Custom { resolver, argument } => format!("{resolver}: {argument}"),
+        Target::App(value) => value.to_string(),
     }
 }
 

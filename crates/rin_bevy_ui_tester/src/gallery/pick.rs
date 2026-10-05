@@ -16,6 +16,7 @@ use crate::{
         Check,
         pick::{Picked, node_at, subject_of, target_alternatives},
     },
+    extension::app_target_at,
     overlay::PickHighlight,
     session::{SessionConfig, SessionHooks},
 };
@@ -63,7 +64,7 @@ pub(super) fn update(world: &mut World, mut tagged: Local<Option<(Entity, String
         let hooks = world
             .get_resource::<SessionConfig>()
             .map_or_else(SessionHooks::default, |config| config.hooks.clone());
-        let extra = hooks.run_resolve_target(world, position);
+        let extra = app_target_at(world, position);
         let picked = Picked::new(world, node, hooks.noise(), extra);
         if let Some(mut state) = world.get_resource_mut::<GalleryState>() {
             state.status = picked_status(&picked, state.is_recording());

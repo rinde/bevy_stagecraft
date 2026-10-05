@@ -385,6 +385,9 @@ pub struct GalleryState {
     /// Counts changes to the scenarios themselves, such as an expectation
     /// added by picking, so what shows them is redrawn.
     pub(crate) revision: u32,
+    /// How the selected entry's setup went, for the player once the UI has
+    /// settled.
+    pub(crate) setup: Result<bool, String>,
 }
 
 impl GalleryState {
@@ -410,6 +413,7 @@ impl GalleryState {
             picking: Picking::Off,
             picked: None,
             revision: 0,
+            setup: Ok(false),
         }
     }
 

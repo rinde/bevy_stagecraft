@@ -3,7 +3,7 @@
     format_version: 3,
     name: "app checks",
     window_size: (800, 600),
-    setup: Named("plain_ui"),
+    setup: App(PlainUi),
     steps: [
         // The app's own checks: values of its `#[reflect(AppCheck)]` enum.
         Check(App(Activated(0))),

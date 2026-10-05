@@ -11,10 +11,10 @@
 mod common;
 
 use bevy::math::Vec2;
-use common::{Activations, UiCheck, registry, spawn_ui};
+use common::{Activations, UiCheck, UiSetup, UiTarget, registry, spawn_ui};
 use rin_bevy_ui_tester::{
-    Check, CheckKind, FORMAT_VERSION, LoadError, Outcome, Registry, Scenario, ScenarioReport, Step,
-    Target,
+    Check, CheckKind, Extension, FORMAT_VERSION, LoadError, Outcome, Registry, Scenario,
+    ScenarioReport, Step, Target,
 };
 
 /// The outcome of every step, in order.
@@ -181,7 +181,7 @@ fn expectations_run_at_the_end_in_order_and_are_named_in_words() {
 /// A scenario using every kind of check, with names the registry knows.
 fn every_kind() -> Scenario {
     Scenario::new("every kind")
-        .setup_named("plain_ui", spawn_ui)
+        .app_setup(UiSetup::PlainUi)
         .steps([
             Step::check(Check::app(UiCheck::ActivatedOnce)),
             Step::check(Check::shows("Pause")),
@@ -190,7 +190,9 @@ fn every_kind() -> Scenario {
             Step::check(Check::app(UiCheck::Activated(0))),
             Step::check(!Check::app(UiCheck::ActivatedOnce)),
         ])
-        .expect_check(Check::hovered(Target::custom("pause_button", "")))
+        .expect_check(Check::hovered(Target::app(UiTarget::Showing(
+            "Pause".into(),
+        ))))
 }
 
 #[test]
@@ -285,15 +287,15 @@ fn names_inside_checks_are_resolved_when_the_file_loads() {
     };
     assert!(matches!(
         load("steps: [Wait(1), Check(Not(App(Activated(\"one\"))))]"),
-        LoadError::BadAppCheck { ref used_by, .. } if used_by == "step 1"
+        LoadError::BadAppValue { ref used_by, .. } if used_by == "step 1"
     ));
     assert!(matches!(
         load("steps: [], expect: [App(Actvated(1))]"),
-        LoadError::BadAppCheck { ref used_by, .. } if used_by == "the expect list"
+        LoadError::BadAppValue { ref used_by, .. } if used_by == "the expect list"
     ));
     assert!(matches!(
-        load("steps: [Check(Hovered(Custom(resolver: \"nope\", argument: \"\")))]"),
-        LoadError::UnknownTarget { ref resolver, .. } if resolver == "nope"
+        load("steps: [Check(Hovered(App(Nowhere)))]"),
+        LoadError::BadAppValue { extension: Extension::Target, ref used_by, .. } if used_by == "step 0"
     ));
 }
 

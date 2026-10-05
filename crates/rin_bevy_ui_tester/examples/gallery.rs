@@ -9,7 +9,8 @@
 //! pause, step, or take over the app with the real mouse.
 //!
 //! **Record** saves what you do by hand as a `.ron` file in `recordings/`,
-//! with the counter and switch as they were when you pressed it. Press F8 in
+//! starting from the counter and switch as they were when you pressed it:
+//! the app's own setup, `setup: App(Counter(count: 2, switch: true))`. Press F8 in
 //! the app while recording to take a checkpoint, which flashes the window.
 //! When you stop, the Scenarios window lists the checks the changes suggest
 //! (the counter's new value, the new text, the switch's fact), one list per
@@ -29,9 +30,8 @@ use bevy::{
     app::AppExit, ecs::system::IntoObserverSystem, prelude::*, ui::px, ui_widgets::Activate,
 };
 use rin_bevy_ui_tester::{
-    AppCheck, Check, CheckResult, Gallery, GalleryEntry, GalleryPlugin, Probe, ReflectAppCheck,
-    Registry, Scenario, Script, SessionHooks, SessionRecorder, Step, Target, script::Setup,
-    session,
+    AppCheck, AppSetup, Check, CheckResult, Gallery, GalleryEntry, GalleryPlugin, Probe,
+    ReflectAppCheck, ReflectAppSetup, Registry, Scenario, SessionRecorder, Step, Target, session,
 };
 
 /// Where recordings are written, and read from at startup.
@@ -86,6 +86,38 @@ impl AppCheck for CounterCheck {
         } else {
             Vec::new()
         }
+    }
+}
+
+/// Where the app's scenarios start from. Bevy finds the type by itself, and a
+/// recording captures the app's state as one of these.
+#[derive(Reflect, Debug, Clone)]
+#[reflect(AppSetup)]
+enum CounterSetup {
+    /// The app with the counter and the switch at these values.
+    Counter {
+        /// The counter.
+        count: u32,
+        /// Whether the switch is on.
+        switch: bool,
+    },
+}
+
+impl AppSetup for CounterSetup {
+    fn build(&self, world: &mut World) -> Result<(), String> {
+        let Self::Counter { count, switch } = self;
+        spawn_app(world);
+        world.insert_resource(Counter(*count));
+        world.insert_resource(Switch(*switch));
+        Ok(())
+    }
+
+    /// The counter and the switch as they are when recording starts.
+    fn capture(world: &mut World, _dir: &Path, _stem: &str) -> Result<Option<Self>, String> {
+        Ok(Some(Self::Counter {
+            count: world.get_resource::<Counter>().map_or(0, |c| c.0),
+            switch: world.get_resource::<Switch>().is_some_and(|s| s.0),
+        }))
     }
 }
 
@@ -205,10 +237,13 @@ fn show_state(
     }
 }
 
-/// A scenario of this app with its window size.
+/// A scenario of this app, from a fresh start, with its window size.
 fn scenario(name: &str) -> Scenario {
     Scenario::new(name)
-        .setup(spawn_app)
+        .app_setup(CounterSetup::Counter {
+            count: 0,
+            switch: false,
+        })
         .window_size(WINDOW.0, WINDOW.1)
 }
 
@@ -264,31 +299,7 @@ fn gallery() -> Gallery {
         )
 }
 
-/// What a recording needs of the app: its starting state, written next to the
-/// script as `<name>.setup.txt` ("count switch").
-fn session_hooks() -> SessionHooks {
-    SessionHooks::new().capture_setup(|world, dir, stem| {
-        let count = world.get_resource::<Counter>().map_or(0, |c| c.0);
-        let on = world.get_resource::<Switch>().is_some_and(|s| s.0);
-        let file = format!("{stem}.setup.txt");
-        fs::write(dir.join(&file), format!("{count} {on}")).map_err(|e| e.to_string())?;
-        Ok(Some(Setup::File(file)))
-    })
-}
-
-/// The app set up as a recording's setup file says.
-fn setup_from(text: &str) -> impl Fn(&mut World) + Send + Sync + 'static {
-    let mut fields = text.split_whitespace();
-    let count: u32 = fields.next().and_then(|c| c.parse().ok()).unwrap_or(0);
-    let on = fields.next() == Some("true");
-    move |world| {
-        spawn_app(world);
-        world.insert_resource(Counter(count));
-        world.insert_resource(Switch(on));
-    }
-}
-
-/// Loads every recording in [`RECORDINGS`], with the app's own names resolved.
+/// Loads every recording in [`RECORDINGS`], read against the app's own types.
 fn recorded() -> Vec<GalleryEntry> {
     let registry = Registry::default();
     let Ok(files) = fs::read_dir(RECORDINGS) else {
@@ -307,19 +318,12 @@ fn recorded() -> Vec<GalleryEntry> {
 }
 
 /// One recording as a scenario, or `None` (with a warning) when it will not
-/// load.
+/// load. Its setup is the app's own, so nothing else is needed.
 fn load(path: &Path, registry: &Registry) -> Option<Scenario> {
     let loaded = fs::read_to_string(path)
         .map_err(|error| error.to_string())
-        .and_then(|text| Script::from_ron(&text).map_err(|error| error.to_string()))
-        .and_then(|script| {
-            let setup = match &script.setup {
-                Some(Setup::File(file)) => fs::read_to_string(path.with_file_name(file))
-                    .map_err(|error| error.to_string())?,
-                _ => String::new(),
-            };
-            let scenario = Scenario::from_script(script, registry).map_err(|e| e.to_string())?;
-            Ok(scenario.setup(setup_from(&setup)))
+        .and_then(|text| {
+            Scenario::from_ron_with(&text, registry).map_err(|error| error.to_string())
         });
     match loaded {
         Ok(scenario) => Some(scenario),
@@ -376,8 +380,7 @@ fn main() -> AppExit {
         .add_plugins(
             GalleryPlugin::new(gallery)
                 .with_reset(reset_app)
-                .with_export_dir(RECORDINGS)
-                .with_session_hooks(session_hooks()),
+                .with_export_dir(RECORDINGS),
         )
         .run()
 }

@@ -3,7 +3,7 @@
     format_version: 3,
     name: "reflected checks",
     window_size: (800, 600),
-    setup: Named("plain_ui"),
+    setup: App(PlainUi),
     steps: [
         // Bevy UI has a `Button` too, so the short name is ambiguous.
         Check(Count(with: ["bevy_ui_widgets::button::Button"], is: Eq(1))),

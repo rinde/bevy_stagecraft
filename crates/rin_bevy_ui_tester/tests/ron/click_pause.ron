@@ -3,7 +3,7 @@
     format_version: 3,
     name: "click pause",
     window_size: (800, 600),
-    setup: Named("plain_ui"),
+    setup: App(PlainUi),
     steps: [
         Glide(target: Text("Pause"), frames: 20),
         Click(Left),
