@@ -878,6 +878,7 @@ impl SessionRecorder {
             format_version: FORMAT_VERSION,
             name: active.name,
             window_size: active.window_size,
+            action_timeout: None,
             setup: active.setup,
             view: active.view,
             steps: with_checks(&logged.steps, &logged.checkpoints, &active.checkpoints),

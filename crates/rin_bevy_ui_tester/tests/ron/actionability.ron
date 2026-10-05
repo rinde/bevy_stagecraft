@@ -1,0 +1,19 @@
+#![enable(implicit_some)]
+(
+    format_version: 3,
+    name: "actionability",
+    window_size: (800, 600),
+    action_timeout: 30,
+    setup: App(PlainUi),
+    steps: [
+        Timeout(90, Glide(target: Text("Pause"), frames: 10)),
+        Click(Left),
+        Wait(1),
+        Check(App(ActivatedOnce)),
+        MoveTo(Screen((10.0, 10.0))),
+        Force(MoveTo(Text("Pause"))),
+        Force(Click(Left)),
+        Check(Within(2, App(Activated(2)))),
+    ],
+    expect: [App(Activated(2))],
+)

@@ -55,8 +55,10 @@ use crate::{
 /// values inside `App(..)` as well: a file that uses an old form is refused
 /// with a load error that says what to write instead. The locator targets
 /// (`Component(..)`, `Name(..)`, `Role(..)`, `Within(..)` and `Nth(..)`)
-/// came later still in version 3: they only add forms, so every file that
-/// loaded before still does. Any other older file still loads.
+/// came later still in version 3, and so did the script's `action_timeout`
+/// and the `Timeout(..)` and `Force(..)` steps that go with steps waiting
+/// for their targets to be actionable: they only add forms, so every file
+/// that loaded before still does. Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.
@@ -96,6 +98,11 @@ pub struct Script {
     /// The window size the scenario wants, in logical pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_size: Option<(u32, u32)>,
+    /// How many frames a step waits for its target to be actionable before
+    /// it fails; [`crate::DEFAULT_ACTION_TIMEOUT`] when left out. A step sets
+    /// its own with `Timeout(frames, ..)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_timeout: Option<u16>,
     /// Where the starting state comes from: one of the app's setups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<Setup>,
@@ -485,6 +492,7 @@ pub(crate) fn build_scenario(
     }
     for (index, step) in script.steps.iter_mut().enumerate() {
         let used_by = format!("step {index}");
+        check_wrapper(step, &used_by)?;
         for target in step_targets(step) {
             target
                 .type_against(&types)
@@ -572,11 +580,30 @@ fn load_error(problem: Problem, used_by: &str, in_check: bool) -> LoadError {
     }
 }
 
-/// The targets a step acts on.
+/// The targets a step acts on, inside any `Timeout(..)` or `Force(..)`.
 fn step_targets(step: &mut Step) -> Vec<&mut Target> {
     match step {
         Step::MoveTo(target) | Step::Glide { target, .. } => vec![target],
         Step::Drag { from, to, .. } => vec![from, to],
+        Step::Timeout(_, inner) | Step::Force(inner) => step_targets(inner),
         _ => Vec::new(),
     }
+}
+
+/// Refuses a `Timeout(..)` or `Force(..)` around a step that does not wait
+/// for a target, or around another of them.
+fn check_wrapper(step: &Step, used_by: &str) -> Result<(), LoadError> {
+    let (Step::Timeout(_, inner) | Step::Force(inner)) = step else {
+        return Ok(());
+    };
+    if inner.waits_for_target() {
+        return Ok(());
+    }
+    Err(LoadError::Invalid {
+        used_by: used_by.to_owned(),
+        message: format!(
+            "`Timeout(..)` and `Force(..)` wrap one MoveTo, Glide, Drag, Click or Press, not {inner:?}; \
+             a check waits with `Check(Within(frames, ..))`"
+        ),
+    })
 }

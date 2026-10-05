@@ -273,6 +273,7 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
     assert_eq!(
         names,
         [
+            "actionability",
             "app_checks",
             "app_target",
             "click_pause",

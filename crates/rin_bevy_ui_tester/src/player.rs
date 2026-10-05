@@ -26,7 +26,7 @@ use crate::{
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems},
     probe::check_hover,
     scenario::{ORIGIN, Scenario, Step},
-    targets::{ResolvedTarget, resolve},
+    targets::{Action, NotActionable, ResolvedTarget, Target, actionable, pressable, resolve},
 };
 
 /// How a step or a check ended.
@@ -184,6 +184,18 @@ enum Op {
         /// The step's name for the target, for the message.
         label: String,
     },
+    /// Wait until the targets of the step can be acted on, then queue its
+    /// frames; this has waited `waited` frames of at most `timeout`.
+    Act {
+        /// Index of the step this belongs to.
+        step: usize,
+        /// The step, without the `Timeout(..)` around it.
+        action: Step,
+        /// How many frames it may wait.
+        timeout: u16,
+        /// Frames waited so far.
+        waited: u32,
+    },
     /// Run the check, which has waited this many frames to hold.
     Check {
         /// Index of the step this belongs to.
@@ -197,6 +209,16 @@ enum Op {
     Caption(String),
 }
 
+/// The widget an earlier step sent the pointer to, which a press right
+/// after it acts on.
+#[derive(Debug, Clone)]
+struct Aim {
+    /// The widget.
+    widget: Entity,
+    /// How the script named it, for messages.
+    label: String,
+}
+
 /// A scenario being played.
 #[derive(Debug)]
 struct Running {
@@ -208,6 +230,9 @@ struct Running {
     ops: VecDeque<Op>,
     /// Where the pointer is, as far as the script has moved it.
     cursor: Vec2,
+    /// The widget the last move sent the pointer to, until a press acts on
+    /// it or the pointer goes elsewhere.
+    aim: Option<Aim>,
     /// Whether a step failed and the rest is being skipped.
     aborted: bool,
     /// The expectations' outcomes so far, once the steps are done: `None`
@@ -282,13 +307,17 @@ impl ScenarioPlayer {
 
     /// Whether the player is between steps: no frame of the last one is left.
     /// What may remain are checks and captions, which take no frame. A player
-    /// with no scenario counts as between steps.
+    /// with no scenario counts as between steps; one whose step waits for a
+    /// check to hold or for a target to become actionable does not.
     #[must_use]
     pub fn at_step_boundary(&self) -> bool {
         self.running.as_ref().is_none_or(|run| {
-            run.ops
-                .iter()
-                .all(|op| !matches!(op, Op::Frame(..) | Op::Check { waited: 1.., .. }))
+            run.ops.iter().all(|op| {
+                !matches!(
+                    op,
+                    Op::Frame(..) | Op::Check { waited: 1.., .. } | Op::Act { waited: 1.., .. }
+                )
+            })
         })
     }
 }
@@ -380,6 +409,7 @@ impl ScenarioPlayer {
             next_step: 0,
             ops: VecDeque::new(),
             cursor,
+            aim: None,
             aborted: false,
             expected: None,
             expect_waited: 0,
@@ -417,6 +447,32 @@ impl ScenarioPlayer {
                     run.apply(world, report, step, events);
                     return;
                 }
+                Op::Act {
+                    step,
+                    action,
+                    timeout,
+                    waited,
+                } => match run.act(world, step, &action, false) {
+                    Ok(()) => {}
+                    Err(NotActionable::Yet(_)) if waited < u32::from(timeout) => {
+                        // Not yet: look again after one more frame.
+                        run.ops.push_front(Op::Act {
+                            step,
+                            action,
+                            timeout,
+                            waited: waited + 1,
+                        });
+                        return;
+                    }
+                    Err(NotActionable::Yet(reason)) => {
+                        run.abort(
+                            report,
+                            step,
+                            format!("{reason} (still after {timeout} frames)"),
+                        );
+                    }
+                    Err(NotActionable::Never(reason)) => run.abort(report, step, reason),
+                },
                 Op::CheckHover {
                     step,
                     widget,
@@ -506,60 +562,36 @@ impl Running {
             self.frame(index, events);
             return;
         }
+        let (step, timeout, forced) = unwrapped(step, self.scenario.action_timeout_frames());
         match step {
-            Step::MoveTo(target) => {
-                let Some(to) = self.resolve(world, report, index, &target) else {
-                    return;
-                };
-                self.move_ops(index, core::iter::once(to.position), to, &target);
+            Step::MoveTo(_)
+            | Step::Glide { .. }
+            | Step::Drag { .. }
+            | Step::Click(_)
+            | Step::Press(_)
+                if !forced =>
+            {
+                self.ops.push_back(Op::Act {
+                    step: index,
+                    action: step,
+                    timeout,
+                    waited: 0,
+                });
             }
-            Step::Glide { target, frames } => {
-                let Some(to) = self.resolve(world, report, index, &target) else {
-                    return;
-                };
-                self.glide_ops(index, to, frames, &target);
+            Step::MoveTo(_)
+            | Step::Glide { .. }
+            | Step::Drag { .. }
+            | Step::Click(_)
+            | Step::Press(_) => {
+                if let Err(NotActionable::Yet(message) | NotActionable::Never(message)) =
+                    self.act(world, index, &step, true)
+                {
+                    self.abort(report, index, message);
+                }
             }
-            Step::Drag { from, to, frames } => {
-                let Some(start) = self.resolve(world, report, index, &from) else {
-                    return;
-                };
-                let Some(end) = self.resolve(world, report, index, &to) else {
-                    return;
-                };
-                self.move_ops(index, core::iter::once(start.position), start, &from);
-                self.ops.push_back(Op::Frame(
-                    index,
-                    vec![SyntheticEvent::Button(
-                        MouseButton::Left,
-                        ButtonState::Pressed,
-                    )],
-                ));
-                // The glide starts where the drag does, whatever the cursor
-                // was doing before.
-                self.cursor = start.position;
-                self.glide_ops(index, end, frames, &to);
-                self.ops.push_back(Op::Frame(
-                    index,
-                    vec![SyntheticEvent::Button(
-                        MouseButton::Left,
-                        ButtonState::Released,
-                    )],
-                ));
-            }
-            Step::Press(button) => self.frame(
-                index,
-                vec![SyntheticEvent::Button(button, ButtonState::Pressed)],
-            ),
             Step::Release(button) => self.frame(
                 index,
                 vec![SyntheticEvent::Button(button, ButtonState::Released)],
-            ),
-            Step::Click(button) => self.frame(
-                index,
-                vec![
-                    SyntheticEvent::Button(button, ButtonState::Pressed),
-                    SyntheticEvent::Button(button, ButtonState::Released),
-                ],
             ),
             Step::Wheel { x, y } => self.frame(
                 index,
@@ -574,7 +606,12 @@ impl Running {
                     self.frame(index, Vec::new());
                 }
             }
-            Step::Key { .. } | Step::KeyUp { .. } | Step::Tap { .. } => {}
+            // Keys were handled above; `unwrapped` took the wrappers off.
+            Step::Key { .. }
+            | Step::KeyUp { .. }
+            | Step::Tap { .. }
+            | Step::Timeout(..)
+            | Step::Force(_) => {}
             Step::Check(check) => self.ops.push_back(Op::Check {
                 step: index,
                 check,
@@ -584,40 +621,103 @@ impl Running {
         }
     }
 
+    /// Queues the frames of `step` (a move, glide, drag, click or press) if
+    /// its targets can be acted on now, or says why not. A `forced` step
+    /// skips the checks, and the hover check after it.
+    fn act(
+        &mut self,
+        world: &World,
+        index: usize,
+        step: &Step,
+        forced: bool,
+    ) -> Result<(), NotActionable> {
+        match step {
+            Step::MoveTo(target) => {
+                let to = reach(world, target, Action::Point, forced)?;
+                self.move_ops(index, core::iter::once(to.position), to, target, !forced);
+                self.aim_at(to, target, forced);
+            }
+            Step::Glide { target, frames } => {
+                let to = reach(world, target, Action::Point, forced)?;
+                self.glide_ops(index, to, *frames, target, !forced);
+                self.aim_at(to, target, forced);
+            }
+            Step::Drag { from, to, frames } => {
+                // Both ends are checked on the same frame, before anything
+                // moves: the drag presses at its start.
+                let start = reach(world, from, Action::Press, forced)?;
+                let end = reach(world, to, Action::Point, forced)?;
+                self.move_ops(
+                    index,
+                    core::iter::once(start.position),
+                    start,
+                    from,
+                    !forced,
+                );
+                self.frame(
+                    index,
+                    vec![SyntheticEvent::Button(
+                        MouseButton::Left,
+                        ButtonState::Pressed,
+                    )],
+                );
+                // The glide starts where the drag does, whatever the cursor
+                // was doing before.
+                self.cursor = start.position;
+                self.glide_ops(index, end, *frames, to, !forced);
+                self.frame(
+                    index,
+                    vec![SyntheticEvent::Button(
+                        MouseButton::Left,
+                        ButtonState::Released,
+                    )],
+                );
+                self.aim = None;
+            }
+            Step::Click(button) | Step::Press(button) => {
+                if !forced && let Some(aim) = &self.aim {
+                    pressable(world, aim.widget, self.cursor, &aim.label)?;
+                }
+                self.aim = None;
+                let mut events = vec![SyntheticEvent::Button(*button, ButtonState::Pressed)];
+                if matches!(step, Step::Click(_)) {
+                    events.push(SyntheticEvent::Button(*button, ButtonState::Released));
+                }
+                self.frame(index, events);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Remembers the widget a move sent the pointer to, for a press right
+    /// after it; a forced move, or one to a position, leaves none.
+    fn aim_at(&mut self, to: ResolvedTarget, target: &Target, forced: bool) {
+        self.aim = to.widget.filter(|_| !forced).map(|widget| Aim {
+            widget,
+            label: format!("{target:?}"),
+        });
+    }
+
     /// Queues one frame of `events`.
     fn frame(&mut self, step: usize, events: Vec<SyntheticEvent>) {
         self.ops.push_back(Op::Frame(step, events));
     }
 
-    /// Works a target out, or fails the step and returns `None`.
-    fn resolve(
-        &mut self,
-        world: &World,
-        report: &mut ScenarioReport,
-        step: usize,
-        target: &crate::targets::Target,
-    ) -> Option<ResolvedTarget> {
-        match resolve(world, target) {
-            Ok(resolved) => Some(resolved),
-            Err(message) => {
-                self.abort(report, step, message);
-                None
-            }
-        }
-    }
-
-    /// Queues one frame per position, then the hover check for the target.
+    /// Queues one frame per position, then, when `confirm` says so, the
+    /// hover check for the target.
     fn move_ops(
         &mut self,
         step: usize,
         positions: impl IntoIterator<Item = Vec2>,
         to: ResolvedTarget,
-        target: &crate::targets::Target,
+        target: &Target,
+        confirm: bool,
     ) {
         for position in positions {
             self.frame(step, vec![SyntheticEvent::MoveCursor(position)]);
         }
-        if let Some(widget) = to.widget {
+        if let Some(widget) = to.widget.filter(|_| confirm) {
             self.ops.push_back(Op::CheckHover {
                 step,
                 widget,
@@ -632,14 +732,15 @@ impl Running {
         step: usize,
         to: ResolvedTarget,
         frames: u16,
-        target: &crate::targets::Target,
+        target: &Target,
+        confirm: bool,
     ) {
         let frames = frames.max(1);
         let from = self.cursor;
         let positions: Vec<Vec2> = (1..=frames)
             .map(|frame| from.lerp(to.position, ease(f32::from(frame) / f32::from(frames))))
             .collect();
-        self.move_ops(step, positions, to, target);
+        self.move_ops(step, positions, to, target, confirm);
     }
 
     /// Runs the end-of-script expectations and, once none waits any more,
@@ -682,6 +783,37 @@ impl Running {
         }
         report.finished = true;
         true
+    }
+}
+
+/// `step` without the `Timeout(..)` and `Force(..)` around it, with the
+/// frames it may wait for its target (the innermost `Timeout(..)`, else
+/// `timeout`) and whether it is forced.
+fn unwrapped(step: Step, timeout: u16) -> (Step, u16, bool) {
+    match step {
+        Step::Timeout(frames, inner) => unwrapped(*inner, frames),
+        Step::Force(inner) => {
+            let (step, timeout, _) = unwrapped(*inner, timeout);
+            (step, timeout, true)
+        }
+        other => (other, timeout, false),
+    }
+}
+
+/// Works `target` out for `action`: checked for actionability, or, when
+/// `forced`, as it is now with no checks, a miss failing at once.
+fn reach(
+    world: &World,
+    target: &Target,
+    action: Action,
+    forced: bool,
+) -> Result<ResolvedTarget, NotActionable> {
+    if forced {
+        resolve(world, target)
+            .map(|resolved| ResolvedTarget::at(resolved.position))
+            .map_err(NotActionable::Never)
+    } else {
+        actionable(world, target, action)
     }
 }
 

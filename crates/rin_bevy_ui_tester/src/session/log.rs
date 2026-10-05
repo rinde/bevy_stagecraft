@@ -81,6 +81,13 @@ pub struct StepOptions {
     pub idle_frames: u32,
     /// What idle time is shortened to, in frames.
     pub idle_wait: u16,
+    /// Idle time longer than this many frames is shortened when the pointer
+    /// then goes to a widget (a target such as `Text(..)`), since playback
+    /// waits for that widget to be actionable by itself.
+    pub widget_idle_frames: u32,
+    /// What idle time before the pointer goes to a widget is shortened to,
+    /// in frames.
+    pub widget_idle_wait: u16,
     /// At least this many frames are left at the end, so the last input has
     /// taken effect before the checks look.
     pub settle_frames: u32,
@@ -94,6 +101,8 @@ impl Default for StepOptions {
             hold_frames: 20,
             idle_frames: 90,
             idle_wait: 30,
+            widget_idle_frames: 60,
+            widget_idle_wait: 10,
             settle_frames: 10,
         }
     }
@@ -124,7 +133,10 @@ pub struct LoggedSteps {
 ///   `Press`, glides and `Release`;
 /// * a key pressed and released on its own is a `Tap`, and a modifier held
 ///   around one folds into it;
-/// * idle time beyond [`StepOptions::idle_frames`] becomes a short `Wait`.
+/// * idle time beyond [`StepOptions::idle_frames`] becomes a short `Wait`;
+///   before the pointer goes to a widget, idle time beyond the lower
+///   [`StepOptions::widget_idle_frames`] does, as playback waits for the
+///   widget to be actionable anyway.
 #[must_use]
 pub fn steps_from_events(events: &[RecordedEvent], end: u32, options: &StepOptions) -> Vec<Step> {
     read_log(events, end, options).steps
@@ -249,13 +261,31 @@ impl Emitter {
     /// Waits until the script's clock reaches recorded frame `recorded`,
     /// shortening a long idle stretch.
     fn wait_until(&mut self, recorded: u32) {
+        self.wait_before(recorded, false);
+    }
+
+    /// [`Emitter::wait_until`] before a step that sends the pointer to a
+    /// widget when `toward_widget` says so: playback waits for the widget to
+    /// be actionable, so a shorter stretch of idle time is shortened, and
+    /// further.
+    fn wait_before(&mut self, recorded: u32, toward_widget: bool) {
         let wanted = recorded.saturating_sub(self.cut);
         let gap = wanted.saturating_sub(self.clock);
         if gap == 0 {
             return;
         }
-        let gap = if gap > self.options.idle_frames {
-            let kept = u32::from(self.options.idle_wait);
+        let (idle_frames, idle_wait) = if toward_widget {
+            (
+                self.options
+                    .widget_idle_frames
+                    .min(self.options.idle_frames),
+                self.options.widget_idle_wait.min(self.options.idle_wait),
+            )
+        } else {
+            (self.options.idle_frames, self.options.idle_wait)
+        };
+        let gap = if gap > idle_frames {
+            let kept = u32::from(idle_wait);
             self.cut = self.cut.saturating_add(gap.saturating_sub(kept));
             kept
         } else {
@@ -287,11 +317,13 @@ impl Emitter {
         // The path starts where the script's pointer is, a frame before the
         // first sample; with no pointer yet the first sample is a jump.
         let mut path: Vec<(u32, Vec2)> = Vec::with_capacity(run.len() + 1);
+        // A run that ends on a widget is the pointer going to it.
+        let toward_widget = end.as_ref().is_some_and(names_widget);
         let rest = if let Some(pointer) = self.pointer {
             path.push((first_frame.saturating_sub(1), pointer));
             run.as_slice()
         } else {
-            self.wait_until(first_frame.saturating_sub(1));
+            self.wait_before(first_frame.saturating_sub(1), toward_widget);
             // A jump to a place the run never leaves is the whole move.
             let stays = run
                 .last()
@@ -322,7 +354,7 @@ impl Emitter {
                 .pointer
                 .is_some_and(|pointer| pointer.distance(position) < SAME_PLACE);
             if !there {
-                self.wait_until(previous);
+                self.wait_before(previous, toward_widget);
                 let frames = frame.saturating_sub(previous).max(1);
                 self.emit(
                     Step::Glide {
@@ -343,7 +375,7 @@ impl Emitter {
             .pointer
             .is_some_and(|pointer| pointer.distance(position) < SAME_PLACE);
         if !there {
-            self.wait_until(frame.saturating_sub(1));
+            self.wait_before(frame.saturating_sub(1), names_widget(target));
             self.emit(Step::MoveTo(target.clone()), 1);
             self.pointer = Some(position);
         }
@@ -517,6 +549,20 @@ impl Emitter {
         );
         at + 1
     }
+}
+
+/// Whether `target` names a widget that playback waits for: a locator, not
+/// a position nor one of the app's own targets, which may be either.
+const fn names_widget(target: &Target) -> bool {
+    matches!(
+        target,
+        Target::Text(_)
+            | Target::Component(_)
+            | Target::Name(_)
+            | Target::Role { .. }
+            | Target::Within(..)
+            | Target::Nth(..)
+    )
 }
 
 /// The modifier a key is one of.
