@@ -48,6 +48,9 @@ pub enum RecordedKind {
         /// Pressed or released.
         state: ButtonState,
     },
+    /// The person took a checkpoint: the checks it suggests go here, before
+    /// anything else that happened in the same frame.
+    Checkpoint,
 }
 
 /// One piece of real input and the frame it happened in.
@@ -95,7 +98,19 @@ impl Default for StepOptions {
 /// Positions closer than this are the same place.
 const SAME_PLACE: f32 = 0.5;
 
+/// A log read as steps, with where each checkpoint falls among them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LoggedSteps {
+    /// The steps, without any checks.
+    pub steps: Vec<Step>,
+    /// For each [`RecordedKind::Checkpoint`] in the log, in order, how many
+    /// of `steps` come before it: its checks go between `steps[at - 1]` and
+    /// `steps[at]`.
+    pub checkpoints: Vec<usize>,
+}
+
 /// Turns a log into steps. `end` is the frame the session stopped in.
+/// Checkpoints in the log are left out; [`read_log`] says where they fall.
 ///
 /// * runs of moves become `Glide`s, one per vertex of the simplified path;
 /// * a press and release in place is a `Click`; a straight press, move and
@@ -106,6 +121,19 @@ const SAME_PLACE: f32 = 0.5;
 /// * idle time beyond [`StepOptions::idle_frames`] becomes a short `Wait`.
 #[must_use]
 pub fn steps_from_events(events: &[RecordedEvent], end: u32, options: &StepOptions) -> Vec<Step> {
+    read_log(events, end, options).steps
+}
+
+/// Turns a log into steps as [`steps_from_events`] does, and says where
+/// among them each checkpoint falls.
+///
+/// A checkpoint ends the run of moves before it, so the pointer is where the
+/// person had it when the checkpoint was taken, and the script's clock is
+/// brought up to the checkpoint's frame. A checkpoint taken while a button or
+/// key is held keeps the press and the release apart, so its checks see what
+/// the person saw.
+#[must_use]
+pub fn read_log(events: &[RecordedEvent], end: u32, options: &StepOptions) -> LoggedSteps {
     let mut out = Emitter::new(*options);
     let mut next = 0;
     while let Some(event) = events.get(next) {
@@ -146,12 +174,14 @@ pub fn steps_from_events(events: &[RecordedEvent], end: u32, options: &StepOptio
                 out.wheel(event.frame, *position, x, y);
             }
             RecordedKind::Key { key, state } => next = out.key(events, next - 1, *key, *state),
+            RecordedKind::Checkpoint => out.checkpoint(event.frame),
         }
     }
     out.flush(None);
     let last = events.last().map_or(0, |event| event.frame);
     out.wait_until(end.max(last.saturating_add(options.settle_frames)));
-    fold_chords(out.steps)
+    let (steps, checkpoints) = fold_chords(out.steps, &out.checkpoints);
+    LoggedSteps { steps, checkpoints }
 }
 
 /// Builds the steps while keeping track of the script's own clock.
@@ -169,6 +199,8 @@ struct Emitter {
     pointer: Option<Vec2>,
     /// Moves not yet turned into glides.
     run: Vec<(u32, Vec2)>,
+    /// How many steps came before each checkpoint so far.
+    checkpoints: Vec<usize>,
 }
 
 impl Emitter {
@@ -181,7 +213,15 @@ impl Emitter {
             cut: 0,
             pointer: None,
             run: Vec::new(),
+            checkpoints: Vec::new(),
         }
+    }
+
+    /// A checkpoint was taken in recorded frame `frame`.
+    fn checkpoint(&mut self, frame: u32) {
+        self.flush(None);
+        self.wait_until(frame);
+        self.checkpoints.push(self.steps.len());
     }
 
     /// Adds a step that takes `cost` frames.
@@ -478,20 +518,32 @@ const fn modifier_of(key: KeyCode) -> Option<Modifiers> {
 const CHORD_WAIT_FRAMES: u32 = 6;
 
 /// Folds `Key(Ctrl)`, `Tap(S)`, `KeyUp(Ctrl)` into `Tap(S, [Ctrl])`, ignoring
-/// the odd frame of waiting between them.
-fn fold_chords(steps: Vec<Step>) -> Vec<Step> {
+/// the odd frame of waiting between them. `checkpoints` count the steps
+/// before each checkpoint and are counted again in the folded steps; one
+/// that fell inside a chord moves to after it.
+fn fold_chords(steps: Vec<Step>, checkpoints: &[usize]) -> (Vec<Step>, Vec<usize>) {
     let mut out: Vec<Step> = Vec::with_capacity(steps.len());
+    // How many folded steps stand for the first `n` original ones, by `n`.
+    let mut folded_before = vec![0; steps.len() + 1];
     let mut at = 0;
     while let Some(step) = steps.get(at) {
-        if let Some((tap, used)) = chord_at(&steps, at) {
+        let used = if let Some((tap, used)) = chord_at(&steps, at) {
             out.push(tap);
-            at += used;
+            used
         } else {
             out.push(step.clone());
-            at += 1;
+            1
+        };
+        for boundary in folded_before.iter_mut().skip(at + 1).take(used) {
+            *boundary = out.len();
         }
+        at += used;
     }
-    out
+    let checkpoints = checkpoints
+        .iter()
+        .map(|before| folded_before.get(*before).copied().unwrap_or(out.len()))
+        .collect();
+    (out, checkpoints)
 }
 
 /// The chord starting at `at`, as the tap it folds into and how many steps it

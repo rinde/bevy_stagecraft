@@ -9,10 +9,12 @@
 //! pause, step, or take over the app with the real mouse.
 //!
 //! **Record** saves what you do by hand as a `.ron` file in `recordings/`,
-//! with the counter and switch as they were when you pressed it. When you
-//! stop, the Scenarios window lists the checks the changes suggest (the
-//! counter's new value, the new text, the switch's fact); untick the ones
-//! you do not want and the file is written again without them. Files in
+//! with the counter and switch as they were when you pressed it. Press F8 in
+//! the app while recording to take a checkpoint, which flashes the window.
+//! When you stop, the Scenarios window lists the checks the changes suggest
+//! (the counter's new value, the new text, the switch's fact), one list per
+//! checkpoint and one for the end; untick the ones you do not want and the
+//! file is written again without them. Files in
 //! that directory show up under "Recorded" the next time the example starts.
 //! With `--record` the session starts straight away and is saved when the app
 //! window is closed:

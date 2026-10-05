@@ -45,7 +45,7 @@ pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};
 pub use overlay::{
     CursorOverlayPlugin, OverlayCamera, OverlaySystems, OverlayTheme, TargetDescriptions,
-    checks_text, current_step_text, describe_step, describe_target,
+    checkpoint_text, checks_text, current_step_text, describe_step, describe_target,
 };
 pub use player::{
     CheckKind, CheckRecord, Outcome, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport,
@@ -63,7 +63,8 @@ pub use script::{
     Setup, export_ron,
 };
 pub use session::{
-    RecordedEvent, RecordedKind, SavedSession, SessionConfig, SessionError, SessionHooks,
-    SessionPlugin, SessionRecorder, SessionSystems, StepOptions, steps_from_events,
+    Checkpoint, CheckpointTaken, DEFAULT_CHECKPOINT_KEY, LoggedSteps, RecordedEvent, RecordedKind,
+    SavedSession, SessionConfig, SessionError, SessionHooks, SessionPlugin, SessionRecorder,
+    SessionSystems, StepOptions, read_log, steps_from_events,
 };
 pub use targets::{NotUnderTest, ResolvedTarget, Target, TargetResolvers, resolve};

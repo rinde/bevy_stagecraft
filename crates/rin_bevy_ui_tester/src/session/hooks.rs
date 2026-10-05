@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 use core::fmt;
 use std::path::Path;
 
-use bevy::{ecs::world::World, math::Vec2};
+use bevy::{ecs::world::World, input::keyboard::KeyCode, math::Vec2};
 
 use crate::{
     check::suggest::{NoiseFilter, WorldSnapshot},
@@ -23,8 +23,12 @@ type ViewFn = dyn Fn(&World) -> Option<String> + Send + Sync;
 /// What the target hook does.
 type TargetFn = dyn Fn(&World, Vec2) -> Option<Target> + Send + Sync;
 
+/// The key that takes a checkpoint while recording, unless the app sets
+/// another with [`SessionHooks::checkpoint_key`].
+pub const DEFAULT_CHECKPOINT_KEY: KeyCode = KeyCode::F8;
+
 /// The app's side of session recording. Every hook is optional.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SessionHooks {
     /// Captures the setup.
     setup: Option<Arc<SetupFn>>,
@@ -34,6 +38,20 @@ pub struct SessionHooks {
     target: Option<Arc<TargetFn>>,
     /// What the snapshots that suggest checks leave out.
     noise: NoiseFilter,
+    /// The key that takes a checkpoint.
+    checkpoint: KeyCode,
+}
+
+impl Default for SessionHooks {
+    fn default() -> Self {
+        Self {
+            setup: None,
+            view: None,
+            target: None,
+            noise: NoiseFilter::default(),
+            checkpoint: DEFAULT_CHECKPOINT_KEY,
+        }
+    }
 }
 
 impl fmt::Debug for SessionHooks {
@@ -43,6 +61,7 @@ impl fmt::Debug for SessionHooks {
             .field("capture_view", &self.view.is_some())
             .field("resolve_target", &self.target.is_some())
             .field("noise_filter", &self.noise)
+            .field("checkpoint_key", &self.checkpoint)
             .finish()
     }
 }
@@ -104,6 +123,21 @@ impl SessionHooks {
     pub fn noise_filter(mut self, filter: NoiseFilter) -> Self {
         self.noise = filter;
         self
+    }
+
+    /// Sets the key that takes a checkpoint while recording, F8
+    /// ([`DEFAULT_CHECKPOINT_KEY`]) unless set. Pick a key the app does not
+    /// use: while a session is recorded, the key never reaches the app.
+    #[must_use]
+    pub const fn checkpoint_key(mut self, key: KeyCode) -> Self {
+        self.checkpoint = key;
+        self
+    }
+
+    /// The key that takes a checkpoint while recording.
+    #[must_use]
+    pub const fn checkpoint(&self) -> KeyCode {
+        self.checkpoint
     }
 
     /// Runs the setup hook.

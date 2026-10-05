@@ -7,14 +7,16 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
+        hierarchy::ChildOf,
         hierarchy::ChildSpawnerCommands,
-        query::{With, Without},
+        query::{Has, Or, With, Without},
         system::{Commands, Local, Query, Res, ResMut},
     },
     math::{DVec2, IVec2, Vec2},
     picking::{
         events::{Click, Pointer},
-        pointer::PointerButton,
+        hover::HoverMap,
+        pointer::{PointerButton, PointerId},
     },
     prelude::On,
     text::{FontSize, TextColor, TextFont},
@@ -29,10 +31,11 @@ use bevy::{
 
 use super::{
     Gallery, GalleryAction, GalleryState, Speed,
-    input::ScenariosScroll,
+    input::{ScenariosScroll, scenarios_pointer},
     state::{GalleryPhase, Suggestions},
 };
 use crate::{
+    check::Check,
     overlay::OverlayTheme,
     player::{CheckKind, Outcome, ScenarioReport},
     scenario::Step,
@@ -97,8 +100,11 @@ pub(super) enum Control {
     Record,
     /// A catalogue entry.
     Entry(usize),
-    /// A check the last recording suggested, in the checklist.
+    /// A check the last recording suggested at its end, in the checklist.
     Suggestion(usize),
+    /// A check the last recording suggested at a checkpoint: the checkpoint
+    /// and the check's index in its list.
+    CheckpointSuggestion(usize, usize),
 }
 
 /// Text that shows a control's current wording.
@@ -158,7 +164,9 @@ fn control_text(control: Control, state: &GalleryState) -> String {
             "Record"
         }
         .into(),
-        Control::Entry(_) | Control::Suggestion(_) => String::new(),
+        Control::Entry(_) | Control::Suggestion(_) | Control::CheckpointSuggestion(..) => {
+            String::new()
+        }
     }
 }
 
@@ -188,6 +196,9 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
         }
         Control::Entry(index) => GalleryAction::Select(index),
         Control::Suggestion(index) => GalleryAction::ToggleSuggestion(index),
+        Control::CheckpointSuggestion(checkpoint, index) => {
+            GalleryAction::ToggleCheckpointSuggestion { checkpoint, index }
+        }
     }
 }
 
@@ -371,10 +382,11 @@ pub(super) fn spawn_window(
             root.spawn((
                 Details,
                 NotUnderTest,
+                ScrollPosition::default(),
                 Node {
                     flex_direction: FlexDirection::Column,
                     height: px(DETAILS_HEIGHT),
-                    overflow: Overflow::clip(),
+                    overflow: Overflow::scroll_y(),
                     padding: UiRect::all(px(PADDING)),
                     row_gap: px(2),
                     ..Node::default()
@@ -448,6 +460,9 @@ pub(super) fn style_controls(
             Control::Suggestion(index) => state
                 .suggestions()
                 .is_some_and(|suggestions| suggestions.is_ticked(*index)),
+            Control::CheckpointSuggestion(checkpoint, index) => state
+                .suggestions()
+                .is_some_and(|suggestions| suggestions.is_checkpoint_ticked(*checkpoint, *index)),
             Control::StepFrame | Control::StepStep | Control::Restart | Control::Export => false,
         };
         let wanted = if on { BUTTON_ON } else { BUTTON };
@@ -533,16 +548,35 @@ fn status_text(state: &GalleryState, report: &ScenarioReport, gallery: &Gallery)
     )
 }
 
-/// Applies the wheel to the catalogue.
+/// Applies the wheel to the catalogue, or to the details panel while a
+/// pointer of the Scenarios window is over it: a recording's checklists can
+/// be longer than the panel.
 pub(super) fn scroll_catalogue(
     mut scroll: ResMut<ScenariosScroll>,
-    mut lists: Query<&mut ScrollPosition, With<Catalogue>>,
+    hovers: Option<Res<HoverMap>>,
+    parents: Query<&ChildOf>,
+    details: Query<Entity, With<Details>>,
+    mut lists: Query<(&mut ScrollPosition, Has<Details>), Or<(With<Catalogue>, With<Details>)>>,
 ) {
     if scroll.0 == 0.0 {
         return;
     }
-    for mut position in &mut lists {
-        position.0 = Vec2::new(0.0, (position.0.y - scroll.0).max(0.0));
+    let over_details = hovers.is_some_and(|hovers| {
+        [scenarios_pointer(), PointerId::Mouse]
+            .iter()
+            .filter_map(|pointer| hovers.get(pointer))
+            .flat_map(|hits| hits.keys())
+            .any(|hit| {
+                parents
+                    .iter_ancestors(*hit)
+                    .chain(core::iter::once(*hit))
+                    .any(|entity| details.contains(entity))
+            })
+    });
+    for (mut position, is_details) in &mut lists {
+        if is_details == over_details {
+            position.0 = Vec2::new(0.0, (position.0.y - scroll.0).max(0.0));
+        }
     }
     scroll.0 = 0.0;
 }
@@ -647,16 +681,47 @@ const TICKED: &str = "[x]";
 /// What an unticked candidate starts with.
 const UNTICKED: &str = "[ ]";
 
-/// The checklist of the checks a recording suggests: one row per candidate,
-/// which a click ticks or unticks.
+/// The checklists of the checks a recording suggests: one per checkpoint,
+/// then the end's, with one row per candidate, which a click ticks or
+/// unticks.
 fn spawn_checklist(panel: &mut ChildSpawnerCommands<'_>, suggestions: &Suggestions) {
-    if suggestions.is_empty() {
-        label(panel, "Nothing changed that a check could say", DIM);
+    if suggestions.checkpoints() == 0 {
+        if suggestions.is_empty() {
+            label(panel, "Nothing changed that a check could say", DIM);
+            return;
+        }
+        label(panel, "Suggested checks (click to tick or untick)", TEXT);
+        spawn_rows(panel, suggestions.entries(), Control::Suggestion);
         return;
     }
     label(panel, "Suggested checks (click to tick or untick)", TEXT);
-    for (index, (check, ticked)) in suggestions.entries().enumerate() {
-        let control = Control::Suggestion(index);
+    for checkpoint in 0..suggestions.checkpoints() {
+        let number = checkpoint + 1;
+        if suggestions.checkpoint_entries(checkpoint).next().is_none() {
+            label(panel, format!("Checkpoint {number}: nothing changed"), DIM);
+            continue;
+        }
+        label(panel, format!("Checkpoint {number}"), DIM);
+        spawn_rows(panel, suggestions.checkpoint_entries(checkpoint), |index| {
+            Control::CheckpointSuggestion(checkpoint, index)
+        });
+    }
+    if suggestions.is_empty() {
+        label(panel, "At the end: nothing changed", DIM);
+    } else {
+        label(panel, "At the end", DIM);
+        spawn_rows(panel, suggestions.entries(), Control::Suggestion);
+    }
+}
+
+/// One checklist row per entry, each clicking as `control` of its index.
+fn spawn_rows<'a>(
+    panel: &mut ChildSpawnerCommands<'_>,
+    entries: impl Iterator<Item = (&'a Check, bool)>,
+    control: impl Fn(usize) -> Control,
+) {
+    for (index, (check, ticked)) in entries.enumerate() {
+        let control = control(index);
         panel
             .spawn((
                 control,

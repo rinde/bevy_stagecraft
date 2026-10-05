@@ -389,6 +389,8 @@ thresholds are `StepOptions`. The app plugs in through `SessionHooks`:
   ground clicks into lattice points); the rest stay `screen(..)`.
 - `noise_filter` says which types the snapshots behind the suggested checks
   leave out (below).
+- `checkpoint_key` picks the key that takes a checkpoint (below); F8 unless
+  set.
 
 ```ron
 // Recorded from a session. Edit freely. ...
@@ -449,6 +451,46 @@ with `SessionHooks::new().noise_filter(NoiseFilter::default().ignore("my_game::d
 a pattern is a short or full type path, a name without generics, or a prefix
 ending in `*`.
 
+### Checkpoints
+
+Checks at the end cannot say what was true half-way through. Press **F8**
+(or the key set with `SessionHooks::new().checkpoint_key(KeyCode::F2)`) in the
+app's window while recording to take a checkpoint; `session::checkpoint(world)`
+does the same from code. Each checkpoint takes a snapshot and compares it with
+the checkpoint before, or with the start for the first one. What changed
+becomes `Check` steps at that point of the script, each one a check that held
+when the checkpoint was taken; the end's `expect` is then what changed since the
+last checkpoint.
+
+```ron
+steps: [
+    MoveTo(Text("+1")),
+    Click(Left),
+    Wait(11),
+    Check(Resource(path: "Counter.0", is: Eq(1))),
+    Check(Shows("Count: 1")),
+    Check(Not(Shows("Count: 0"))),
+    Click(Left),
+    Wait(10),
+],
+expect: [
+    Resource(path: "Counter.0", is: Eq(2)),
+    Shows("Count: 2"),
+    Not(Shows("Count: 1")),
+],
+```
+
+While a session is recorded the key never reaches the app: its presses and
+releases in the app's window are taken out of Bevy's keyboard messages (and
+the `WindowEvent`s) before `InputSystems`, and are not logged as steps. Pick a
+key the app does not use. The cursor overlay shows each checkpoint with a short
+flash over the window and a caption such as `Checkpoint 2: 3 checks suggested`
+(the `CheckpointTaken` message). Each checkpoint's candidates are in
+`SavedSession::checkpoints`, and `SavedSession::save_checks` writes the file
+again with the ones you keep at each checkpoint and at the end. In the gallery,
+**Stop recording** lists one checklist per checkpoint and then the end's; the
+wheel scrolls them while the pointer is over them.
+
 An app whose state lives outside the ECS (rails keeps a Bevy-free `Sim`)
 publishes what matters of it as a reflected facts resource, updated each
 frame; the snapshot reads it like any other, and the suggested
@@ -463,8 +505,8 @@ the script names and calls `.setup(..)` on the loaded scenario; see
 Limits: only the primary window is recorded and nothing marked `NotUnderTest`
 is ever named as a target; a click on a label replays on the middle of the
 labelled node, not the exact pixel; typed text and touch are not recorded (key
-presses are). Selecting, restarting and stepping are refused in the gallery
-while recording.
+presses are, except the checkpoint key's). Selecting, restarting and stepping
+are refused in the gallery while recording.
 
 ## Depending on it from a private git repository
 

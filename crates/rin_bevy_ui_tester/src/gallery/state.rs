@@ -89,9 +89,18 @@ pub enum GalleryAction {
     /// Stop recording, write the scenario into the export directory and
     /// show the checks it suggests as a checklist.
     StopRecording,
-    /// Tick or untick the suggested check with this index, and write the
-    /// recording again with the ticked ones as its `expect`.
+    /// Tick or untick the check with this index among those suggested at the
+    /// end, and write the recording again with the ticked ones as its
+    /// `expect`.
     ToggleSuggestion(usize),
+    /// Tick or untick a check suggested at a checkpoint, and write the
+    /// recording again with the ticked ones as `Check` steps there.
+    ToggleCheckpointSuggestion {
+        /// The checkpoint, counting from 0.
+        checkpoint: usize,
+        /// The check among those it suggested.
+        index: usize,
+    },
 }
 
 /// What the gallery is in the middle of.
@@ -134,24 +143,93 @@ pub enum Recording {
     On,
 }
 
-/// The checks the last recording suggested, as a checklist.
+/// The checks the last recording suggested, as checklists: one per
+/// checkpoint, then one for the end.
 ///
-/// Each one is ticked or not, and the recording's file holds the ticked ones
-/// as its `expect`. All are ticked to begin with, as in the file just
-/// written.
+/// Each one is ticked or not. The recording's file holds the ticked ones of
+/// a checkpoint as `Check` steps where it was taken, and the ticked ones of
+/// the end as its `expect`. All are ticked to begin with, as in the file just
+/// written. [`Self::entries`], [`Self::len`] and the like are about the end's
+/// list; the `checkpoint_` methods about a checkpoint's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Suggestions {
     /// The recording, as last written.
     session: SavedSession,
-    /// Whether each candidate is ticked, in the candidates' order.
+    /// Whether each candidate of the end is ticked, in the candidates' order.
     ticked: Vec<bool>,
+    /// Whether each candidate of each checkpoint is ticked.
+    at_checkpoints: Vec<Vec<bool>>,
 }
 
 impl Suggestions {
-    /// The checklist for `session`, every candidate ticked.
+    /// The checklists for `session`, every candidate ticked.
     pub(crate) fn new(session: SavedSession) -> Self {
         let ticked = vec![true; session.candidates.len()];
-        Self { session, ticked }
+        let at_checkpoints = session
+            .checkpoints
+            .iter()
+            .map(|checkpoint| vec![true; checkpoint.candidates.len()])
+            .collect();
+        Self {
+            session,
+            ticked,
+            at_checkpoints,
+        }
+    }
+
+    /// How many checkpoints the recording has, each with its own list.
+    #[must_use]
+    pub const fn checkpoints(&self) -> usize {
+        self.at_checkpoints.len()
+    }
+
+    /// Each candidate of checkpoint `checkpoint` (counting from 0), in
+    /// order, with whether it is ticked; nothing for a checkpoint there is
+    /// not.
+    pub fn checkpoint_entries(&self, checkpoint: usize) -> impl Iterator<Item = (&Check, bool)> {
+        let candidates = self
+            .session
+            .checkpoints
+            .get(checkpoint)
+            .map_or(&[][..], |checkpoint| checkpoint.candidates.as_slice());
+        let ticked = self
+            .at_checkpoints
+            .get(checkpoint)
+            .map_or(&[][..], Vec::as_slice);
+        candidates.iter().zip(ticked.iter().copied())
+    }
+
+    /// Whether candidate `index` of checkpoint `checkpoint` is ticked.
+    #[must_use]
+    pub fn is_checkpoint_ticked(&self, checkpoint: usize, index: usize) -> bool {
+        self.at_checkpoints
+            .get(checkpoint)
+            .and_then(|ticked| ticked.get(index))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// The ticked candidates of checkpoint `checkpoint`, in order.
+    #[must_use]
+    pub fn checkpoint_ticked(&self, checkpoint: usize) -> Vec<Check> {
+        self.checkpoint_entries(checkpoint)
+            .filter(|(_, ticked)| *ticked)
+            .map(|(check, _)| check.clone())
+            .collect()
+    }
+
+    /// How many candidates are ticked, and how many there are, over every
+    /// list.
+    #[must_use]
+    pub fn tally(&self) -> (usize, usize) {
+        let lists = || {
+            self.at_checkpoints
+                .iter()
+                .chain(core::iter::once(&self.ticked))
+        };
+        let ticked = lists().flatten().filter(|ticked| **ticked).count();
+        let all = lists().map(Vec::len).sum();
+        (ticked, all)
     }
 
     /// The recording, as last written.
@@ -195,15 +273,42 @@ impl Suggestions {
             .collect()
     }
 
-    /// Ticks or unticks the candidate with this index and writes the
+    /// Ticks or unticks the end's candidate with this index and writes the
     /// recording again. An index past the end changes nothing.
     pub(crate) fn toggle(&mut self, index: usize) -> Result<(), SessionError> {
         let Some(ticked) = self.ticked.get_mut(index) else {
             return Ok(());
         };
         *ticked = !*ticked;
+        self.save()
+    }
+
+    /// Ticks or unticks candidate `index` of checkpoint `checkpoint` and
+    /// writes the recording again. A checkpoint or index there is not
+    /// changes nothing.
+    pub(crate) fn toggle_at_checkpoint(
+        &mut self,
+        checkpoint: usize,
+        index: usize,
+    ) -> Result<(), SessionError> {
+        let Some(ticked) = self
+            .at_checkpoints
+            .get_mut(checkpoint)
+            .and_then(|ticked| ticked.get_mut(index))
+        else {
+            return Ok(());
+        };
+        *ticked = !*ticked;
+        self.save()
+    }
+
+    /// Writes the recording with the ticked candidates of every list.
+    fn save(&mut self) -> Result<(), SessionError> {
+        let at_checkpoints: Vec<Vec<Check>> = (0..self.checkpoints())
+            .map(|checkpoint| self.checkpoint_ticked(checkpoint))
+            .collect();
         let expect = self.ticked();
-        self.session.save_expect(expect)
+        self.session.save_checks(&at_checkpoints, expect)
     }
 }
 

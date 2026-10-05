@@ -16,7 +16,7 @@ use super::{
 use crate::{
     input::SyntheticInput,
     player::{ScenarioPlayer, ScenarioReport, advance_world},
-    session::{self, SessionRecorder},
+    session::{self, DEFAULT_CHECKPOINT_KEY, SessionConfig, SessionRecorder},
 };
 
 /// What a scenario recorded in the gallery is called until the person renames
@@ -156,7 +156,12 @@ fn record(world: &mut World, state: &mut GalleryState) {
     }
     match session::start(world, RECORDING_NAME) {
         Ok(()) => {
-            state.status = "Recording: use the app, then press Stop recording".into();
+            let key = world
+                .get_resource::<SessionConfig>()
+                .map_or(DEFAULT_CHECKPOINT_KEY, |config| config.hooks.checkpoint());
+            state.status = format!(
+                "Recording: use the app ({key:?} takes a checkpoint), then press Stop recording"
+            );
         }
         Err(error) => {
             state.taken_over = taken_over;
@@ -171,12 +176,14 @@ fn record(world: &mut World, state: &mut GalleryState) {
 fn stop_recording(world: &mut World, state: &mut GalleryState) {
     match session::stop(world) {
         Ok(saved) => {
+            let suggestions = Suggestions::new(saved);
+            let (ticked, all) = suggestions.tally();
             state.status = format!(
                 "{}, {}",
-                saved.describe(),
-                suggested(saved.candidates.len(), saved.candidates.len())
+                suggestions.session().describe(),
+                suggested(ticked, all)
             );
-            state.suggestions = Some(Suggestions::new(saved));
+            state.suggestions = Some(suggestions);
         }
         Err(error) => state.status = format!("Cannot save the recording: {error}"),
     }
@@ -191,17 +198,25 @@ fn suggested(ticked: usize, all: usize) -> String {
     }
 }
 
-/// Ticks or unticks a suggested check and says what the file now holds.
-fn toggle_suggestion(state: &mut GalleryState, index: usize) {
+/// Ticks or unticks a suggested check, of the checkpoint given or else of
+/// the end, and says what the file now holds.
+fn toggle_suggestion(state: &mut GalleryState, checkpoint: Option<usize>, index: usize) {
     let Some(suggestions) = state.suggestions.as_mut() else {
         return;
     };
-    state.status = match suggestions.toggle(index) {
-        Ok(()) => format!(
-            "Saved {}, {}",
-            suggestions.session().path.display(),
-            suggested(suggestions.ticked().len(), suggestions.len())
-        ),
+    let saved = match checkpoint {
+        Some(checkpoint) => suggestions.toggle_at_checkpoint(checkpoint, index),
+        None => suggestions.toggle(index),
+    };
+    state.status = match saved {
+        Ok(()) => {
+            let (ticked, all) = suggestions.tally();
+            format!(
+                "Saved {}, {}",
+                suggestions.session().path.display(),
+                suggested(ticked, all)
+            )
+        }
         Err(error) => format!("Cannot save the checks: {error}"),
     };
 }
@@ -238,7 +253,10 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         state.suggestions = None;
     }
     match action {
-        GalleryAction::ToggleSuggestion(index) => toggle_suggestion(state, index),
+        GalleryAction::ToggleSuggestion(index) => toggle_suggestion(state, None, index),
+        GalleryAction::ToggleCheckpointSuggestion { checkpoint, index } => {
+            toggle_suggestion(state, Some(checkpoint), index);
+        }
         GalleryAction::Record => record(world, state),
         GalleryAction::StopRecording => stop_recording(world, state),
         GalleryAction::Select(index) => select(world, state, index),
