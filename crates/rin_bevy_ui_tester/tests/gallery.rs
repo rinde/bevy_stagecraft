@@ -19,8 +19,10 @@ use bevy::{
         mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
         touch::TouchPhase,
     },
+    picking::events::{Over, Pointer},
     picking::input::PointerInputSettings,
     prelude::*,
+    ui::InteractionDisabled,
     ui::{ComputedNode, ComputedUiTargetCamera, ScrollPosition, UiGlobalTransform, px},
     ui_widgets::{Activate, Button},
     window::{CursorMoved, PrimaryWindow, WindowEvent},
@@ -29,7 +31,7 @@ use rin_bevy_ui_tester::{
     Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState, HeadlessPlugins,
     Registry, Scenario, ScenariosCamera, ScenariosWindow, Script, SessionHooks, Speed, Step,
     Target,
-    overlay::{OverlayCheckpointFlash, OverlayRoot},
+    overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
 };
@@ -106,6 +108,34 @@ fn adds(times: u32) -> Scenario {
         .expect_check(Check::resource::<Count>(".0").eq(times))
 }
 
+/// Spawns the app with a disabled "Save" button besides.
+fn spawn_form(world: &mut World) {
+    spawn_app(world);
+    world.spawn((
+        AppRoot,
+        Button,
+        InteractionDisabled,
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(100),
+            top: px(250),
+            width: px(120),
+            height: px(60),
+            ..Node::default()
+        },
+        BackgroundColor(Color::WHITE),
+        children![Text::new("Save")],
+    ));
+}
+
+/// Shows the form and waits.
+fn form() -> Scenario {
+    Scenario::new("form")
+        .setup(spawn_form)
+        .window_size(640, 480)
+        .steps([Step::wait(5)])
+}
+
 /// Clicks the app's button named "Restart", which the gallery also has one of.
 fn restart_the_app_button() -> Scenario {
     Scenario::new("restart button")
@@ -127,7 +157,11 @@ fn gallery() -> Gallery {
             ],
         )
         .group("Names", [restart_the_app_button()])
+        .group("Forms", [form()])
 }
+
+/// The index of the form in [`gallery`].
+const FORM: usize = 3;
 
 /// A finished app with the gallery on top of headless windows.
 fn app_with(plugin: GalleryPlugin) -> App {
@@ -1262,4 +1296,261 @@ fn a_failing_capture_leaves_the_gallery_as_it_was() {
     assert!(!state.is_recording());
     assert!(state.is_playing(), "the script carries on");
     assert!(state.status().contains("no way to save this app"));
+}
+
+/// How many times the pointer went over a node of the app.
+#[derive(Resource, Default)]
+struct SeenOvers(u32);
+
+/// Counts the pointer going over the app's buttons or their labels.
+fn count_overs(
+    over: On<Pointer<Over>>,
+    roots: Query<(), With<AppRoot>>,
+    mut seen: ResMut<SeenOvers>,
+) {
+    if roots.contains(over.event_target()) {
+        seen.0 += 1;
+    }
+}
+
+/// The entity of the button labelled `text`.
+fn button_entity(app: &mut App, text: &str) -> Entity {
+    let world = app.world_mut();
+    let label = world
+        .query::<(Entity, &Text)>()
+        .iter(world)
+        .find(|(_, shown)| shown.0 == text)
+        .expect("a node shows the text")
+        .0;
+    world.get::<ChildOf>(label).expect("a button").parent()
+}
+
+/// Turns pick mode on, points the real mouse at the button labelled `text`
+/// in the app window and clicks it.
+fn pick_button(app: &mut App, text: &str) {
+    ask(app, GalleryAction::TogglePick);
+    assert!(
+        app.world().resource::<GalleryState>().is_picking(),
+        "pick mode is on"
+    );
+    let window = primary(app);
+    let at = centre_of_button_with(app, text);
+    real_move(app, window, at);
+    app.update();
+    app.update();
+    real_click(app, window);
+    app.update();
+}
+
+#[test]
+fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_plays_back() {
+    let dir = fresh_dir("gallery-pick-record");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Select(FORM));
+    run_until(&mut app, 100, |world| frames(world) >= 2);
+    ask(&mut app, GalleryAction::Record);
+    app.update();
+
+    pick_button(&mut app, "Save");
+    let save = button_entity(&mut app, "Save");
+    let highlight = app.world().resource::<PickHighlight>().clone();
+    assert_eq!(
+        highlight.hovered,
+        Some(save),
+        "the outline is on the button"
+    );
+    assert_eq!(highlight.selected, Some(save));
+    assert_eq!(highlight.tag, "Text(\"Save\")");
+    let wanted = Check::disabled(Target::text("Save"));
+    {
+        let state = app.world().resource::<GalleryState>();
+        let picked = state.picked().expect("the click picked the button");
+        assert_eq!(picked.target(), Some(&Target::text("Save")));
+        assert!(picked.checks().contains(&wanted), "{:?}", picked.checks());
+    }
+    // The outline is the overlay's, so it is never hit.
+    let outlines = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&Pickable, With<OverlayPickOutline>>()
+            .iter(world)
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(outlines.len(), 2);
+    assert!(
+        outlines
+            .iter()
+            .all(|pickable| *pickable == Pickable::IGNORE)
+    );
+
+    // Choose it with the real mouse, in the Scenarios window.
+    let second = scenarios_window(&mut app);
+    let row = centre_of_button_with(&mut app, "[+] Disabled(Text(\"Save\"))");
+    real_move(&mut app, second, row);
+    app.update();
+    app.update();
+    real_click(&mut app, second);
+    app.update();
+    let status = app.world().resource::<GalleryState>().status().to_owned();
+    assert!(status.starts_with("Added"), "{status}");
+    ask(&mut app, GalleryAction::TogglePick);
+    ask(&mut app, GalleryAction::StopRecording);
+
+    let path = dir.join("recording.ron");
+    let text = std::fs::read_to_string(&path).expect("the file was written");
+    assert!(text.contains("Check(Disabled(Text(\"Save\")))"), "{text}");
+    let script = Script::from_ron(&text).expect("it reads back");
+    assert!(script.steps.contains(&Step::check(wanted)), "{text}");
+    assert!(
+        !script.steps.iter().any(|step| *step == Step::click()),
+        "the pick click is not part of the recording: {text}"
+    );
+    let scenario = Scenario::from_script(script, &Registry::default())
+        .expect("the names resolve")
+        .setup(|world| {
+            world.spawn(Camera2d);
+            spawn_form(world);
+        });
+    let mut played = scenario.headless_app();
+    played.insert_resource(Resets::default());
+    played.insert_resource(Count(0));
+    let report = scenario.run_in(&mut played);
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+#[test]
+fn picking_does_not_change_the_apps_state() {
+    let dir = fresh_dir("gallery-pick-unchanged");
+    let mut app = recording_app(&dir);
+    app.init_resource::<SeenPresses>()
+        .init_resource::<SeenOvers>()
+        .add_systems(Update, count_presses)
+        .add_observer(count_overs);
+    ask(&mut app, GalleryAction::Select(FORM));
+    run_until(&mut app, 100, |world| frames(world) >= 2);
+    ask(&mut app, GalleryAction::Record);
+    app.update();
+    let before = rin_bevy_ui_tester::WorldSnapshot::take(
+        app.world(),
+        &rin_bevy_ui_tester::NoiseFilter::default(),
+    );
+
+    pick_button(&mut app, "Add");
+    for _ in 0..5 {
+        app.update();
+    }
+    assert!(
+        app.world().resource::<GalleryState>().picked().is_some(),
+        "the click picked the button"
+    );
+    assert_eq!(count(app.world()), 0, "the click did not reach the app");
+    assert_eq!(app.world().resource::<SeenPresses>().0, 0);
+    assert_eq!(
+        app.world().resource::<SeenOvers>().0,
+        0,
+        "the pointer never went over the app's nodes"
+    );
+    assert_eq!(
+        app.world().resource::<SeenCursor>().0,
+        None,
+        "the app saw no cursor in its window"
+    );
+    let after = rin_bevy_ui_tester::WorldSnapshot::take(
+        app.world(),
+        &rin_bevy_ui_tester::NoiseFilter::default(),
+    );
+    assert_eq!(before, after);
+
+    // Escape in the app window ends pick mode, and the app gets its mouse back.
+    let window = primary(&mut app);
+    real_key(&mut app, window, KeyCode::Escape);
+    app.update();
+    assert!(!app.world().resource::<GalleryState>().is_picking());
+    assert!(
+        !app.world()
+            .resource::<ButtonInput<KeyCode>>()
+            .pressed(KeyCode::Escape),
+        "nor did it see the key"
+    );
+    app.update();
+    assert_eq!(
+        app.world().resource::<PickHighlight>(),
+        &PickHighlight::default()
+    );
+    let add = centre_of_button_with(&mut app, "Add");
+    real_move(&mut app, window, add);
+    app.update();
+    app.update();
+    real_click(&mut app, window);
+    app.update();
+    assert_eq!(count(app.world()), 1, "clicks reach the app again");
+    ask(&mut app, GalleryAction::StopRecording);
+}
+
+#[test]
+fn a_check_picked_while_paused_is_added_to_the_scenarios_expect_and_runs_at_its_end() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::ToggleLoop);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+
+    pick_button(&mut app, "Add");
+    assert!(
+        !app.world().resource::<GalleryState>().is_playing(),
+        "pick mode pauses the script"
+    );
+    let wanted = !Check::disabled(Target::text("Add"));
+    let index = app
+        .world()
+        .resource::<GalleryState>()
+        .picked()
+        .expect("picked")
+        .checks()
+        .iter()
+        .position(|check| *check == wanted)
+        .expect("an enabled button offers that it is not disabled");
+    ask(&mut app, GalleryAction::AddPickedCheck(index));
+    let expects = app
+        .world()
+        .resource::<Gallery>()
+        .get(0)
+        .expect("the entry")
+        .scenario
+        .expects();
+    assert!(expects.contains(&wanted), "{expects:?}");
+    assert!(
+        app.world()
+            .resource::<GalleryState>()
+            .status()
+            .contains("expect"),
+        "the status says where it went"
+    );
+
+    ask(&mut app, GalleryAction::TogglePlay);
+    assert!(!app.world().resource::<GalleryState>().is_picking());
+    run_until(&mut app, 400, finished);
+    let report = app.world().resource::<ScenarioReport>();
+    assert!(report.passed(), "{:?}", report.failures());
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.name == wanted.to_string()),
+        "the picked check ran at the end: {:?}",
+        report.checks
+    );
+}
+
+#[test]
+fn pick_mode_needs_a_recording_or_a_selected_scenario() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::TogglePick);
+    let state = app.world().resource::<GalleryState>();
+    assert!(!state.is_picking());
+    assert!(
+        state.status().contains("Select a scenario"),
+        "{}",
+        state.status()
+    );
 }

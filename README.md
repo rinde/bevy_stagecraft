@@ -325,8 +325,8 @@ plugins. The app under test runs untouched in the primary window; a second OS
 window, **Scenarios**, with its own UI camera, holds the catalogue (grouped,
 with descriptions and each entry's last result), play and pause, step one
 frame, step to the next step, restart, speed (1/4x, 1/2x, 1x, 2x), loop on and
-off, **Take over**, **Export RON**, and the live list of the selected scenario's
-checks. Space plays and pauses, Right steps a frame, Down steps to the next
+off, **Take over**, **Export RON**, **Record**, **Pick**, and the live list of
+the selected scenario's checks. Space plays and pauses, Right steps a frame, Down steps to the next
 step and Left restarts, read from the Scenarios window only.
 
 ```rust,ignore
@@ -501,6 +501,52 @@ The file and the setup file go to the gallery's export directory (or the
 `SessionPlugin`'s). Load it like any other script: the app reads the setup file
 the script names and calls `.setup(..)` on the loaded scenario; see
 `tests/gallery.rs` and the example.
+
+### Picking a check by clicking a node
+
+Diffs propose what changed; sometimes the check you want is about one widget
+("this button is disabled", "this label reads 3"). **Pick** in the Scenarios
+window turns on pick mode, while recording or with a scenario selected (which
+it pauses). The app gets none of the mouse or keyboard meanwhile: hovering the
+app window outlines the node under the pointer (the overlay draws the outline
+and a tag naming its best target, both `Pickable::IGNORE`), and a click picks
+it instead of reaching the app. Escape in the app window, or **Stop picking**,
+ends it.
+
+The Scenarios window then shows, for the picked node:
+
+- its targets, best first: `Text(..)` of each label that only it shows, then
+  what the app's `resolve_target` hook makes of the position, then
+  `Screen(..)` of its middle. Clicking another one works the checks out again
+  through it;
+- the checks that hold for it now: `Shows(..)` or `TextOf(..)`, `Visible`,
+  `Disabled` or `Not(Disabled)`, `Checked` or `Not(Checked)`, `Focused`,
+  `Hovered`, and each field of its reflected components as
+  `Component(target: .., path: "Level.0", is: Eq(3))`;
+- a form per variant of the app's check type (`#[reflect(AppCheck)]`), each
+  field filled from the node: a `Target` field with the chosen target, a
+  `String` with its text, a number with the first number in its text, with
+  `-`/`+` to change numbers, flip a `bool` or cycle a target, and `PASS` or
+  `FAIL` for whether the check holds now.
+
+Clicking a check takes it. While recording it becomes a `Check` step at this
+point of the script (`session::add_check(world, check)` does the same from
+code), which stays whatever is ticked in the checklists afterwards:
+
+```ron
+steps: [
+    Wait(30),
+    Check(Disabled(Text("Save"))),
+],
+```
+
+While paused on a played scenario it is added to the scenario's `expect`, in
+the catalogue and in the run being played, so it runs at the end; **Export
+RON** writes it out. The lists behind the panel are `check::pick`
+(`node_at`, `target_alternatives`, `checks_that_hold`, `app_check_forms`,
+`Picked`), which read the world only, so picking changes nothing in the app.
+Ranking the targets is one function, `target_alternatives`, where better
+locators plug in.
 
 Limits: only the primary window is recorded and nothing marked `NotUnderTest`
 is ever named as a target; a click on a label replays on the middle of the

@@ -4,6 +4,10 @@
 //! While a session is recorded, a checkpoint (see [`crate::session`]) shows as
 //! a short flash over the window and a line in the caption strip.
 //!
+//! In the gallery's pick mode, the node under the pointer is outlined with a
+//! tag naming its best target above it, and the picked node has an outline of
+//! its own (see [`PickHighlight`]).
+//!
 //! Only the gallery and the recorder add [`CursorOverlayPlugin`]; headless
 //! tests never do. Everything it draws is screen-space UI with
 //! [`Pickable::IGNORE`], so it can never take a picking hit from the UI under
@@ -33,8 +37,9 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     text::{FontSize, FontSource, TextColor, TextFont},
     ui::{
-        AlignItems, BackgroundColor, BorderColor, BorderRadius, Display, FlexDirection,
-        GlobalZIndex, Node, PositionType, UiRect, UiTargetCamera, px,
+        AlignItems, BackgroundColor, BorderColor, BorderRadius, ComputedNode, Display,
+        FlexDirection, GlobalZIndex, Node, PositionType, UiGlobalTransform, UiRect, UiTargetCamera,
+        px,
         widget::{ImageNode, Text},
     },
     window::{PrimaryWindow, Window},
@@ -77,6 +82,14 @@ pub const CHECKPOINT_FLASH_FRAMES: u16 = 24;
 pub const CHECKPOINT_CAPTION_FRAMES: u16 = 150;
 /// Stacking order of everything the overlay draws, above any app UI.
 pub const OVERLAY_Z_INDEX: i32 = i32::MAX - 16;
+/// Width of the outline around a node in pick mode, in logical pixels.
+pub const PICK_OUTLINE_WIDTH: f32 = 2.0;
+/// Font size of the tag over the outlined node, in logical pixels.
+pub const PICK_TAG_FONT_SIZE: f32 = 13.0;
+/// Height of the tag over the outlined node, in logical pixels.
+pub const PICK_TAG_HEIGHT: f32 = 19.0;
+/// Padding inside the tag, in logical pixels.
+pub const PICK_TAG_PADDING: f32 = 3.0;
 
 /// Default mark before a check that passed. Plain ASCII: rendering showed the
 /// bundled font draws the dingbat check marks as empty boxes.
@@ -114,6 +127,14 @@ pub struct OverlayTheme {
     pub checkpoint_flash: Color,
     /// Colour of the caption saying a checkpoint was taken.
     pub checkpoint_text: Color,
+    /// Colour of the outline around the node under the pointer in pick mode.
+    pub pick_hovered: Color,
+    /// Colour of the outline around the picked node.
+    pub pick_selected: Color,
+    /// Background of the tag over the node under the pointer.
+    pub pick_tag_background: Color,
+    /// Colour of the tag's text.
+    pub pick_tag_text: Color,
     /// Size of the caption text.
     pub font_size: f32,
     /// Font of the caption text. The bundled default font only has ASCII, so
@@ -143,6 +164,10 @@ impl Default for OverlayTheme {
             fail_text: Color::srgb(1.0, 0.4, 0.4),
             checkpoint_flash: Color::srgba(1.0, 0.85, 0.3, 0.35),
             checkpoint_text: Color::srgb(1.0, 0.85, 0.3),
+            pick_hovered: Color::srgb(0.2, 0.65, 1.0),
+            pick_selected: Color::srgb(1.0, 0.3, 0.75),
+            pick_tag_background: Color::srgba(0.05, 0.12, 0.25, 0.92),
+            pick_tag_text: Color::WHITE,
             font_size: CAPTION_FONT_SIZE,
             font: FontSource::default(),
             pass_mark: PASS_MARK.into(),
@@ -379,6 +404,45 @@ pub struct OverlayCheckpointFlash;
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct OverlayCheckpointText;
 
+/// Which nodes the overlay outlines in the gallery's pick mode.
+///
+/// The one under the pointer is outlined with a tag, and the one picked with
+/// an outline of its own. The gallery sets it; anything else may too, such
+/// as a test that wants the outline in a recorded picture.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PickHighlight {
+    /// The node under the pointer, outlined in
+    /// [`OverlayTheme::pick_hovered`].
+    pub hovered: Option<Entity>,
+    /// The picked node, outlined in [`OverlayTheme::pick_selected`] a little
+    /// further out, so both show on the same node.
+    pub selected: Option<Entity>,
+    /// The words on the tag over the hovered node, such as its best target;
+    /// no tag when empty.
+    pub tag: String,
+}
+
+/// Which of the two pick outlines a node is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickOutlineKind {
+    /// Around the node under the pointer.
+    Hovered,
+    /// Around the picked node.
+    Selected,
+}
+
+/// An outline the pick mode draws.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct OverlayPickOutline(pub PickOutlineKind);
+
+/// The box of the tag over the hovered node.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OverlayPickTag;
+
+/// The text of the tag over the hovered node.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OverlayPickTagText;
+
 /// The last checkpoint, while it is still on show.
 #[derive(Resource, Debug, Default)]
 struct CheckpointNotice {
@@ -434,8 +498,12 @@ impl Plugin for CursorOverlayPlugin {
             .init_resource::<TrailHistory>()
             .init_resource::<ScenarioReport>()
             .init_resource::<CheckpointNotice>()
+            .init_resource::<PickHighlight>()
             .add_message::<CheckpointTaken>()
-            .add_systems(Startup, (spawn_overlay, spawn_checkpoint_flash))
+            .add_systems(
+                Startup,
+                (spawn_overlay, spawn_checkpoint_flash, spawn_pick_outlines),
+            )
             .add_systems(
                 Update,
                 (
@@ -445,6 +513,7 @@ impl Plugin for CursorOverlayPlugin {
                     animate_rings,
                     update_trail,
                     show_checkpoint,
+                    show_pick_outlines,
                     update_caption,
                 )
                     .chain()
@@ -613,6 +682,142 @@ fn spawn_checkpoint_flash(mut commands: Commands, theme: Res<OverlayTheme>) {
         Visibility::Hidden,
         GlobalZIndex(OVERLAY_Z_INDEX),
     ));
+}
+
+/// Spawns the two pick outlines, hidden until [`PickHighlight`] names a
+/// node, and the tag over the hovered one.
+fn spawn_pick_outlines(mut commands: Commands, theme: Res<OverlayTheme>) {
+    for kind in [PickOutlineKind::Selected, PickOutlineKind::Hovered] {
+        let colour = match kind {
+            PickOutlineKind::Hovered => theme.pick_hovered,
+            PickOutlineKind::Selected => theme.pick_selected,
+        };
+        let mut outline = commands.spawn((
+            OverlayPickOutline(kind),
+            OverlayRoot,
+            NotUnderTest,
+            Node {
+                position_type: PositionType::Absolute,
+                border: UiRect::all(px(PICK_OUTLINE_WIDTH)),
+                ..Node::default()
+            },
+            BorderColor::all(colour),
+            Pickable::IGNORE,
+            Visibility::Hidden,
+            GlobalZIndex(OVERLAY_Z_INDEX),
+        ));
+        if kind == PickOutlineKind::Hovered {
+            outline.with_children(|outline| {
+                outline
+                    .spawn((
+                        OverlayPickTag,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(-PICK_OUTLINE_WIDTH),
+                            height: px(PICK_TAG_HEIGHT),
+                            padding: UiRect::axes(px(PICK_TAG_PADDING * 2.0), px(PICK_TAG_PADDING)),
+                            align_items: AlignItems::Center,
+                            ..Node::default()
+                        },
+                        BackgroundColor(theme.pick_tag_background),
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|tag| {
+                        tag.spawn((
+                            OverlayPickTagText,
+                            Text::new(""),
+                            TextFont {
+                                font: theme.font.clone(),
+                                font_size: FontSize::Px(PICK_TAG_FONT_SIZE),
+                                ..TextFont::default()
+                            },
+                            TextColor(theme.pick_tag_text),
+                            Pickable::IGNORE,
+                        ));
+                    });
+            });
+        }
+    }
+}
+
+/// The rectangle `entity` takes up, in logical pixels: its top-left corner
+/// and its size.
+fn logical_rect(
+    nodes: &Query<(&ComputedNode, &UiGlobalTransform), Without<OverlayRoot>>,
+    entity: Entity,
+) -> Option<(Vec2, Vec2)> {
+    let (node, transform) = nodes.get(entity).ok()?;
+    let size = node.size() * node.inverse_scale_factor;
+    let centre = transform.affine().translation * node.inverse_scale_factor;
+    Some((centre - size / 2.0, size))
+}
+
+/// Puts the pick outlines around the nodes [`PickHighlight`] names, or hides
+/// them, and writes the tag.
+fn show_pick_outlines(
+    highlight: Res<PickHighlight>,
+    theme: Res<OverlayTheme>,
+    nodes: Query<(&ComputedNode, &UiGlobalTransform), Without<OverlayRoot>>,
+    mut outlines: Query<(
+        &OverlayPickOutline,
+        &mut Node,
+        &mut Visibility,
+        &mut BorderColor,
+    )>,
+    mut tags: Query<
+        (&mut Node, &mut Visibility, &mut BackgroundColor),
+        (With<OverlayPickTag>, Without<OverlayPickOutline>),
+    >,
+    mut texts: Query<(&mut Text, &mut TextColor), With<OverlayPickTagText>>,
+) {
+    let mut hovered_top = None;
+    for (OverlayPickOutline(kind), mut node, mut visibility, mut border) in &mut outlines {
+        let (entity, colour, gap) = match kind {
+            PickOutlineKind::Hovered => (highlight.hovered, theme.pick_hovered, 0.0),
+            PickOutlineKind::Selected => {
+                (highlight.selected, theme.pick_selected, PICK_OUTLINE_WIDTH)
+            }
+        };
+        let Some((corner, size)) = entity.and_then(|entity| logical_rect(&nodes, entity)) else {
+            if *visibility != Visibility::Hidden {
+                *visibility = Visibility::Hidden;
+            }
+            continue;
+        };
+        // Drawn just outside the node, so the node itself stays readable.
+        let out = PICK_OUTLINE_WIDTH + gap;
+        node.left = px(corner.x - out);
+        node.top = px(corner.y - out);
+        node.width = px(2.0f32.mul_add(out, size.x));
+        node.height = px(2.0f32.mul_add(out, size.y));
+        *border = BorderColor::all(colour);
+        *visibility = Visibility::Inherited;
+        if *kind == PickOutlineKind::Hovered {
+            hovered_top = Some((corner.y - out, 2.0f32.mul_add(out, size.y)));
+        }
+    }
+    let shown = hovered_top.filter(|_| !highlight.tag.is_empty());
+    for (mut node, mut visibility, mut background) in &mut tags {
+        let Some((top, height)) = shown else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        // Above the outline, or below it where there is no room above. An
+        // absolute child is placed from inside its parent's border.
+        node.top = if top >= PICK_TAG_HEIGHT {
+            px(-(PICK_TAG_HEIGHT + PICK_OUTLINE_WIDTH))
+        } else {
+            px(height - PICK_OUTLINE_WIDTH)
+        };
+        background.0 = theme.pick_tag_background;
+        *visibility = Visibility::Inherited;
+    }
+    for (mut text, mut colour) in &mut texts {
+        if text.0 != highlight.tag {
+            text.0.clone_from(&highlight.tag);
+        }
+        colour.0 = theme.pick_tag_text;
+    }
 }
 
 /// Points every overlay root at [`OverlayCamera`], when one is named.

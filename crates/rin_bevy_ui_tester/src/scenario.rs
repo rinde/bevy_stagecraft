@@ -536,6 +536,13 @@ impl Scenario {
         self
     }
 
+    /// Adds `check` to the checks that run at the end, as
+    /// [`Scenario::expect_check`] does, in place.
+    #[cfg(feature = "gallery")]
+    pub(crate) fn push_expect(&mut self, check: Check) {
+        self.expects.push(check);
+    }
+
     /// Adds `check` to the named checks, replacing one of the same name.
     fn define(&mut self, check: NamedCheck) {
         self.checks.retain(|defined| defined.name != check.name);

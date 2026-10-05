@@ -158,8 +158,14 @@ impl SessionHooks {
     }
 
     /// Runs the target hook.
-    pub(super) fn run_resolve_target(&self, world: &World, position: Vec2) -> Option<Target> {
+    pub(crate) fn run_resolve_target(&self, world: &World, position: Vec2) -> Option<Target> {
         self.target.as_ref().and_then(|hook| hook(world, position))
+    }
+
+    /// What the snapshots leave out.
+    #[must_use]
+    pub const fn noise(&self) -> &NoiseFilter {
+        &self.noise
     }
 
     /// A snapshot of `world`, as the noise filter allows.

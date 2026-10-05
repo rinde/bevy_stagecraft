@@ -97,6 +97,14 @@ impl Gallery {
             .find_map(|(at, entry)| (at == index).then_some(entry))
     }
 
+    /// The entry at `index`, counted across all groups, to change.
+    pub(crate) fn get_mut(&mut self, index: usize) -> Option<&mut GalleryEntry> {
+        self.groups
+            .iter_mut()
+            .flat_map(|group| group.entries.iter_mut())
+            .nth(index)
+    }
+
     /// How many entries there are.
     #[must_use]
     pub fn len(&self) -> usize {

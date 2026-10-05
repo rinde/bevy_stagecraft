@@ -33,6 +33,10 @@ pub use capture::{CaptureError, Frame};
 pub use check::{
     AppCheck, AppCheckField, AppCheckType, AppCheckValue, AppCheckVariant, Check, Comparison,
     CountOf, FieldOf, ReflectAppCheck, SeveralAppCheckTypes, TextMatch, Value, app_check_type,
+    pick::{
+        AppCheckForm, FieldValue, Picked, PickedForm, app_check_forms, checks_that_hold, node_at,
+        subject_of, target_alternatives,
+    },
     suggest::{DEFAULT_IGNORED, NoiseFilter, WorldSnapshot, suggest_checks},
 };
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
