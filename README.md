@@ -278,14 +278,66 @@ a UI node.
 The locators work wherever a target does: in steps, in checks and in a
 `Target` field of an app check.
 
-After moving onto a widget target the player
-checks that the widget, or a descendant, is under the pointer, and otherwise
-fails naming what covers it. A failed step skips the rest of the script.
+### Waiting for a target to be actionable
+
+Scripts need no `Wait` that guesses how long the UI takes to settle. As
+Playwright's auto-waiting does, a step that acts on a target that names a
+widget (`MoveTo`, `Glide`, `Drag`, and a `Click` or `Press` right after a move
+to a widget) first waits, one frame at a time, until the target:
+
+1. exists: it names exactly one widget;
+2. is visible: not hidden, with a size, and with its middle neither clipped
+   away nor outside the window;
+3. is stable: neither its layout nor its transform changed during the last
+   frame, so it is where it was two frames running;
+4. is enabled, for a step that presses (`Click`, `Press`, the start of a
+   `Drag`): neither the widget nor anything above it carries
+   `InteractionDisabled`;
+5. receives the pointer: at the point the step aims at (the middle of the
+   widget, or the pointer for a press), the topmost UI node that takes the
+   pointer is the widget or lies below it, not something covering it.
+
+A move only points, so it does not need the widget to be enabled: hovering a
+disabled button is fine, clicking it is not. A press checks the widget the move
+before it went to: still there, enabled, and still receiving the pointer.
+
+The wait lasts at most 60 frames (`DEFAULT_ACTION_TIMEOUT`), or what the
+scenario says with `Scenario::action_timeout(frames)` (`action_timeout: 120`
+in a file), or what one step says with `step.with_timeout(frames)`
+(`Timeout(120, MoveTo(Text("Go")))`). When it runs out the step fails, naming
+the first condition that did not hold and how long it waited:
+
+```text
+no widget shows "Goo"; did you mean "Go"? (still after 60 frames)
+Text("Go") is not visible: it is hidden (still after 60 frames)
+Text("Go") is not stable: it moved or changed size during the last frame (still after 60 frames)
+Text("Save") is disabled (still after 60 frames)
+Text("Go") does not receive the pointer: it is covered by `Curtain` (still after 60 frames)
+```
+
+A target that matches several widgets, or names something that is not a UI
+node, fails at once: waiting would not fix the script. Positions (`Screen`,
+`World`, and an app target that reports no widget) name no widget and never
+wait. `step.forced()` (`Force(Click(Left))`, Playwright's `force`) acts at
+once, with none of these checks and no hover check after it, for a script that
+means to click a disabled or covered widget. `Timeout(..)` and `Force(..)`
+wrap one `MoveTo`, `Glide`, `Drag`, `Click` or `Press`; around anything else
+the file is refused when it loads.
+
+Frames are fixed at 1/60 s and stability is told by Bevy's change detection
+over frames, not by a clock, so the wait takes the same frames on every run
+and in every runner. A step waiting for its target is in the middle of its
+step, so the gallery's **Step** runs until it has acted. `Check` steps do not
+wait unless they say so with `Within(..)`.
+
+After moving onto a widget target the player also checks that the widget, or a
+descendant, is under the pointer, and otherwise fails naming what covers it. A
+failed step skips the rest of the script.
 
 ## Scenarios as RON
 
 `Scenario::to_script()` gives a `Script`, plain serde data (format version,
-name, window size, setup, view, steps, expect list), and `Scenario::from_ron`
+name, window size, action timeout, setup, view, steps, expect list), and `Scenario::from_ron`
 reads one back, so a scenario can be written in Rust or as a file and
 converted either way. Closures cannot be serialised, so a script holds the
 app's setup, view, targets and checks as values of its own reflected enums,
@@ -311,8 +363,9 @@ check is refused with a load error saying to publish the state as a reflected
 resource and check it with `Resource(..)`. Setups, views and targets went
 the same way later in version 3: a `Named(..)` or `File(..)` setup, a view
 given by name (`view: "top_down"`) and a `Custom(resolver: .., argument: ..)`
-target are refused with a load error saying to write `App(..)`. Any other
-older file is also a newer one.
+target are refused with a load error saying to write `App(..)`. The script's
+`action_timeout` and the `Timeout(..)` and `Force(..)` steps came later in
+version 3 and only add forms. Any other older file is also a newer one.
 
 ```ron
 (
@@ -329,6 +382,8 @@ older file is also a newer one.
         MoveTo(Component("PauseButton")),        // locators
         MoveTo(Within(Name("second row"), Role(role: Button, label: "Delete"))),
         MoveTo(Nth(1, Text("Delete"))),
+        Timeout(120, MoveTo(Text("Loaded"))),     // wait longer for this one
+        Force(Click(Left)),                        // click without the checks
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
         Check(App(ActivatedOnce)),               // the app's own checks
         Check(App(Activated(1))),
@@ -493,8 +548,10 @@ named by the sturdiest target for the widget under it (a test id
 `Component(..)`, then `Role(..)` with its label, then `Text(..)`, then
 `Name(..)`; the same ranking as pick mode, `target_alternatives`), idle time
 over 1.5 s is shortened
-to a 30 frame `Wait`, and a modifier held around a key folds into a `Tap`. The
-thresholds are `StepOptions`. The app plugs in through its own reflected
+to a 30 frame `Wait`, idle time over 1 s before the pointer goes to a widget
+(a target such as `Text(..)`) is shortened to a 10 frame `Wait`, as playback
+waits for that widget to be actionable anyway, and a modifier held around a
+key folds into a `Tap`. The thresholds are `StepOptions`. The app plugs in through its own reflected
 types (see [The app's own setups, views and targets](#the-apps-own-setups-views-and-targets)):
 
 - `AppSetup::capture` runs on start and turns the state into one of the app's

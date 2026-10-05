@@ -75,4 +75,6 @@ pub use session::{
     SavedSession, SessionConfig, SessionError, SessionHooks, SessionPlugin, SessionRecorder,
     SessionSystems, StepOptions, read_log, steps_from_events,
 };
-pub use targets::{NotUnderTest, ResolvedTarget, Target, WidgetRole, resolve};
+pub use targets::{
+    DEFAULT_ACTION_TIMEOUT, NotUnderTest, ResolvedTarget, Target, WidgetRole, resolve,
+};

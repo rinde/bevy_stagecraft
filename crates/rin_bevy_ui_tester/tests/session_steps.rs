@@ -263,6 +263,79 @@ fn short_gaps_keep_their_length() {
     assert!(convert(&events).contains(&Step::Wait(30)));
 }
 
+/// A click at (10, 10), an idle stretch of about 80 frames, then a path to
+/// (150, 90) that ends in a click on `end`.
+fn idle_then_click_on(end: &Target) -> Vec<RecordedEvent> {
+    let here = Target::screen(Vec2::new(10.0, 10.0));
+    let mut events = vec![
+        moved(0, 10.0, 10.0),
+        button(1, ButtonState::Pressed, 10.0, 10.0, here.clone()),
+        button(2, ButtonState::Released, 10.0, 10.0, here),
+    ];
+    events.extend((1_u16..=20).map(|i| {
+        moved(
+            81 + u32::from(i),
+            7.0f32.mul_add(f32::from(i), 10.0),
+            4.0f32.mul_add(f32::from(i), 10.0),
+        )
+    }));
+    events.push(button(102, ButtonState::Pressed, 150.0, 90.0, end.clone()));
+    events.push(button(103, ButtonState::Released, 150.0, 90.0, end.clone()));
+    events
+}
+
+/// The longest `Wait` among `steps`.
+fn longest_wait(steps: &[Step]) -> u16 {
+    steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Wait(frames) => Some(*frames),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn idle_time_before_the_pointer_goes_to_a_widget_is_shortened_further() {
+    let to_widget = convert(&idle_then_click_on(&Target::text("Save")));
+    assert!(
+        to_widget.iter().any(|step| matches!(
+            step,
+            Step::Glide { target: Target::Text(text), .. } if text == "Save"
+        )),
+        "{to_widget:?}"
+    );
+    assert_eq!(
+        longest_wait(&to_widget),
+        StepOptions::default().widget_idle_wait,
+        "playback waits for the widget itself: {to_widget:?}"
+    );
+
+    let to_position = convert(&idle_then_click_on(&Target::screen(Vec2::new(150.0, 90.0))));
+    assert!(
+        longest_wait(&to_position) > 60,
+        "a position is not waited for, so the idle time stays: {to_position:?}"
+    );
+}
+
+#[test]
+fn idle_time_before_a_jump_to_a_widget_is_shortened_further() {
+    let save = Target::text("Save");
+    let events = [
+        button(1, ButtonState::Pressed, 10.0, 10.0, save.clone()),
+        button(2, ButtonState::Released, 10.0, 10.0, save.clone()),
+        button(80, ButtonState::Pressed, 150.0, 90.0, save.clone()),
+        button(81, ButtonState::Released, 150.0, 90.0, save),
+    ];
+    let steps = convert(&events);
+    assert_eq!(
+        longest_wait(&steps),
+        StepOptions::default().widget_idle_wait,
+        "{steps:?}"
+    );
+}
+
 #[test]
 fn a_key_press_and_release_is_a_tap() {
     let events = [

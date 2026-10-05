@@ -21,7 +21,7 @@ use crate::{
     extension::{AppSetup, AppView, Setup, View},
     probe::Probe,
     script::{FORMAT_VERSION, LoadError, Registry, Script},
-    targets::Target,
+    targets::{DEFAULT_ACTION_TIMEOUT, Target},
 };
 
 /// Whether a check passed; the error says what was wrong.
@@ -176,6 +176,19 @@ impl BitOr for Modifiers {
 ///
 /// Every step that touches input takes one frame, except where it says
 /// otherwise; [`Step::Check`] and [`Step::Caption`] take none.
+///
+/// A step that acts on a target that names a widget first waits, a frame at
+/// a time, until the target can be acted on, as Playwright does: it exists
+/// (exactly one widget), is visible, is stable (it did not move during the
+/// last frame) and receives the pointer (nothing covers it). A press
+/// ([`Step::Click`] or [`Step::Press`]) right after a step that moved the
+/// pointer to a widget also waits for that widget to be enabled and still
+/// to receive the pointer, and so does the start of a [`Step::Drag`]. The
+/// wait lasts at most the scenario's action timeout
+/// ([`Scenario::action_timeout`], [`DEFAULT_ACTION_TIMEOUT`] frames unless
+/// it says), or the step's own ([`Step::Timeout`]); when it runs out the
+/// step fails, naming the first condition that did not hold. Positions name
+/// no widget and never wait. [`Step::Force`] acts at once, without checks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Step {
@@ -244,6 +257,16 @@ pub enum Step {
     Check(Check),
     /// Show this caption from here on, for the recorder and the gallery.
     Caption(String),
+    /// The step, waiting at most this many frames for its target to be
+    /// actionable instead of the scenario's action timeout. Wraps a
+    /// [`Step::MoveTo`], [`Step::Glide`], [`Step::Drag`], [`Step::Click`] or
+    /// [`Step::Press`]: `Timeout(120, MoveTo(Text("Go")))`.
+    Timeout(u16, Box<Self>),
+    /// The step at once, with no waiting and no check that its target can be
+    /// acted on or ends up under the pointer: Playwright's `force`. Wraps the
+    /// same steps as [`Step::Timeout`]: `Force(Click(Left))` clicks a
+    /// disabled button.
+    Force(Box<Self>),
 }
 
 impl Step {
@@ -322,6 +345,43 @@ impl Step {
     pub fn caption(text: impl Into<String>) -> Self {
         Self::Caption(text.into())
     }
+
+    /// This step, waiting at most `frames` frames for its target to be
+    /// actionable (see [`Step::Timeout`]).
+    #[must_use]
+    pub fn with_timeout(self, frames: u16) -> Self {
+        Self::Timeout(frames, Box::new(self))
+    }
+
+    /// This step at once, without the actionability checks (see
+    /// [`Step::Force`]).
+    #[must_use]
+    pub fn forced(self) -> Self {
+        Self::Force(Box::new(self))
+    }
+
+    /// The step inside any [`Step::Timeout`] and [`Step::Force`] around it.
+    #[must_use]
+    pub fn inner(&self) -> &Self {
+        match self {
+            Self::Timeout(_, inner) | Self::Force(inner) => inner.inner(),
+            other => other,
+        }
+    }
+
+    /// Whether [`Step::Timeout`] and [`Step::Force`] may wrap this step: one
+    /// that acts on a target, or presses where one sent the pointer.
+    #[must_use]
+    pub const fn waits_for_target(&self) -> bool {
+        matches!(
+            self,
+            Self::MoveTo(_)
+                | Self::Glide { .. }
+                | Self::Drag { .. }
+                | Self::Click(_)
+                | Self::Press(_)
+        )
+    }
 }
 
 /// What a setup or view closure does to the world.
@@ -387,6 +447,9 @@ pub struct Scenario {
     view: Option<Arc<HookFn>>,
     /// The size of the window the scenario wants, in logical pixels.
     window: Option<(u32, u32)>,
+    /// How many frames a step waits for its target to be actionable, when
+    /// the scenario says.
+    action_timeout: Option<u16>,
     /// The app's setup, which the script holds.
     app_setup: Option<Setup>,
     /// The app's view, which the script holds.
@@ -406,6 +469,7 @@ impl fmt::Debug for Scenario {
             .field("setup", &self.setup.is_some())
             .field("view", &self.view.is_some())
             .field("window", &self.window)
+            .field("action_timeout", &self.action_timeout)
             .field("app_setup", &self.app_setup)
             .field("app_view", &self.app_view)
             .field("steps", &self.steps)
@@ -424,6 +488,7 @@ impl Scenario {
             setup: None,
             view: None,
             window: None,
+            action_timeout: None,
             app_setup: None,
             app_view: None,
             steps: Vec::new(),
@@ -477,6 +542,22 @@ impl Scenario {
     pub const fn window_size(mut self, width: u32, height: u32) -> Self {
         self.window = Some((width, height));
         self
+    }
+
+    /// Sets how many frames a step waits for its target to be actionable
+    /// before it fails, instead of [`DEFAULT_ACTION_TIMEOUT`]. A step can
+    /// still set its own with [`Step::Timeout`].
+    #[must_use]
+    pub const fn action_timeout(mut self, frames: u16) -> Self {
+        self.action_timeout = Some(frames);
+        self
+    }
+
+    /// How many frames a step waits for its target to be actionable unless
+    /// it says otherwise.
+    #[must_use]
+    pub fn action_timeout_frames(&self) -> u16 {
+        self.action_timeout.unwrap_or(DEFAULT_ACTION_TIMEOUT)
     }
 
     /// Appends one step.
@@ -636,6 +717,7 @@ impl Scenario {
             format_version: FORMAT_VERSION,
             name: self.name.clone(),
             window_size: self.window,
+            action_timeout: self.action_timeout,
             setup: self.app_setup.clone(),
             view: self.app_view.clone(),
             steps: self.steps.clone(),
@@ -694,6 +776,7 @@ impl Scenario {
             setup: None,
             view: None,
             window: script.window_size,
+            action_timeout: script.action_timeout,
             app_setup: script.setup,
             app_view: script.view,
             steps: script.steps,

@@ -3,9 +3,11 @@
 //! Targets are plain data. They are turned into pixels on the frame a step
 //! uses them, so layout changes between steps are followed. Submodules:
 //! `locate` (finding the one node a target names, strictly, with close
-//! matches for a miss and a list for an ambiguity) and `role` (widget roles
-//! read from `bevy_ui_widgets`).
+//! matches for a miss and a list for an ambiguity), `role` (widget roles
+//! read from `bevy_ui_widgets`) and `actionable` (whether a target can be
+//! acted on now: the conditions a step waits for).
 
+mod actionable;
 mod locate;
 mod role;
 
@@ -24,6 +26,7 @@ use bevy::{
 };
 use serde::{Deserialize, Serialize, de::Error as _};
 
+pub use self::actionable::DEFAULT_ACTION_TIMEOUT;
 pub use self::role::WidgetRole;
 use crate::{
     check::{Problem, check_component_type},
@@ -293,6 +296,51 @@ pub(crate) enum Lookup {
 /// [`AppTarget`] reports.
 pub(crate) fn locate(world: &World, target: &Target) -> Lookup {
     locate::locate(world, target)
+}
+
+/// What a step does at its target, which decides which actionability
+/// conditions it waits for (see `actionable`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Action {
+    /// Brings the pointer there: every condition but being enabled.
+    Point,
+    /// Brings the pointer there and presses: every condition.
+    Press,
+}
+
+/// Why a target cannot be acted on now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NotActionable {
+    /// A condition does not hold yet; waiting may change that.
+    Yet(String),
+    /// It never will, because the target itself is the mistake: it matches
+    /// several widgets, or names something that is not a UI node. The step
+    /// fails at once, as Playwright's strict mode does.
+    Never(String),
+}
+
+/// Works `target` out to a position and checks every condition `action`
+/// needs before a step acts on it, the first one that fails saying why:
+/// it exists, is visible, is stable, is enabled (for a press) and receives
+/// the pointer. A position names no widget and needs none of them.
+pub(crate) fn actionable(
+    world: &World,
+    target: &Target,
+    action: Action,
+) -> Result<ResolvedTarget, NotActionable> {
+    actionable::actionable(world, target, action)
+}
+
+/// Whether a press at `at`, where an earlier step sent the pointer to
+/// `widget`, reaches it: the widget is still there, enabled, and takes the
+/// pointer at `at`. `label` is how the script named it.
+pub(crate) fn pressable(
+    world: &World,
+    widget: Entity,
+    at: Vec2,
+    label: &str,
+) -> Result<(), NotActionable> {
+    actionable::pressable(world, widget, at, label)
 }
 
 /// A target worked out to a pixel.

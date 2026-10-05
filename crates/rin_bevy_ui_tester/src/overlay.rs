@@ -283,7 +283,7 @@ const fn button_name(button: MouseButton) -> &'static str {
 /// The target the pointer was last sent to before step `index`, which is what
 /// a click or a press then acts on.
 fn last_target(steps: &[Step]) -> Option<&Target> {
-    steps.iter().rev().find_map(|step| match step {
+    steps.iter().rev().find_map(|step| match step.inner() {
         Step::MoveTo(target) | Step::Glide { target, .. } => Some(target),
         Step::Drag { to, .. } => Some(to),
         _ => None,
@@ -319,6 +319,11 @@ pub fn describe_step(step: &Step, before: &[Step], descriptions: &TargetDescript
         Step::Wait(frames) => format!("Wait {frames} frames"),
         Step::Check(check) => format!("Check: {check}"),
         Step::Caption(text) => text.clone(),
+        Step::Timeout(frames, inner) => format!(
+            "{} (waits up to {frames} frames)",
+            describe_step(inner, before, descriptions)
+        ),
+        Step::Force(inner) => format!("{} (forced)", describe_step(inner, before, descriptions)),
     }
 }
 
