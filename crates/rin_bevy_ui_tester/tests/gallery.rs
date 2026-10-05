@@ -27,8 +27,8 @@ use bevy::{
 };
 use rin_bevy_ui_tester::{
     Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryState, HeadlessPlugins,
-    Registry, Scenario, ScenariosCamera, ScenariosWindow, Script, SessionHooks, Speed, StateProbe,
-    Step, Target, overlay::OverlayRoot, player::ScenarioReport, script::Setup,
+    Registry, Scenario, ScenariosCamera, ScenariosWindow, Script, SessionHooks, Speed, Step,
+    Target, overlay::OverlayRoot, player::ScenarioReport, script::Setup,
 };
 
 /// How often the "Add" button was activated.
@@ -841,25 +841,18 @@ fn a_real_click_reaches_the_app_once_and_is_not_replayed_every_update() {
 
 /// The gallery with recording hooks that write into `dir`.
 fn recording_app(dir: &std::path::Path) -> App {
-    let hooks = SessionHooks::new()
-        .capture_setup(|world, dir, stem| {
-            let file = format!("{stem}.setup.txt");
-            std::fs::write(dir.join(&file), world.resource::<Count>().0.to_string())
-                .map_err(|error| error.to_string())?;
-            Ok(Some(Setup::File(file)))
-        })
-        .state(count_probe());
+    let hooks = SessionHooks::new().capture_setup(|world, dir, stem| {
+        let file = format!("{stem}.setup.txt");
+        std::fs::write(dir.join(&file), world.resource::<Count>().0.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(Some(Setup::File(file)))
+    });
     app_with(
         GalleryPlugin::new(gallery())
             .with_reset(reset_app)
             .with_export_dir(dir)
             .with_session_hooks(hooks),
     )
-}
-
-/// The app's state as a recording sees it.
-fn count_probe() -> StateProbe {
-    StateProbe::new(|world| [("count".to_owned(), world.resource::<Count>().0.to_string())].into())
 }
 
 /// A fresh directory for one test.
@@ -947,9 +940,11 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
         !text.contains("Step frame"),
         "nothing of the gallery's window is in the script: {text}"
     );
-    assert_eq!(
-        script.expect_state.get("count").map(String::as_str),
-        Some("3")
+    assert!(
+        script
+            .expect
+            .contains(&Check::resource::<Count>(".0").eq(3_u32)),
+        "{text}"
     );
 
     // The file runs like any other: load it, give it the app's setup, play it.
@@ -957,7 +952,7 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
         .expect("the setup was captured")
         .parse()
         .expect("a number");
-    let registry = Registry::default().with_state(count_probe());
+    let registry = Registry::default();
     let scenario = Scenario::from_script(script, &registry)
         .expect("the names resolve")
         .setup(move |world| {
@@ -970,6 +965,97 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
     let report = scenario.run_in(&mut played);
     assert!(report.passed(), "{:?}", report.failures());
     assert_eq!(played.world().resource::<Count>().0, 3);
+}
+
+/// The index of the suggested check on `Count.0`, if there is one.
+fn count_suggestion(state: &GalleryState) -> Option<usize> {
+    state
+        .suggestions()?
+        .entries()
+        .position(|(check, _)| matches!(check, Check::Resource { path, .. } if path == "Count.0"))
+}
+
+#[test]
+fn stopping_a_recording_lists_the_suggested_checks_and_a_click_unticks_one_in_the_file() {
+    let dir = fresh_dir("gallery-record-checklist");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    ask(&mut app, GalleryAction::Record);
+    app.update();
+    let window = primary(&mut app);
+    let add = centre_of_button_with(&mut app, "Add");
+    real_move(&mut app, window, add);
+    app.update();
+    app.update();
+    real_click(&mut app, window);
+    for _ in 0..5 {
+        app.update();
+    }
+    ask(&mut app, GalleryAction::StopRecording);
+    app.update();
+
+    let state = app.world().resource::<GalleryState>();
+    let suggestions = state.suggestions().expect("a checklist");
+    assert!(!suggestions.is_empty());
+    assert!(
+        suggestions.entries().all(|(_, ticked)| ticked),
+        "all start ticked"
+    );
+    let index = count_suggestion(state).expect("the count's change is suggested");
+    let (check, _) = suggestions.entries().nth(index).expect("listed");
+    let row = format!("[x] {check}");
+    let path = suggestions.session().path.clone();
+    let read = |path: &std::path::Path| {
+        Script::from_ron(&std::fs::read_to_string(path).expect("written")).expect("reads back")
+    };
+    assert_eq!(read(&path).expect.len(), suggestions.len());
+
+    // Untick it with the real mouse, in the Scenarios window.
+    let second = scenarios_window(&mut app);
+    let at = centre_of_button_with(&mut app, &row);
+    real_move(&mut app, second, at);
+    app.update();
+    app.update();
+    real_click(&mut app, second);
+    app.update();
+    let state = app.world().resource::<GalleryState>();
+    let suggestions = state.suggestions().expect("still listed");
+    assert!(!suggestions.is_ticked(index), "the click unticked it");
+    assert!(state.status().starts_with("Saved"), "{}", state.status());
+    let script = read(&path);
+    assert_eq!(script.expect, suggestions.ticked());
+    assert!(
+        !script
+            .expect
+            .iter()
+            .any(|check| matches!(check, Check::Resource { path, .. } if path == "Count.0")),
+        "{:?}",
+        script.expect
+    );
+
+    ask(&mut app, GalleryAction::ToggleSuggestion(index));
+    assert_eq!(
+        read(&path).expect.len(),
+        suggestions_len(&app),
+        "ticked again"
+    );
+    ask(&mut app, GalleryAction::Select(0));
+    assert!(
+        app.world()
+            .resource::<GalleryState>()
+            .suggestions()
+            .is_none(),
+        "the checklist goes once something else is picked"
+    );
+}
+
+/// How many checks the gallery's checklist has.
+fn suggestions_len(app: &App) -> usize {
+    app.world()
+        .resource::<GalleryState>()
+        .suggestions()
+        .map_or(0, rin_bevy_ui_tester::Suggestions::len)
 }
 
 #[test]

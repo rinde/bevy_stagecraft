@@ -11,7 +11,7 @@
 mod common;
 
 use bevy::math::Vec2;
-use common::{UiCheck, registry, spawn_ui, state_probe};
+use common::{Activations, UiCheck, registry, spawn_ui};
 use rin_bevy_ui_tester::{
     Check, CheckKind, FORMAT_VERSION, LoadError, Outcome, Registry, Scenario, ScenarioReport, Step,
     Target,
@@ -134,26 +134,23 @@ fn an_app_check_gets_its_argument() {
 }
 
 #[test]
-fn a_state_check_reads_the_probe_part_way_through() {
+fn a_reflected_resource_check_reads_the_apps_state_part_way_through() {
     let report = Scenario::new("state")
         .setup(spawn_ui)
-        .with_state(state_probe())
         .steps([
-            Step::check(Check::state("activations", "0")),
+            Step::check(Check::resource::<Activations>(".0").eq(0_u32)),
             Step::move_to(pause()),
             Step::click(),
             Step::wait(1),
-            Step::check(Check::state("activations", "1")),
-            Step::check(Check::state("activations", "2")),
-            Step::check(!Check::state("score", "1")),
+            Step::check(Check::resource::<Activations>(".0").eq(1_u32)),
+            Step::check(Check::resource::<Activations>(".0").eq(2_u32)),
         ])
         .run_headless();
     assert_eq!(
         step_outcomes(&report)[4..],
         [
             Outcome::Pass,
-            Outcome::Fail("state `activations` is \"1\", not \"2\"".into()),
-            Outcome::Fail("the app's state has no `score`".into()),
+            Outcome::Fail("`Activations.0` is 1, expected 2".into()),
         ]
     );
 }
@@ -162,10 +159,9 @@ fn a_state_check_reads_the_probe_part_way_through() {
 fn expectations_run_at_the_end_in_order_and_are_named_in_words() {
     let report = Scenario::new("expectations")
         .setup(spawn_ui)
-        .with_state(state_probe())
         .expect_check(Check::shows("Pause"))
         .expect("never", |_probe| false)
-        .expect_check(Check::state("activations", "0"))
+        .expect_check(Check::resource::<Activations>(".0").eq(0_u32))
         .run_headless();
     let checks: Vec<_> = report
         .checks
@@ -177,7 +173,7 @@ fn expectations_run_at_the_end_in_order_and_are_named_in_words() {
         [
             (CheckKind::Expect, "\"Pause\" is shown", true),
             (CheckKind::Expect, "never", false),
-            (CheckKind::Expect, "state `activations` is \"0\"", true),
+            (CheckKind::Expect, "`Activations.0` is 0", true),
         ]
     );
 }
@@ -190,7 +186,7 @@ fn every_kind() -> Scenario {
             Step::check(Check::app(UiCheck::ActivatedOnce)),
             Step::check(Check::shows("Pause")),
             Step::check(!Check::hovered(Target::text("Pause"))),
-            Step::check(Check::state("activations", "0")),
+            Step::check(Check::resource::<Activations>(".0").eq(0_u32)),
             Step::check(Check::app(UiCheck::Activated(0))),
             Step::check(!Check::app(UiCheck::ActivatedOnce)),
         ])
@@ -206,7 +202,7 @@ fn checks_round_trip_through_ron_and_an_app_check_is_written_inside_app() {
         "Check(Not(Hovered(Text(\"Pause\"))))",
         "Check(App(Activated(0)))",
         "Check(Not(App(ActivatedOnce)))",
-        "State(\n",
+        "Resource(\n",
     ] {
         assert!(ron.contains(written), "{written} in {ron}");
     }
@@ -262,12 +258,19 @@ fn a_misspelt_check_is_a_syntax_error_at_its_position() {
 }
 
 #[test]
-fn checking_state_without_a_state_probe_is_a_load_error() {
-    let error = Scenario::from_ron(
+fn a_file_that_checks_the_old_state_probe_is_refused_saying_what_to_write_instead() {
+    for text in [
         "(format_version: 2, name: \"x\", steps: [Check(Not(State(key: \"a\", value: \"b\")))])",
-    )
-    .unwrap_err();
-    assert_eq!(error, LoadError::NoStateProbe);
+        "(format_version: 3, name: \"x\", steps: [], expect_state: {\"a\": \"b\"})",
+    ] {
+        let error = Scenario::from_ron(text).unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(error, LoadError::Syntax(_)), "{message}");
+        assert!(
+            message.contains("state probe is gone") && message.contains("Resource(path:"),
+            "{text}: {message}"
+        );
+    }
 }
 
 #[test]

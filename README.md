@@ -63,8 +63,8 @@ A `Check` is one of:
 - `Check::shows(text)`: some UI node of the app shows exactly this text;
 - `Check::hovered(target)`: the target's widget, or something below it, is
   under the pointer;
-- `Check::state(key, value)`: the app's `StateProbe` (`Scenario::with_state`)
-  reports this value;
+- the built-in checks on plain Bevy data below, such as
+  `Check::resource::<Score>(".0").eq(3)`;
 - `!check`: the check does not hold. A check that cannot run at all, such as
   a name nobody defined, still fails;
 - a label (`Check::named`, or just a `&str`) for a closure defined on the
@@ -98,6 +98,13 @@ impl AppCheck for RailCheck {
 
 Step::check(Check::app(RailCheck::StationNamed("Alpha".into())))
 ```
+
+`AppCheck::facts(probe)` is optional: it lists the app's checks that hold in
+a world, and a recording suggests the ones that hold at its end but not at
+its start (see [Suggested checks](#suggested-checks)). It has no receiver and
+`Self: Sized`, so `dyn AppCheck` still works; `#[reflect(AppCheck)]` stores a
+function pointer to it in the type data (`ReflectAppCheck::facts`), which is
+how the recorder calls it with only the type registry at hand.
 
 A file writes the value inside `App(..)`: `Check(App(StationNamed("Alpha")))`.
 The payload is kept untouched when the file is read, then read as the app's
@@ -179,8 +186,8 @@ fails naming what covers it. A failed step skips the rest of the script.
 name, window size, setup, view, steps, expect list), and `Scenario::from_ron`
 reads one back, so a scenario can be written in Rust or as a file and
 converted either way. Closures cannot be serialised, so a script names its
-setups, views and custom targets, and a `Registry` maps the names to code,
-with `Registry::with_state` for `State` checks. Types that checks name, and
+setups, views and custom targets, and a `Registry` maps the names to code.
+Types that checks name, and
 the app's check type, are looked up in `Registry::types`, so a whole file is
 checked when it loads, with no world at hand. It starts with every type that
 derives `Reflect`; share the app's own registry instead with
@@ -196,8 +203,11 @@ The current format is version 3. Versions 1 and 2 are still read: version 2
 added checks spelled out as data, version 3 the built-in checks below and the
 app's own checks as `App(..)`. Version 3 also dropped checks looked up by name
 (a bare `"name"`, `Named(..)` and `Custom(..)`): an older file that uses one is
-refused with a load error saying to write `App(..)` instead. Any other older
-file is also a newer one.
+refused with a load error saying to write `App(..)` instead. The string state
+probe is gone too: a file with `expect_state` or a `State(key: .., value: ..)`
+check is refused with a load error saying to publish the state as a reflected
+resource and check it with `Resource(..)`. Any other older file is also a
+newer one.
 
 ```ron
 (
@@ -212,7 +222,7 @@ file is also a newer one.
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
         Check(App(ActivatedOnce)),               // the app's own checks
         Check(App(Activated(1))),
-        Check(State(key: "activations", value: "1")),
+        Check(Resource(path: "Activations.0", is: Eq(1))),
         Check(Count(with: ["Ghost"], is: Eq(1))),
         Check(Resource(path: "Editor.tool", is: Eq(Lay))),
         Check(Component(target: Text("Speed"), path: "Gauge.value", is: Gt(0.5))),
@@ -377,12 +387,8 @@ thresholds are `StepOptions`. The app plugs in through `SessionHooks`:
 - `capture_view` names the view.
 - `resolve_target` is offered every click that hit no label (rails turns
   ground clicks into lattice points); the rest stay `screen(..)`.
-- `state` is a `StateProbe` that reads the app's state as `key: value` text.
-  What changed between start and stop is written as `expect_state`, which the
-  person keeps, edits or deletes; set the same probe on the `Registry`
-  (`Registry::with_state`) so a loaded file checks it. Each entry runs as a
-  `State` check at the end, and the same probe answers `State` checks added
-  part-way through.
+- `noise_filter` says which types the snapshots behind the suggested checks
+  leave out (below).
 
 ```ron
 // Recorded from a session. Edit freely. ...
@@ -399,9 +405,55 @@ thresholds are `StepOptions`. The app plugs in through `SessionHooks`:
         Click(Left),
         Wait(25),
     ],
-    expect_state: { "count": "2" },
+    expect: [
+        Resource(path: "Counter.0", is: Eq(2)),
+        Shows("Count: 2"),
+        Not(Shows("Count: 0")),
+    ],
 )
 ```
+
+### Suggested checks
+
+While recording you know what should have changed; the world can propose the
+checks. On start and on stop the recorder takes a `WorldSnapshot` through
+reflection: the fields of every reflected resource, how many entities have
+each reflected component, the texts of the app's UI nodes and the states of
+the widgets they label, every reflected Bevy `State`, and the app's own
+`AppCheck::facts`. `suggest_checks` turns the difference into built-in checks:
+
+| What changed                   | Suggested check                              |
+| ------------------------------ | -------------------------------------------- |
+| a resource field               | `Resource(path: "Counter.0", is: Eq(1))`     |
+| a component count              | `Count(with: ["Ghost"], is: Eq(2))`          |
+| a state                        | `InState(state: "Mode", value: Editing)`     |
+| text now shown / no longer     | `Shows("1")` / `Not(Shows("0"))`             |
+| a labelled widget's state      | `Disabled(Text("Save"))`, `Not(Checked(..))`, also pressed, focused, visible |
+| an app fact now / no longer    | `App(CounterIs(1))` / `Not(App(CounterIs(0)))` |
+
+Every suggestion is run against the world at the end and kept only if it
+holds there. The order is fixed (resources, counts, states, texts, widgets,
+facts; within each by name, field order or text), so the same recording gives
+the same list on every run. The suggestions are the file's `expect` and are
+also in `SavedSession::candidates`; `SavedSession::save_expect` writes the
+file again with the ones you keep. In the gallery they appear as a checklist
+in the Scenarios window when **Stop recording** is pressed, all ticked;
+clicking one unticks it (or ticks it again) and rewrites the file with the
+ticked ones as its `expect`.
+
+A `NoiseFilter` leaves out what moves without meaning: by default every type
+of Bevy's own crates (`bevy_*`: layout such as `ComputedNode`, `Transform`
+and `GlobalTransform`, picking, rendering, input, time) and of this crate.
+The UI Bevy draws still counts through its texts and widget states. Change it
+with `SessionHooks::new().noise_filter(NoiseFilter::default().ignore("my_game::debug::*").keep("Sprite"))`;
+a pattern is a short or full type path, a name without generics, or a prefix
+ending in `*`.
+
+An app whose state lives outside the ECS (rails keeps a Bevy-free `Sim`)
+publishes what matters of it as a reflected facts resource, updated each
+frame; the snapshot reads it like any other, and the suggested
+`Resource(..)` checks read it back on playback. This replaces the string
+`StateProbe` of earlier versions.
 
 The file and the setup file go to the gallery's export directory (or the
 `SessionPlugin`'s). Load it like any other script: the app reads the setup file

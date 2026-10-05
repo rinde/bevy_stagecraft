@@ -11,7 +11,7 @@ use bevy::{
 use super::{
     GalleryReset,
     catalogue::Gallery,
-    state::{GalleryAction, GalleryPhase, GalleryState, PendingStep, Recording},
+    state::{GalleryAction, GalleryPhase, GalleryState, PendingStep, Recording, Suggestions},
 };
 use crate::{
     input::SyntheticInput,
@@ -166,11 +166,43 @@ fn record(world: &mut World, state: &mut GalleryState) {
     }
 }
 
-/// Stops recording and says where the file went.
+/// Stops recording, says where the file went and offers the checks it
+/// suggests.
 fn stop_recording(world: &mut World, state: &mut GalleryState) {
-    state.status = match session::stop(world) {
-        Ok(saved) => saved.describe(),
-        Err(error) => format!("Cannot save the recording: {error}"),
+    match session::stop(world) {
+        Ok(saved) => {
+            state.status = format!(
+                "{}, {}",
+                saved.describe(),
+                suggested(saved.candidates.len(), saved.candidates.len())
+            );
+            state.suggestions = Some(Suggestions::new(saved));
+        }
+        Err(error) => state.status = format!("Cannot save the recording: {error}"),
+    }
+}
+
+/// How many of the suggested checks the file holds, in words.
+fn suggested(ticked: usize, all: usize) -> String {
+    match all {
+        0 => "no checks suggested".to_owned(),
+        1 => format!("{ticked} of 1 suggested check kept"),
+        _ => format!("{ticked} of {all} suggested checks kept"),
+    }
+}
+
+/// Ticks or unticks a suggested check and says what the file now holds.
+fn toggle_suggestion(state: &mut GalleryState, index: usize) {
+    let Some(suggestions) = state.suggestions.as_mut() else {
+        return;
+    };
+    state.status = match suggestions.toggle(index) {
+        Ok(()) => format!(
+            "Saved {}, {}",
+            suggestions.session().path.display(),
+            suggested(suggestions.ticked().len(), suggestions.len())
+        ),
+        Err(error) => format!("Cannot save the checks: {error}"),
     };
 }
 
@@ -197,7 +229,16 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         "Stop recording first".clone_into(&mut state.status);
         return;
     }
+    // The checklist belongs to the recording it came from; what is played or
+    // recorded next has its own checks.
+    if matches!(
+        action,
+        GalleryAction::Select(_) | GalleryAction::Restart | GalleryAction::Record
+    ) {
+        state.suggestions = None;
+    }
     match action {
+        GalleryAction::ToggleSuggestion(index) => toggle_suggestion(state, index),
         GalleryAction::Record => record(world, state),
         GalleryAction::StopRecording => stop_recording(world, state),
         GalleryAction::Select(index) => select(world, state, index),

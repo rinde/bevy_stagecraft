@@ -21,14 +21,15 @@ use bevy::{
     window::{CursorMoved, PrimaryWindow, WindowEvent},
 };
 use rin_bevy_ui_tester::{
-    HeadlessPlugins, Registry, Scenario, Script, SessionHooks, SessionPlugin, SessionRecorder,
-    StateProbe, Step, Target,
+    Check, HeadlessPlugins, Registry, Scenario, Script, SessionHooks, SessionPlugin,
+    SessionRecorder, Step, Target,
     script::Setup,
     session::{self, SessionConfig},
 };
 
 /// How often the "+1" button was activated.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 struct Count(u32);
 
 /// Spawns the app: a "+1" button that counts, and a button of the same size
@@ -58,14 +59,6 @@ fn spawn_ui(world: &mut World) {
     }
 }
 
-/// The app's state as the session sees it.
-fn probe() -> StateProbe {
-    StateProbe::new(|world| {
-        let count = world.get_resource::<Count>().map_or(0, |count| count.0);
-        [("count".to_owned(), count.to_string())].into()
-    })
-}
-
 /// A fresh directory for one test's files.
 fn dir(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
@@ -75,14 +68,12 @@ fn dir(name: &str) -> PathBuf {
 
 /// The app, with a session plugin that writes into `dir`.
 fn app(dir: &std::path::Path) -> App {
-    let hooks = SessionHooks::new()
-        .capture_setup(|world, dir, stem| {
-            let count = world.get_resource::<Count>().map_or(0, |count| count.0);
-            let file = format!("{stem}.setup.txt");
-            fs::write(dir.join(&file), count.to_string()).map_err(|error| error.to_string())?;
-            Ok(Some(Setup::File(file)))
-        })
-        .state(probe());
+    let hooks = SessionHooks::new().capture_setup(|world, dir, stem| {
+        let count = world.get_resource::<Count>().map_or(0, |count| count.0);
+        let file = format!("{stem}.setup.txt");
+        fs::write(dir.join(&file), count.to_string()).map_err(|error| error.to_string())?;
+        Ok(Some(Setup::File(file)))
+    });
     let mut app = App::new();
     app.add_plugins((
         HeadlessPlugins::default().with_window_size(640, 480),
@@ -186,7 +177,7 @@ fn play(path: &std::path::Path) -> Result<(rin_bevy_ui_tester::ScenarioReport, u
         .expect("the setup file was written")
         .parse()
         .expect("a number");
-    let registry = Registry::default().with_state(probe());
+    let registry = Registry::default();
     let scenario = Scenario::from_script(script, &registry)
         .expect("the names resolve")
         .setup(move |world| {
@@ -234,9 +225,12 @@ fn the_recorded_file_reads_as_a_few_labelled_steps() {
         script.setup,
         Some(Setup::File("three_clicks.setup.txt".into()))
     );
-    assert_eq!(
-        script.expect_state.get("count").map(String::as_str),
-        Some("3")
+    assert!(
+        script
+            .expect
+            .contains(&Check::resource::<Count>(".0").eq(3_u32)),
+        "the change to the count is suggested: {:?}",
+        script.expect
     );
     let clicks = script.steps.iter().filter(|s| **s == Step::click()).count();
     assert_eq!(clicks, 3, "{:?}", script.steps);
@@ -259,7 +253,10 @@ fn the_recorded_file_reads_as_a_few_labelled_steps() {
     let text = fs::read_to_string(&saved.path).expect("written");
     assert!(text.starts_with("//"), "the file explains itself");
     assert!(text.contains("Text(\"+1\")"), "{text}");
-    assert!(text.contains("expect_state"), "{text}");
+    assert!(
+        text.contains("path: \"Count.0\",\n            is: Eq(3),"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -305,7 +302,8 @@ fn recording_nothing_in_particular_writes_a_script_that_plays() {
         app.update();
     }
     let saved = session::stop(app.world_mut()).expect("saved");
-    assert!(saved.script.expect_state.is_empty(), "nothing changed");
+    assert!(saved.script.expect.is_empty(), "nothing changed");
+    assert!(saved.candidates.is_empty(), "nothing changed");
     let (report, _) = play(&saved.path).expect("the file plays");
     assert!(report.passed(), "{:?}", report.failures());
 }

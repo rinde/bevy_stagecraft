@@ -15,7 +15,6 @@ use bevy::reflect::{
     FromType, GetTypeRegistration, PartialReflect, Reflect, ReflectFromReflect, TypeInfo, TypePath,
     TypeRegistration, TypeRegistry,
     enums::VariantInfo,
-    reflect_trait,
     serde::{TypedReflectDeserializer, TypedReflectSerializer},
 };
 use ron::value::RawValue;
@@ -64,7 +63,13 @@ use crate::{probe::Probe, scenario::CheckResult};
 /// let check = Check::app(GameCheck::ScoreIs(3));
 /// assert_eq!(check.to_string(), "ScoreIs(3)");
 /// ```
-#[reflect_trait]
+///
+/// # Facts for recordings
+///
+/// When a recording stops, the checks it suggests (see [`crate::check::suggest`])
+/// can include the app's own: implement [`AppCheck::facts`] to list the
+/// checks that hold in a world. A check listed at the end of the recording
+/// but not at its start is suggested.
 pub trait AppCheck {
     /// Whether the check holds in the world `probe` reads.
     ///
@@ -72,10 +77,76 @@ pub trait AppCheck {
     ///
     /// What is wrong, when it does not hold.
     fn run(&self, probe: &Probe<'_>) -> CheckResult;
+
+    /// The checks of this type that hold in the world `probe` reads, for a
+    /// recording to suggest (see [`crate::check::suggest`]). Keep the list short
+    /// and the order stable: it is what the person picks from. None by
+    /// default.
+    ///
+    /// `Self: Sized` keeps the trait usable as `dyn AppCheck`; the registry
+    /// reaches this function through [`ReflectAppCheck`].
+    #[must_use]
+    fn facts(_probe: &Probe<'_>) -> Vec<Self>
+    where
+        Self: Sized,
+    {
+        Vec::new()
+    }
 }
 
-// By hand: the struct `#[reflect_trait]` generates holds only function
-// pointers, and derives nothing but `Clone`.
+/// What a recording calls to list the app's facts: [`AppCheck::facts`], with
+/// each fact boxed as reflection.
+type FactsFn = fn(&Probe<'_>) -> Vec<Box<dyn Reflect>>;
+
+/// The type data `#[reflect(AppCheck)]` registers: how to see a reflected
+/// value as an [`AppCheck`], and how to list the facts of its type.
+///
+/// Written by hand rather than with `#[reflect_trait]`, which can only cast a
+/// value to the trait: [`AppCheck::facts`] has no value to cast, so its
+/// function pointer is kept here, made for the concrete type when Bevy
+/// registers it.
+#[derive(Clone)]
+pub struct ReflectAppCheck {
+    /// Casts a value of the registered type to the trait.
+    get: fn(&dyn Reflect) -> Option<&dyn AppCheck>,
+    /// The registered type's [`AppCheck::facts`].
+    facts: FactsFn,
+}
+
+impl ReflectAppCheck {
+    /// `value` as an [`AppCheck`], when it is of the registered type.
+    #[must_use]
+    pub fn get<'a>(&self, value: &'a dyn Reflect) -> Option<&'a dyn AppCheck> {
+        (self.get)(value)
+    }
+
+    /// The registered type's [`AppCheck::facts`] in the world `probe` reads,
+    /// each a value of that type.
+    #[must_use]
+    pub fn facts(&self, probe: &Probe<'_>) -> Vec<Box<dyn Reflect>> {
+        (self.facts)(probe)
+    }
+}
+
+impl<T: AppCheck + Reflect> FromType<T> for ReflectAppCheck {
+    fn from_type() -> Self {
+        Self {
+            get: |value| {
+                value
+                    .downcast_ref::<T>()
+                    .map(|value| -> &dyn AppCheck { value })
+            },
+            facts: |probe| {
+                T::facts(probe)
+                    .into_iter()
+                    .map(|fact| -> Box<dyn Reflect> { Box::new(fact) })
+                    .collect()
+            },
+        }
+    }
+}
+
+// By hand: function pointers say nothing worth printing.
 impl fmt::Debug for ReflectAppCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReflectAppCheck").finish_non_exhaustive()
@@ -186,6 +257,20 @@ impl AppCheckValue {
         self.typed.as_ref().map(|typed| &*typed.value)
     }
 
+    /// A value of the app's check type, already built, written as RON
+    /// through `types`.
+    fn typed(types: &TypeRegistry, value: Box<dyn Reflect>, check: ReflectAppCheck) -> Self {
+        let ron = write(types, value.as_partial_reflect())
+            .map_err(|error| format!("cannot write {}: {error}", value.reflect_short_type_path()));
+        Self {
+            ron,
+            typed: Some(TypedApp {
+                value: Arc::from(value),
+                check,
+            }),
+        }
+    }
+
     /// Runs the check. The outer error means it cannot run at all.
     pub(super) fn run(&self, probe: Probe<'_>) -> Result<CheckResult, String> {
         let typed = self.typed.as_ref().ok_or_else(|| {
@@ -291,6 +376,26 @@ fn without_stack(message: &str) -> &str {
 /// `value` as compact RON, through reflection.
 fn write(types: &TypeRegistry, value: &dyn PartialReflect) -> Result<String, ron::Error> {
     ron::to_string(&TypedReflectSerializer::new(value, types))
+}
+
+/// The facts the app's check type lists for the world `probe` reads (see
+/// [`AppCheck::facts`]), in its order, without repeats; none when no type, or
+/// more than one, is an app check.
+pub(super) fn app_facts(types: &TypeRegistry, probe: Probe<'_>) -> Vec<AppCheckValue> {
+    let Ok(registration) = registration(types) else {
+        return Vec::new();
+    };
+    let Some(check) = registration.data::<ReflectAppCheck>() else {
+        return Vec::new();
+    };
+    let mut facts: Vec<AppCheckValue> = Vec::new();
+    for fact in check.facts(&probe) {
+        let value = AppCheckValue::typed(types, fact, check.clone());
+        if !facts.contains(&value) {
+            facts.push(value);
+        }
+    }
+    facts
 }
 
 /// The one registered type that is an app check.

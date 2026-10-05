@@ -7,7 +7,7 @@
     steps: [
         Check(Shows("Pause")),
         Check(Not(Hovered(Text("Pause")))),
-        Check(State(key: "activations", value: "0")),
+        Check(Resource(path: "Activations.0", is: Eq(0))),
         Glide(target: Text("Pause"), frames: 10),
         Check(Hovered(Text("Pause"))),
         Click(Left),
@@ -18,6 +18,6 @@
     expect: [
         App(ActivatedOnce),
         Not(Shows("Resume")),
+        Resource(path: "Activations.0", is: Eq(1)),
     ],
-    expect_state: {"activations": "1"},
 )

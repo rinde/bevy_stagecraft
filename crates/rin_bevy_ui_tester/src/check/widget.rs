@@ -101,7 +101,7 @@ pub(super) fn widget(world: &World, node: Entity) -> Entity {
 
 /// Whether `entity` is a widget of `bevy_ui_widgets`, or a `bevy_ui` node
 /// that tracks interaction.
-fn is_widget(world: &World, entity: Entity) -> bool {
+pub(super) fn is_widget(world: &World, entity: Entity) -> bool {
     let Ok(entity) = world.get_entity(entity) else {
         return false;
     };

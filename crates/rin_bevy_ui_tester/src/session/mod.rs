@@ -28,10 +28,20 @@
 //! * [`SessionHooks::capture_view`] names the view the app is in;
 //! * [`SessionHooks::resolve_target`] turns a click position into an
 //!   app-defined target (rails turns ground clicks into lattice points);
-//! * [`SessionHooks::state`] reads the app's state as plain `key: value`
-//!   text. The difference between start and stop is written into the script
-//!   as `expect_state`, which the person can keep, edit or delete; a loaded
-//!   script checks it with the same probe set in [`crate::Registry::state`].
+//! * [`SessionHooks::noise_filter`] says which types the world snapshots
+//!   leave out.
+//!
+//! # Suggested checks
+//!
+//! On start and on stop the recorder takes a [`WorldSnapshot`]: reflected
+//! resources, component counts, the UI's texts and widget states, Bevy
+//! states and the app's own facts (see [`crate::check::suggest`]). What changed
+//! between the two becomes the script's `expect`, every check of it one that
+//! holds at the end, in a fixed order; [`SavedSession::candidates`] keeps
+//! them all and [`SavedSession::save_expect`] writes the file again with only
+//! the ones the person wants. The gallery shows them as a checklist. An app
+//! that keeps state outside the ECS publishes what matters of it as a
+//! reflected resource, which the snapshot then reads.
 //!
 //! # Limits
 //!
@@ -40,7 +50,6 @@
 //! back on the middle of the labelled node, not on the exact pixel. Typed
 //! text is not recorded, only key presses. Touch is not recorded.
 
-use alloc::collections::BTreeMap;
 use core::{fmt, time::Duration};
 use std::{fs, path::PathBuf};
 
@@ -72,6 +81,8 @@ pub use hooks::SessionHooks;
 pub use log::{RecordedEvent, RecordedKind, StepOptions, steps_from_events};
 
 use crate::{
+    check::Check,
+    check::suggest::{WorldSnapshot, suggest_checks},
     headless::FRAME_STEP,
     script::{FORMAT_VERSION, Script},
 };
@@ -169,6 +180,32 @@ pub struct SavedSession {
     pub path: PathBuf,
     /// What was written to it.
     pub script: Script,
+    /// The checks the world's changes suggested, in order; the file's
+    /// `expect` starts as all of them.
+    pub candidates: Vec<Check>,
+}
+
+impl SavedSession {
+    /// Writes the file again with `expect` as the script's expect list, such
+    /// as the candidates the person ticked.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError`] when the script cannot be written as RON or the file
+    /// cannot be written.
+    pub fn save_expect(&mut self, expect: Vec<Check>) -> Result<(), SessionError> {
+        self.script.expect = expect;
+        write_script(&self.path, &self.script)
+    }
+}
+
+/// Writes `script` to `path`, after the [`HEADER`].
+fn write_script(path: &std::path::Path, script: &Script) -> Result<(), SessionError> {
+    let ron = script
+        .to_ron()
+        .map_err(|error| SessionError::new(error.to_string()))?;
+    fs::write(path, format!("{HEADER}{ron}\n"))
+        .map_err(|error| SessionError::new(format!("cannot write {}: {error}", path.display())))
 }
 
 /// A request to start or stop, made without access to the whole world.
@@ -181,6 +218,7 @@ enum Request {
 }
 
 /// A session in progress.
+#[derive(Debug)]
 struct Active {
     /// The scenario's name.
     name: String,
@@ -192,8 +230,8 @@ struct Active {
     setup: Option<crate::script::Setup>,
     /// What the view hook said.
     view: Option<String>,
-    /// The app's state at the start.
-    before: Option<BTreeMap<String, String>>,
+    /// The world at the start.
+    before: WorldSnapshot,
     /// Real time spent recording.
     elapsed: Duration,
     /// The log so far.
@@ -551,13 +589,7 @@ impl SessionRecorder {
         }
         let steps = steps_from_events(&active.events, end, &config.options);
         let after = config.hooks.snapshot(world);
-        let expect_state = match (&active.before, after) {
-            (Some(before), Some(after)) => after
-                .into_iter()
-                .filter(|(key, value)| before.get(key) != Some(value))
-                .collect(),
-            _ => BTreeMap::new(),
-        };
+        let candidates = suggest_checks(&active.before, &after, world);
         let script = Script {
             format_version: FORMAT_VERSION,
             name: active.name,
@@ -565,18 +597,15 @@ impl SessionRecorder {
             setup: active.setup,
             view: active.view,
             steps,
-            expect: Vec::new(),
-            expect_state,
+            expect: candidates.clone(),
         };
-        let ron = script
-            .to_ron()
-            .map_err(|error| SessionError::new(error.to_string()))?;
-        let text = format!("{HEADER}{ron}\n");
         let path = config.dir.join(format!("{}.ron", active.stem));
-        fs::write(&path, text).map_err(|error| {
-            SessionError::new(format!("cannot write {}: {error}", path.display()))
-        })?;
-        let saved = SavedSession { path, script };
+        write_script(&path, &script)?;
+        let saved = SavedSession {
+            path,
+            script,
+            candidates,
+        };
         self.last = Some(Ok(saved.clone()));
         Ok(saved)
     }
@@ -587,8 +616,8 @@ impl SessionRecorder {
 const HEADER: &str = "\
 // Recorded from a session. Edit freely.
 // `steps` are what was done: glides, clicks and drags, with long idle time
-// shortened. `expect_state` is what changed in the app's state while
-// recording; keep the lines you want checked and delete the rest.
+// shortened. `expect` holds the checks suggested by what changed in the
+// world while recording; keep the ones you want checked and delete the rest.
 ";
 
 /// A file-name-safe version of `name` that no file in `dir` has yet.

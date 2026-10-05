@@ -48,6 +48,13 @@
 //! mouse and keyboard of that window are logged until **Stop recording**,
 //! which writes a `.ron` file into the export directory. Nothing in the
 //! Scenarios window is recorded, and its nodes are never named as targets.
+//!
+//! When recording stops, the checks the world's changes suggest (see
+//! [`crate::check::suggest`]) are listed in the Scenarios window as a checklist,
+//! all ticked, in a fixed order. Clicking one ticks or unticks it and writes
+//! the file again, its `expect` the ticked checks
+//! ([`GalleryAction::ToggleSuggestion`] does the same from code). The list
+//! stays until another scenario is selected or recorded.
 //! Selecting, restarting, playing or stepping is refused while recording.
 //!
 //! The app's reset hook must put the app's own state back and nothing else:
@@ -74,7 +81,9 @@ mod ui;
 
 pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
 pub use input::scenarios_pointer;
-pub use state::{GalleryAction, GalleryPhase, GalleryState, PendingStep, Recording, Speed};
+pub use state::{
+    GalleryAction, GalleryPhase, GalleryState, PendingStep, Recording, Speed, Suggestions,
+};
 pub use ui::{GalleryToolbar, SCENARIOS_WINDOW_SIZE, ScenariosCamera, ScenariosWindow};
 
 use crate::{

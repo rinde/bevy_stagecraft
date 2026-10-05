@@ -12,8 +12,7 @@ use bevy::{
     ui_widgets::{Activate, Button},
 };
 use rin_bevy_ui_tester::{
-    AppCheck, CheckResult, Probe, ReflectAppCheck, Registry, ResolvedTarget, StateProbe, Target,
-    resolve,
+    AppCheck, CheckResult, Probe, ReflectAppCheck, Registry, ResolvedTarget, Target, resolve,
 };
 
 /// How many times the button was activated.
@@ -89,20 +88,9 @@ impl AppCheck for UiCheck {
     }
 }
 
-/// Reads the activation count as the app's state, under `activations`.
-pub fn state_probe() -> StateProbe {
-    StateProbe::new(|world| {
-        world
-            .get_resource::<Activations>()
-            .map(|count| ("activations".to_owned(), count.0.to_string()))
-            .into_iter()
-            .collect()
-    })
-}
-
 /// The registry the RON scenarios are loaded with.
 pub fn registry() -> Registry {
-    let mut registry = Registry::default().with_state(state_probe());
+    let mut registry = Registry::default();
     registry.setups.register("plain_ui", spawn_ui);
     registry.targets.register("pause_button", |_world, _arg| {
         Ok(ResolvedTarget::at(Vec2::new(150.0, 50.0)))

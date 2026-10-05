@@ -33,12 +33,13 @@ pub use capture::{CaptureError, Frame};
 pub use check::{
     AppCheck, AppCheckField, AppCheckType, AppCheckValue, AppCheckVariant, Check, Comparison,
     CountOf, FieldOf, ReflectAppCheck, SeveralAppCheckTypes, TextMatch, Value, app_check_type,
+    suggest::{DEFAULT_IGNORED, NoiseFilter, WorldSnapshot, suggest_checks},
 };
 pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
 #[cfg(feature = "gallery")]
 pub use gallery::{
     Gallery, GalleryAction, GalleryEntry, GalleryGroup, GalleryPlugin, GalleryState,
-    GallerySystems, ScenariosCamera, ScenariosWindow, Speed,
+    GallerySystems, ScenariosCamera, ScenariosWindow, Speed, Suggestions,
 };
 pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};
@@ -59,7 +60,7 @@ pub use recorder::{
 pub use scenario::{CheckResult, IntoCheckResult, Modifiers, NamedCheck, Scenario, Step};
 pub use script::{
     ExportError, FORMAT_VERSION, HookRegistry, LoadError, OLDEST_FORMAT_VERSION, Registry, Script,
-    Setup, StateProbe, export_ron,
+    Setup, export_ron,
 };
 pub use session::{
     RecordedEvent, RecordedKind, SavedSession, SessionConfig, SessionError, SessionHooks,
