@@ -5,15 +5,20 @@ use std::fs;
 use bevy::{
     ecs::world::World,
     input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
+    picking::input::PointerInputSettings,
     window::{PrimaryWindow, Window},
 };
 
 use super::{
     GalleryReset,
     catalogue::Gallery,
-    state::{GalleryAction, GalleryPhase, GalleryState, PendingStep, Recording, Suggestions},
+    pick::spelled,
+    state::{
+        GalleryAction, GalleryPhase, GalleryState, PendingStep, Picking, Recording, Suggestions,
+    },
 };
 use crate::{
+    check::Check,
     input::SyntheticInput,
     player::{ScenarioPlayer, ScenarioReport, advance_world},
     session::{self, DEFAULT_CHECKPOINT_KEY, SessionConfig, SessionRecorder},
@@ -221,6 +226,123 @@ fn toggle_suggestion(state: &mut GalleryState, checkpoint: Option<usize>, index:
     };
 }
 
+/// Starts or stops pick mode. Without a recording it needs a selected
+/// scenario, which it pauses: a check picked then is about the state on
+/// screen.
+fn toggle_pick(state: &mut GalleryState, recording: bool) {
+    if state.is_picking() {
+        state.picking = Picking::Off;
+        state.picked = None;
+        state.status.clear();
+        return;
+    }
+    if !recording && state.selected.is_none() {
+        "Select a scenario or start recording to pick".clone_into(&mut state.status);
+        return;
+    }
+    if !recording {
+        state.playing = false;
+        state.step = None;
+    }
+    state.picking = Picking::On;
+    state.picked = None;
+    "Pick: point at a node in the app window and click it (Escape ends)"
+        .clone_into(&mut state.status);
+}
+
+/// Puts a picked check where it belongs: a `Check` step at this point of the
+/// recording, or else an expectation of the selected scenario, in the
+/// catalogue and in the run being played.
+fn place_check(world: &mut World, state: &mut GalleryState, check: Check, recording: bool) {
+    let written = spelled(&check);
+    if recording {
+        if let Err(error) = session::add_check(world, check.clone()) {
+            state.status = format!("Cannot add the check: {error}");
+            return;
+        }
+        state.status = format!("Added Check({written}) to the recording here");
+    } else {
+        let Some(index) = state.selected else {
+            "Select a scenario to add the check to".clone_into(&mut state.status);
+            return;
+        };
+        let name = world
+            .get_resource_mut::<Gallery>()
+            .and_then(|mut gallery| {
+                let entry = gallery.get_mut(index)?;
+                entry.scenario.push_expect(check.clone());
+                Some(entry.scenario.name().to_owned())
+            })
+            .unwrap_or_default();
+        if let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>() {
+            player.add_expect(check.clone());
+        }
+        state.revision = state.revision.wrapping_add(1);
+        state.status = format!("Added {written} to the expect of {name}; Export RON writes it out");
+    }
+    if let Some(picked) = state.picked.as_mut() {
+        picked.mark_added(check);
+    }
+}
+
+/// Carries out a request about the picked node.
+fn apply_pick(world: &mut World, state: &mut GalleryState, action: GalleryAction, recording: bool) {
+    let chosen = match action {
+        GalleryAction::PickTarget(index) => {
+            if let Some(picked) = state.picked.as_mut() {
+                picked.choose_target(world, index);
+            }
+            None
+        }
+        GalleryAction::StepFormField { form, field, up } => {
+            if let Some(picked) = state.picked.as_mut() {
+                picked.step_field(world, form, field, up);
+            }
+            None
+        }
+        GalleryAction::AddPickedCheck(index) => state
+            .picked
+            .as_ref()
+            .and_then(|picked| picked.checks().get(index).cloned()),
+        GalleryAction::AddFormCheck(index) => state
+            .picked
+            .as_ref()
+            .and_then(|picked| picked.forms().get(index))
+            .and_then(|form| form.check.clone().ok()),
+        _ => None,
+    };
+    if let Some(check) = chosen {
+        place_check(world, state, check, recording);
+    }
+}
+
+/// Lets go of what `action` makes stale: the checklist belongs to the
+/// recording it came from, and what is picked to the state on screen, which
+/// playing on, resetting or starting and stopping a recording moves on from.
+fn forget_for(state: &mut GalleryState, action: GalleryAction) {
+    if matches!(
+        action,
+        GalleryAction::Select(_) | GalleryAction::Restart | GalleryAction::Record
+    ) {
+        state.suggestions = None;
+    }
+    if matches!(
+        action,
+        GalleryAction::Select(_)
+            | GalleryAction::Restart
+            | GalleryAction::TogglePlay
+            | GalleryAction::StepFrame
+            | GalleryAction::StepStep
+            | GalleryAction::TakeOver
+            | GalleryAction::Resume
+            | GalleryAction::Record
+            | GalleryAction::StopRecording
+    ) {
+        state.picking = Picking::Off;
+        state.picked = None;
+    }
+}
+
 /// Carries out one request.
 fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
     let recording = world
@@ -244,15 +366,13 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         "Stop recording first".clone_into(&mut state.status);
         return;
     }
-    // The checklist belongs to the recording it came from; what is played or
-    // recorded next has its own checks.
-    if matches!(
-        action,
-        GalleryAction::Select(_) | GalleryAction::Restart | GalleryAction::Record
-    ) {
-        state.suggestions = None;
-    }
+    forget_for(state, action);
     match action {
+        GalleryAction::TogglePick => toggle_pick(state, recording),
+        GalleryAction::PickTarget(_)
+        | GalleryAction::StepFormField { .. }
+        | GalleryAction::AddPickedCheck(_)
+        | GalleryAction::AddFormCheck(_) => apply_pick(world, state, action, recording),
         GalleryAction::ToggleSuggestion(index) => toggle_suggestion(state, None, index),
         GalleryAction::ToggleCheckpointSuggestion { checkpoint, index } => {
             toggle_suggestion(state, Some(checkpoint), index);
@@ -321,6 +441,16 @@ pub(super) fn apply_requests(world: &mut World) {
     };
     for action in core::mem::take(&mut state.pending) {
         apply(world, &mut state, action);
+    }
+    // Bevy's mouse picking may read this update's input before the gallery
+    // sorts it, so it is switched off as soon as the script or pick mode
+    // takes the app window, not an update later.
+    let owned = state.input_is_scripted() || state.is_picking();
+    if let Some(mut settings) = world.get_resource_mut::<PointerInputSettings>()
+        && settings.is_mouse_enabled == owned
+    {
+        settings.is_mouse_enabled = !owned;
+        settings.is_touch_enabled = !owned;
     }
     state.recording = if world
         .get_resource::<SessionRecorder>()

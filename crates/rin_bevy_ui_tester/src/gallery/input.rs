@@ -13,6 +13,12 @@
 //! * the synthetic cursor position is set on the primary window each frame
 //!   for the update, and put back before the window system sees it, so the
 //!   operating system's pointer is never moved.
+//!
+//! Pick mode ([`GalleryState::is_picking`]) keeps the app's mouse and
+//! keyboard the same way, scripted or not: the app window's mouse goes to the
+//! gallery, which outlines and picks the node under it, and while the person
+//! has the window the app sees no cursor on it at all. Escape in the app
+//! window ends pick mode.
 
 use bevy::camera::NormalizedRenderTarget;
 use bevy::{
@@ -71,6 +77,18 @@ pub(super) struct RealCursor {
     /// What the window's cursor was before the script's went in.
     cursor: Option<Vec2>,
 }
+
+impl RealCursor {
+    /// Where the real cursor is on the primary window, as of this update.
+    pub(super) const fn position(&self) -> Option<Vec2> {
+        self.cursor
+    }
+}
+
+/// How many times the real mouse clicked the app window in pick mode since
+/// the gallery last picked.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub(super) struct PickClicks(pub(super) u32);
 
 /// Spawns the pointer for the Scenarios window.
 pub(super) fn spawn_scenarios_pointer(mut commands: Commands) {
@@ -140,6 +158,34 @@ fn location(window: Entity, position: Vec2) -> Option<Location> {
         })
 }
 
+/// What a key taken from a window asks the gallery for: a shortcut in the
+/// Scenarios window, or the end of pick mode for Escape in the app window.
+fn key_action(key: &KeyboardInput, scenarios: Option<Entity>) -> Option<GalleryAction> {
+    if key.state != ButtonState::Pressed || key.repeat {
+        return None;
+    }
+    if Some(key.window) == scenarios {
+        shortcut(key.key_code)
+    } else {
+        (key.key_code == KeyCode::Escape).then_some(GalleryAction::TogglePick)
+    }
+}
+
+/// How many left clicks of `presses` went to a window other than the
+/// Scenarios window, which is what pick mode took from the app window: only
+/// its clicks matter, the cursor is read from the window itself.
+fn app_clicks(presses: &[MouseButtonInput], scenarios: Option<Entity>) -> u32 {
+    let clicks = presses
+        .iter()
+        .filter(|press| {
+            Some(press.window) != scenarios
+                && press.button == MouseButton::Left
+                && press.state == ButtonState::Pressed
+        })
+        .count();
+    u32::try_from(clicks).unwrap_or(u32::MAX)
+}
+
 /// Sorts the real input of this update: what the script must not see, what the
 /// Scenarios window gets, and what is left for the app.
 pub(super) fn route_real_input(
@@ -154,9 +200,12 @@ pub(super) fn route_real_input(
     mut keys: ResMut<Messages<KeyboardInput>>,
     mut touches: ResMut<Messages<TouchInput>>,
     mut pointer_inputs: MessageWriter<PointerInput>,
+    mut pick_clicks: ResMut<PickClicks>,
     mut last_position: bevy::ecs::system::Local<Vec2>,
 ) {
-    let scripted = state.input_is_scripted();
+    let picking = state.is_picking();
+    // The app gets none of the mouse while the script or pick mode has it.
+    let scripted = state.input_is_scripted() || picking;
     // Bevy's mouse picking reads every window's events, the Scenarios
     // window's too, so it is off for the whole time and the Scenarios
     // window gets a pointer of its own instead.
@@ -172,7 +221,8 @@ pub(super) fn route_real_input(
         if !scripted {
             Route::Keep
         } else if Some(window) == primary {
-            Route::Drop
+            // Pick mode reads the app window's clicks; the app never does.
+            if picking { Route::Take } else { Route::Drop }
         } else if Some(window) == scenarios {
             Route::Take
         } else {
@@ -190,7 +240,7 @@ pub(super) fn route_real_input(
         }
     };
     let route_keys = |window: Entity| {
-        if Some(window) == scenarios {
+        if Some(window) == scenarios || (picking && Some(window) == primary) {
             Route::Take
         } else if scripted && Some(window) == primary {
             Route::Drop
@@ -207,10 +257,7 @@ pub(super) fn route_real_input(
     };
 
     for key in sort_messages(&mut keys, |message| message.window, route_keys) {
-        if key.state == ButtonState::Pressed
-            && !key.repeat
-            && let Some(action) = shortcut(key.key_code)
-        {
+        if let Some(action) = key_action(&key, scenarios) {
             state.request(action);
         }
     }
@@ -223,7 +270,11 @@ pub(super) fn route_real_input(
     let presses = sort_messages(&mut buttons, |message| message.window, route_mouse);
     let turns = sort_messages(&mut wheel, |message| message.window, route_wheel);
     let pointer = scenarios_pointer();
-    for moved in moves {
+    let in_scenarios = |window: Entity| Some(window) == scenarios;
+    pick_clicks.0 = pick_clicks
+        .0
+        .saturating_add(app_clicks(&presses, scenarios));
+    for moved in moves.into_iter().filter(|moved| in_scenarios(moved.window)) {
         let Some(at) = location(moved.window, moved.position) else {
             continue;
         };
@@ -235,7 +286,10 @@ pub(super) fn route_real_input(
             PointerAction::Move { delta },
         ));
     }
-    for press in presses {
+    for press in presses
+        .into_iter()
+        .filter(|press| in_scenarios(press.window))
+    {
         let button = match press.button {
             MouseButton::Left => PointerButton::Primary,
             MouseButton::Right => PointerButton::Secondary,
@@ -251,7 +305,7 @@ pub(super) fn route_real_input(
         };
         pointer_inputs.write(PointerInput::new(pointer, at, action));
     }
-    for turn in turns {
+    for turn in turns.into_iter().filter(|turn| in_scenarios(turn.window)) {
         let pixels = match turn.unit {
             MouseScrollUnit::Line => turn.y * LINE_PIXELS,
             MouseScrollUnit::Pixel => turn.y,
@@ -267,21 +321,29 @@ pub(super) fn save_real_cursor(
     mut real: ResMut<RealCursor>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    real.active = state.input_is_scripted();
+    real.active = state.input_is_scripted() || state.is_picking();
     real.cursor = windows.iter().next().and_then(Window::cursor_position);
 }
 
-/// Puts the script's cursor on the primary window for this update.
+/// Puts the script's cursor on the primary window for this update; in pick
+/// mode without a script, no cursor at all, so the app sees none of the
+/// pointing.
 pub(super) fn assert_script_cursor(
     real: Res<RealCursor>,
+    state: Res<GalleryState>,
     input: Res<SyntheticInput>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     if !real.active {
         return;
     }
+    let shown = if state.input_is_scripted() {
+        input.cursor()
+    } else {
+        None
+    };
     for mut window in &mut windows {
-        window.set_cursor_position(input.cursor());
+        window.set_cursor_position(shown);
     }
 }
 

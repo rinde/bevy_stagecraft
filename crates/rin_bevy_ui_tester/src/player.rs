@@ -234,6 +234,20 @@ impl ScenarioPlayer {
         self.pending.is_some() || self.running.is_some()
     }
 
+    /// Adds `check` to the expectations of the scenario waiting to begin or
+    /// being played, unless its expectations have begun to run; a finished
+    /// run is left as it was.
+    #[cfg(feature = "gallery")]
+    pub(crate) fn add_expect(&mut self, check: Check) {
+        if let Some(scenario) = self.pending.as_mut() {
+            scenario.push_expect(check);
+        } else if let Some(running) = self.running.as_mut()
+            && running.expected.is_none()
+        {
+            running.scenario.push_expect(check);
+        }
+    }
+
     /// Drops the scenario being played or waiting to begin, if any.
     pub fn stop(&mut self) {
         self.pending = None;

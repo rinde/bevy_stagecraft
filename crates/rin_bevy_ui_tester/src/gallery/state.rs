@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use bevy::ecs::resource::Resource;
 
 use crate::{
-    check::Check,
+    check::{Check, pick::Picked},
     session::{SavedSession, SessionError},
 };
 
@@ -101,6 +101,28 @@ pub enum GalleryAction {
         /// The check among those it suggested.
         index: usize,
     },
+    /// Start or stop pick mode, in which a click in the app window picks the
+    /// node under the pointer instead of reaching the app. Only while
+    /// recording or with a scenario selected, which it pauses.
+    TogglePick,
+    /// Use the picked node's target with this index for its checks.
+    PickTarget(usize),
+    /// Take the check with this index among those that hold for the picked
+    /// node: a `Check` step at this point of the recording, or else an
+    /// expectation of the selected scenario.
+    AddPickedCheck(usize),
+    /// Step a field of one of the app check forms up or down.
+    StepFormField {
+        /// The form, in the order of the app check type's variants.
+        form: usize,
+        /// The field, in order.
+        field: usize,
+        /// Up rather than down.
+        up: bool,
+    },
+    /// Take the check app check form `n` makes, as [`Self::AddPickedCheck`]
+    /// does.
+    AddFormCheck(usize),
 }
 
 /// What the gallery is in the middle of.
@@ -140,6 +162,15 @@ pub enum Recording {
     /// No.
     Off,
     /// Yes.
+    On,
+}
+
+/// Whether pick mode is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picking {
+    /// No: the app window's mouse goes where it would anyway.
+    Off,
+    /// Yes: a click in the app window picks the node under the pointer.
     On,
 }
 
@@ -347,6 +378,13 @@ pub struct GalleryState {
     /// The checks the last recording suggested, until something else is
     /// selected or recorded.
     pub(crate) suggestions: Option<Suggestions>,
+    /// Whether a click in the app window picks a node.
+    pub(crate) picking: Picking,
+    /// The node picked last, until pick mode ends.
+    pub(crate) picked: Option<Picked>,
+    /// Counts changes to the scenarios themselves, such as an expectation
+    /// added by picking, so what shows them is redrawn.
+    pub(crate) revision: u32,
 }
 
 impl GalleryState {
@@ -369,6 +407,9 @@ impl GalleryState {
             status: String::new(),
             recording: Recording::Off,
             suggestions: None,
+            picking: Picking::Off,
+            picked: None,
+            revision: 0,
         }
     }
 
@@ -443,6 +484,20 @@ impl GalleryState {
     #[must_use]
     pub const fn suggestions(&self) -> Option<&Suggestions> {
         self.suggestions.as_ref()
+    }
+
+    /// Whether pick mode is on: a click in the app window picks the node
+    /// under the pointer, and the app gets none of the mouse.
+    #[must_use]
+    pub const fn is_picking(&self) -> bool {
+        matches!(self.picking, Picking::On)
+    }
+
+    /// The node picked last, with its targets and the checks on offer, until
+    /// pick mode ends.
+    #[must_use]
+    pub const fn picked(&self) -> Option<&Picked> {
+        self.picked.as_ref()
     }
 
     /// Whether the script, not the real mouse and keyboard, has the primary

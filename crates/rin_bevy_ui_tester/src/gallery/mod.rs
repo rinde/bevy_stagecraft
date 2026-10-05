@@ -64,6 +64,25 @@
 //! scenario is selected or recorded.
 //! Selecting, restarting, playing or stepping is refused while recording.
 //!
+//! # Pick mode
+//!
+//! **Pick** (or [`GalleryAction::TogglePick`]) works while recording, and
+//! with a scenario selected, which it pauses. The app window's mouse and
+//! keyboard then go to the gallery: the overlay outlines the node under the
+//! real pointer with a tag naming its best target (see
+//! [`crate::overlay::PickHighlight`]), and a click picks it instead of
+//! reaching the app. While the person has the window the app sees no cursor
+//! on it, so hovering changes nothing either. Escape in the app window ends
+//! it, as do playing on, stepping, restarting, selecting, taking over and
+//! starting or stopping a recording.
+//!
+//! The Scenarios window lists what [`crate::check::pick`] finds for the
+//! picked node: its targets, best first, the checks that hold for it now,
+//! and a form for each variant of the app's check type. Clicking a check
+//! takes it: a `Check` step at this point of the recording
+//! ([`crate::session::add_check`]), or else an expectation of the selected
+//! scenario, in the catalogue and in the run being played.
+//!
 //! The app's reset hook must put the app's own state back and nothing else:
 //! it must not despawn the gallery's, the overlay's or the cameras of the
 //! Scenarios window.
@@ -83,13 +102,14 @@ use bevy::{
 mod catalogue;
 mod control;
 mod input;
+mod pick;
 mod state;
 mod ui;
 
 pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
 pub use input::scenarios_pointer;
 pub use state::{
-    GalleryAction, GalleryPhase, GalleryState, PendingStep, Recording, Speed, Suggestions,
+    GalleryAction, GalleryPhase, GalleryState, PendingStep, Picking, Recording, Speed, Suggestions,
 };
 pub use ui::{GalleryToolbar, SCENARIOS_WINDOW_SIZE, ScenariosCamera, ScenariosWindow};
 
@@ -228,6 +248,7 @@ impl Plugin for GalleryPlugin {
         app.init_resource::<PointerInputSettings>()
             .init_resource::<input::ScenariosScroll>()
             .init_resource::<input::RealCursor>()
+            .init_resource::<input::PickClicks>()
             .insert_resource(ExternallyDriven)
             .insert_resource(self.gallery.clone())
             .insert_resource(GalleryState::new(self.export_dir.clone(), self.loop_pause));
@@ -263,7 +284,9 @@ impl Plugin for GalleryPlugin {
                 (input::save_real_cursor, input::route_real_input)
                     .chain()
                     .in_set(GallerySystems::Input),
-                control::apply_requests.in_set(GallerySystems::Requests),
+                (control::apply_requests, pick::update)
+                    .chain()
+                    .in_set(GallerySystems::Requests),
                 control::drive.in_set(GallerySystems::Drive),
                 input::assert_script_cursor.after(SyntheticInputSystems::Drain),
             ),

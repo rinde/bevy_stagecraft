@@ -32,10 +32,11 @@ use bevy::{
 use super::{
     Gallery, GalleryAction, GalleryState, Speed,
     input::{ScenariosScroll, scenarios_pointer},
+    pick::spelled,
     state::{GalleryPhase, Suggestions},
 };
 use crate::{
-    check::Check,
+    check::{Check, pick::Picked},
     overlay::OverlayTheme,
     player::{CheckKind, Outcome, ScenarioReport},
     scenario::Step,
@@ -105,6 +106,16 @@ pub(super) enum Control {
     /// A check the last recording suggested at a checkpoint: the checkpoint
     /// and the check's index in its list.
     CheckpointSuggestion(usize, usize),
+    /// Start or stop pick mode.
+    Pick,
+    /// One of the picked node's targets.
+    PickTarget(usize),
+    /// One of the checks that hold for the picked node.
+    PickCheck(usize),
+    /// The check an app check form makes.
+    FormCheck(usize),
+    /// Steps a form's field: the form, the field, and up rather than down.
+    FormField(usize, usize, bool),
 }
 
 /// Text that shows a control's current wording.
@@ -164,9 +175,19 @@ fn control_text(control: Control, state: &GalleryState) -> String {
             "Record"
         }
         .into(),
-        Control::Entry(_) | Control::Suggestion(_) | Control::CheckpointSuggestion(..) => {
-            String::new()
+        Control::Pick => if state.is_picking() {
+            "Stop picking"
+        } else {
+            "Pick"
         }
+        .into(),
+        Control::Entry(_)
+        | Control::Suggestion(_)
+        | Control::CheckpointSuggestion(..)
+        | Control::PickTarget(_)
+        | Control::PickCheck(_)
+        | Control::FormCheck(_)
+        | Control::FormField(..) => String::new(),
     }
 }
 
@@ -199,6 +220,11 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
         Control::CheckpointSuggestion(checkpoint, index) => {
             GalleryAction::ToggleCheckpointSuggestion { checkpoint, index }
         }
+        Control::Pick => GalleryAction::TogglePick,
+        Control::PickTarget(index) => GalleryAction::PickTarget(index),
+        Control::PickCheck(index) => GalleryAction::AddPickedCheck(index),
+        Control::FormCheck(index) => GalleryAction::AddFormCheck(index),
+        Control::FormField(form, field, up) => GalleryAction::StepFormField { form, field, up },
     }
 }
 
@@ -357,6 +383,7 @@ pub(super) fn spawn_window(
                 button(row, Control::TakeOver, &state);
                 button(row, Control::Export, &state);
                 button(row, Control::Record, &state);
+                button(row, Control::Pick, &state);
             });
             root.spawn((
                 StatusLine,
@@ -463,7 +490,28 @@ pub(super) fn style_controls(
             Control::CheckpointSuggestion(checkpoint, index) => state
                 .suggestions()
                 .is_some_and(|suggestions| suggestions.is_checkpoint_ticked(*checkpoint, *index)),
-            Control::StepFrame | Control::StepStep | Control::Restart | Control::Export => false,
+            Control::Pick => state.is_picking(),
+            Control::PickTarget(index) => state
+                .picked()
+                .is_some_and(|picked| picked.chosen() == *index),
+            Control::PickCheck(index) => state.picked().is_some_and(|picked| {
+                picked
+                    .checks()
+                    .get(*index)
+                    .is_some_and(|check| picked.is_added(check))
+            }),
+            Control::FormCheck(index) => state.picked().is_some_and(|picked| {
+                picked
+                    .forms()
+                    .get(*index)
+                    .and_then(|form| form.check.as_ref().ok())
+                    .is_some_and(|check| picked.is_added(check))
+            }),
+            Control::StepFrame
+            | Control::StepStep
+            | Control::Restart
+            | Control::Export
+            | Control::FormField(..) => false,
         };
         let wanted = if on { BUTTON_ON } else { BUTTON };
         if colour.0 != wanted {
@@ -581,9 +629,17 @@ pub(super) fn scroll_catalogue(
     scroll.0 = 0.0;
 }
 
-/// What the details panel shows: the selection, its report, and the
-/// checklist of a recording.
-type DetailsKey = (Option<usize>, ScenarioReport, Option<Suggestions>);
+/// What the details panel shows: the selection, its report, the checklist
+/// of a recording, pick mode and what it picked, and the scenarios'
+/// revision.
+type DetailsKey = (
+    Option<usize>,
+    ScenarioReport,
+    Option<Suggestions>,
+    bool,
+    Option<Picked>,
+    u32,
+);
 
 /// Rewrites the selected entry's description and its checks, with a mark for
 /// each: the checks the scenario names, in the order they run, with those not
@@ -602,11 +658,30 @@ pub(super) fn update_details(
         state.selected(),
         report.clone(),
         state.suggestions().cloned(),
+        state.is_picking(),
+        state.picked().cloned(),
+        state.revision,
     );
     if shown.as_ref() == Some(&key) {
         return;
     }
     *shown = Some(key);
+    if state.is_picking() {
+        let destination = if state.is_recording() {
+            "the recording, here"
+        } else {
+            "the expect"
+        };
+        for entity in &details {
+            commands
+                .entity(entity)
+                .despawn_children()
+                .with_children(|panel| {
+                    spawn_pick_panel(panel, state.picked(), destination, &theme);
+                });
+        }
+        return;
+    }
     if let Some(suggestions) = state.suggestions() {
         for entity in &details {
             commands
@@ -745,5 +820,145 @@ fn spawn_rows<'a>(
                 let mark = if ticked { TICKED } else { UNTICKED };
                 label(row, format!("{mark} {check}"), TEXT);
             });
+    }
+}
+
+/// What a check row starts with before it is taken. ASCII, as the bundled
+/// font has no other marks.
+const TO_ADD: &str = "[+]";
+
+/// What a check row starts with once it is taken.
+const ADDED: &str = "[added]";
+
+/// A button in the details panel that asks for `control`'s action, with
+/// `text` on it.
+fn panel_button(
+    parent: &mut ChildSpawnerCommands<'_>,
+    control: Control,
+    text: impl Into<String>,
+    on: bool,
+) {
+    parent
+        .spawn((
+            control,
+            NotUnderTest,
+            Node {
+                padding: UiRect::axes(px(PADDING), px(1)),
+                border_radius: BorderRadius::all(px(3)),
+                ..Node::default()
+            },
+            BackgroundColor(if on { BUTTON_ON } else { BUTTON }),
+        ))
+        .observe(
+            move |click: On<Pointer<Click>>, mut state: ResMut<GalleryState>| {
+                if click.button == PointerButton::Primary {
+                    let action = control_action(control, &state);
+                    state.request(action);
+                }
+            },
+        )
+        .with_children(|button| {
+            label(button, text, TEXT);
+        });
+}
+
+/// The pick panel: how to pick, or the picked node's targets, the checks that
+/// hold for it and the app's check forms, each a button that takes it.
+fn spawn_pick_panel(
+    panel: &mut ChildSpawnerCommands<'_>,
+    picked: Option<&Picked>,
+    destination: &str,
+    theme: &OverlayTheme,
+) {
+    let Some(picked) = picked else {
+        label(
+            panel,
+            "Pick mode: point at a node in the app window and click it",
+            TEXT,
+        );
+        label(
+            panel,
+            "The app gets no input meanwhile; Escape ends it",
+            DIM,
+        );
+        return;
+    };
+    label(panel, "Target (click another to use it)", DIM);
+    row(panel, |row| {
+        for (index, target) in picked.targets().iter().enumerate() {
+            panel_button(
+                row,
+                Control::PickTarget(index),
+                format!("{target:?}"),
+                index == picked.chosen(),
+            );
+        }
+    });
+    if picked.checks().is_empty() {
+        label(panel, "No built-in check holds for it", DIM);
+    } else {
+        label(
+            panel,
+            format!("Checks that hold now (click to add to {destination})"),
+            DIM,
+        );
+    }
+    for (index, check) in picked.checks().iter().enumerate() {
+        let added = picked.is_added(check);
+        let mark = if added { ADDED } else { TO_ADD };
+        panel_button(
+            panel,
+            Control::PickCheck(index),
+            format!("{mark} {}", spelled(check)),
+            added,
+        );
+    }
+    if picked.forms().is_empty() {
+        return;
+    }
+    label(panel, "App checks (- and + change a value)", DIM);
+    for (index, form) in picked.forms().iter().enumerate() {
+        match &form.check {
+            Ok(check) => {
+                let added = picked.is_added(check);
+                let mark = if added {
+                    ADDED.to_owned()
+                } else if form.holds {
+                    theme.pass_mark.clone()
+                } else {
+                    theme.fail_mark.clone()
+                };
+                panel_button(
+                    panel,
+                    Control::FormCheck(index),
+                    format!("{mark} {}", spelled(check)),
+                    added,
+                );
+            }
+            Err(why) => {
+                label(panel, format!("{}: {why}", form.form.variant.form()), DIM);
+            }
+        }
+        for (field, value) in form.form.values.iter().enumerate() {
+            if !value.can_step() {
+                continue;
+            }
+            let name = form
+                .form
+                .variant
+                .fields
+                .get(field)
+                .and_then(|field| field.name.clone())
+                .unwrap_or_else(|| field.to_string());
+            row(panel, |row| {
+                label(
+                    row,
+                    format!("  {name}: {}", value.ron().unwrap_or_default()),
+                    DIM,
+                );
+                panel_button(row, Control::FormField(index, field, false), "-", false);
+                panel_button(row, Control::FormField(index, field, true), "+", false);
+            });
+        }
     }
 }
