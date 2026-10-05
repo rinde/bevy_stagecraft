@@ -16,7 +16,7 @@ use std::{fs, path::PathBuf};
 use bevy::{camera::RenderTarget, prelude::*};
 use common::{Activations, spawn_ui};
 use rin_bevy_ui_tester::{
-    CaptureMeta, Captures, Frame, Recorder, RecorderPlugins, Scenario, Step, Target,
+    CaptureMeta, Captures, Check, Frame, Recorder, RecorderPlugins, Scenario, Step, Target,
     overlay::{OverlayTheme, PickHighlight},
     recorder::request_capture,
 };
@@ -24,7 +24,7 @@ use rin_bevy_ui_tester::{
 /// A scenario over the plain UI that clicks "Pause" and checks it was
 /// activated, or, when `broken`, expects it twice.
 fn click_pause(name: &str, broken: bool) -> Scenario {
-    let wanted = if broken { 2 } else { 1 };
+    let wanted: u32 = if broken { 2 } else { 1 };
     Scenario::new(name)
         .window_size(320, 240)
         .setup(spawn_ui)
@@ -34,16 +34,8 @@ fn click_pause(name: &str, broken: bool) -> Scenario {
             Step::glide(Target::text("Pause"), 6),
             Step::click(),
             Step::wait(2),
-            Step::check("activated"),
+            Step::check(Check::resource::<Activations>(".0").eq(wanted)),
         ])
-        .check("activated", move |probe| {
-            let count = probe.resource::<Activations>().map_or(0, |a| a.0);
-            if count == wanted {
-                Ok(())
-            } else {
-                Err(format!("activated {count} times, wanted {wanted}"))
-            }
-        })
 }
 
 /// A fresh output directory under cargo's scratch space.

@@ -516,14 +516,6 @@ fn resolve_check(types: &TypeRegistry, check: &mut Check, used_by: &str) -> Resu
         .type_app_values(types)
         .map_err(|problem| load_error(problem, used_by, true))?;
     for part in check.parts() {
-        if let Check::Named(name) = part {
-            return Err(LoadError::BadCheck {
-                used_by: used_by.to_owned(),
-                message: format!(
-                    "the check `{name}` is a Rust closure on a scenario, which a script cannot refer to"
-                ),
-            });
-        }
         part.problem(types)
             .map_err(|problem| load_error(problem, used_by, true))?;
     }

@@ -1,9 +1,9 @@
 //! Scenario definition: setup, view, steps and checks.
 //!
 //! Steps, targets and checks are plain data, so a scenario converts to a
-//! serialisable [`Script`] and back (see [`crate::script`]). The one
-//! exception is a check written as a closure, which only a scenario in Rust
-//! can hold.
+//! serialisable [`Script`] and back (see [`crate::script`]). The setup and
+//! view closures are the exception: they are Rust only, so they stay out of
+//! the script.
 
 use alloc::sync::Arc;
 use core::{fmt, ops::BitOr};
@@ -19,46 +19,12 @@ use serde::{Deserialize, Serialize};
 use crate::{
     check::Check,
     extension::{AppSetup, AppView, Setup, View},
-    probe::Probe,
     script::{FORMAT_VERSION, LoadError, Registry, Script},
     targets::{DEFAULT_ACTION_TIMEOUT, Target},
 };
 
 /// Whether a check passed; the error says what was wrong.
 pub type CheckResult = Result<(), String>;
-
-/// Anything a check may return: a plain `bool`, `()`, or a [`CheckResult`]
-/// when the failure needs explaining.
-pub trait IntoCheckResult {
-    /// Converts into a [`CheckResult`].
-    ///
-    /// # Errors
-    ///
-    /// The check's failure message, when it did not hold.
-    fn into_check_result(self) -> CheckResult;
-}
-
-impl IntoCheckResult for bool {
-    fn into_check_result(self) -> CheckResult {
-        if self {
-            Ok(())
-        } else {
-            Err("the check returned false".into())
-        }
-    }
-}
-
-impl IntoCheckResult for () {
-    fn into_check_result(self) -> CheckResult {
-        Ok(())
-    }
-}
-
-impl IntoCheckResult for CheckResult {
-    fn into_check_result(self) -> CheckResult {
-        self
-    }
-}
 
 /// Modifier keys held around a key press, as a set. Combine with `|`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -333,8 +299,7 @@ impl Step {
         Self::Wait(frames)
     }
 
-    /// Run `check`: a [`Check`], or the label of a closure defined on the
-    /// scenario with [`Scenario::check`] or [`Scenario::expect`].
+    /// Run `check`.
     #[must_use]
     pub fn check(check: impl Into<Check>) -> Self {
         Self::Check(check.into())
@@ -387,52 +352,22 @@ impl Step {
 /// What a setup or view closure does to the world.
 type HookFn = dyn Fn(&mut World) + Send + Sync;
 
-/// What a check does with a probe.
-type CheckFn = dyn Fn(&Probe<'_>) -> CheckResult + Send + Sync;
-
-/// A check with its name.
-#[derive(Clone)]
-pub struct NamedCheck {
-    /// The name steps and reports refer to it by.
-    pub name: String,
-    /// The check itself.
-    pub(crate) run: Arc<CheckFn>,
-}
-
-impl fmt::Debug for NamedCheck {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NamedCheck")
-            .field("name", &self.name)
-            .finish_non_exhaustive()
-    }
-}
-
-impl NamedCheck {
-    /// Runs the check against `probe`.
-    ///
-    /// # Errors
-    ///
-    /// The check's own explanation when it fails.
-    pub fn run(&self, probe: &Probe<'_>) -> CheckResult {
-        (self.run)(probe)
-    }
-}
-
 /// A scenario: a name, how its world is set up and shown, a script and
 /// checks.
 ///
 /// The setup and the view are the app's own values (see
 /// [`crate::extension`]), which a file holds, or closures, which only a
 /// scenario in Rust can hold; a scenario may have both, and the app's value
-/// runs first.
+/// runs first. Every check is data, so a scenario's checks always go into a
+/// file.
 ///
 /// ```
-/// use rin_bevy_ui_tester::{Scenario, Step, Target};
+/// use rin_bevy_ui_tester::{Check, Scenario, Step, Target};
 /// use bevy::math::Vec2;
 ///
 /// let scenario = Scenario::new("empty")
 ///     .steps([Step::move_to(Target::screen(Vec2::ZERO)), Step::wait(3)])
-///     .expect("nothing broke", |_probe| true);
+///     .expect_check(!Check::shows("Error"));
 /// assert_eq!(scenario.script().len(), 2);
 /// ```
 #[derive(Clone)]
@@ -456,8 +391,6 @@ pub struct Scenario {
     app_view: Option<View>,
     /// The script.
     steps: Vec<Step>,
-    /// What [`Check::Named`] refers to, one per label.
-    checks: Vec<NamedCheck>,
     /// Checks run once the script has finished.
     expects: Vec<Check>,
 }
@@ -473,7 +406,6 @@ impl fmt::Debug for Scenario {
             .field("app_setup", &self.app_setup)
             .field("app_view", &self.app_view)
             .field("steps", &self.steps)
-            .field("checks", &self.checks)
             .field("expects", &self.expects)
             .finish()
     }
@@ -492,7 +424,6 @@ impl Scenario {
             app_setup: None,
             app_view: None,
             steps: Vec::new(),
-            checks: Vec::new(),
             expects: Vec::new(),
         }
     }
@@ -574,40 +505,6 @@ impl Scenario {
         self
     }
 
-    /// Defines the closure that [`Check::Named`] with the same label runs,
-    /// for example from `Step::check(label)`. Defining a label again replaces
-    /// the closure.
-    ///
-    /// The label is only a label: it is never looked up from a file, and
-    /// exporting a scenario that uses it is an error naming it. A check that
-    /// a file can hold is one of the app's own ([`Check::app`]) or a built-in
-    /// one.
-    #[must_use]
-    pub fn check<R: IntoCheckResult>(
-        mut self,
-        name: impl Into<String>,
-        check: impl Fn(&Probe<'_>) -> R + Send + Sync + 'static,
-    ) -> Self {
-        self.define(named(name, check));
-        self
-    }
-
-    /// Defines a closure under the label `name` and runs it once the script
-    /// has finished. The label is shared with [`Scenario::check`], so a step
-    /// can run the same closure part-way through. Like that one, it cannot
-    /// be exported.
-    #[must_use]
-    pub fn expect<R: IntoCheckResult>(
-        mut self,
-        name: impl Into<String>,
-        check: impl Fn(&Probe<'_>) -> R + Send + Sync + 'static,
-    ) -> Self {
-        let check = named(name, check);
-        self.expects.push(Check::Named(check.name.clone()));
-        self.define(check);
-        self
-    }
-
     /// Runs `check` once the script has finished, for example
     /// `Check::shows("Saved")`.
     #[must_use]
@@ -621,12 +518,6 @@ impl Scenario {
     #[cfg(feature = "gallery")]
     pub(crate) fn push_expect(&mut self, check: Check) {
         self.expects.push(check);
-    }
-
-    /// Adds `check` to the named checks, replacing one of the same name.
-    fn define(&mut self, check: NamedCheck) {
-        self.checks.retain(|defined| defined.name != check.name);
-        self.checks.push(check);
     }
 
     /// The scenario's name.
@@ -657,12 +548,6 @@ impl Scenario {
     #[must_use]
     pub fn script(&self) -> &[Step] {
         &self.steps
-    }
-
-    /// The checks [`Check::Named`] can refer to.
-    #[must_use]
-    pub fn checks(&self) -> &[NamedCheck] {
-        &self.checks
     }
 
     /// The checks that run at the end, in order.
@@ -709,8 +594,7 @@ impl Scenario {
     /// The serialisable form of this scenario. Closures cannot be written
     /// out, so the setup and view closures ([`Scenario::setup`],
     /// [`Scenario::view`]) are not part of the script, while the app's own
-    /// setup and view are; a [`Check::Named`] label stays in it only to make
-    /// writing it out fail, naming the closure.
+    /// setup and view are.
     #[must_use]
     pub fn to_script(&self) -> Script {
         Script {
@@ -741,8 +625,8 @@ impl Scenario {
 
     /// Reads a scenario from RON text, with a default [`Registry`]: every
     /// type that derives `Reflect`, the app's own setup, view, target and
-    /// check types among them. Chain `.expect(..)` to add Rust assertions to
-    /// a recorded file.
+    /// check types among them. Chain `.expect_check(..)` to add checks to a
+    /// recorded file.
     ///
     /// # Errors
     ///
@@ -780,20 +664,8 @@ impl Scenario {
             app_setup: script.setup,
             app_view: script.view,
             steps: script.steps,
-            checks: Vec::new(),
             expects: script.expect,
         }
-    }
-}
-
-/// Wraps a check closure with its name.
-fn named<R: IntoCheckResult>(
-    name: impl Into<String>,
-    check: impl Fn(&Probe<'_>) -> R + Send + Sync + 'static,
-) -> NamedCheck {
-    NamedCheck {
-        name: name.into(),
-        run: Arc::new(move |probe| check(probe).into_check_result()),
     }
 }
 

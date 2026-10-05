@@ -48,7 +48,7 @@ use crate::{
         AppCheckValue, Extension, NO_CUSTOM_TARGET, bad_app_value, no_app_type, several_message,
     },
     probe::{Probe, check_hover},
-    scenario::{CheckResult, Scenario},
+    scenario::CheckResult,
     targets::{Lookup, Target, resolve},
 };
 
@@ -71,17 +71,15 @@ use crate::{
 /// ```
 ///
 /// In Rust the same checks are typed, and type paths are only for files.
-/// `!check` wraps a check in [`Check::Not`], and a `&str` or `String` turns
-/// into [`Check::Named`], a label for a closure on the scenario that never
-/// goes into a file.
+/// `!check` wraps a check in [`Check::Not`]. Every check is data: there is no
+/// check written as a closure, so every scenario can be written to a file.
 ///
 /// ```
 /// use rin_bevy_ui_tester::{Check, Target};
 ///
 /// let check = !Check::hovered(Target::text("OK"));
 /// assert_eq!(check.to_string(), "not: Text(\"OK\") is under the pointer");
-/// assert_eq!(Check::from("saved"), Check::named("saved"));
-///
+/// ///
 /// #[derive(bevy::prelude::Component, bevy::prelude::Reflect)]
 /// struct Ghost;
 /// assert_eq!(Check::count::<Ghost>().eq(1).to_string(), "count of `Ghost` is 1");
@@ -89,12 +87,6 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Check {
-    /// A closure defined on the scenario in Rust with [`Scenario::check`] or
-    /// [`Scenario::expect`], by its label. The label is never looked up from
-    /// a file: a closure cannot be written to one, so exporting a scenario
-    /// that uses one is an error naming it. Use [`Check::App`] for a check a
-    /// file can hold.
-    Named(String),
     /// One of the app's own checks: a value of the type the app marks with
     /// `#[reflect(AppCheck)]` (see [`AppCheck`]). Written as
     /// `App(StationNamed("Alpha"))`.
@@ -177,9 +169,6 @@ pub enum Check {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(remote = "Check", rename = "Check")]
 enum Spelled {
-    /// See [`Check::Named`]; never in a file.
-    #[serde(skip)]
-    Named(String),
     /// See [`Check::App`].
     App(AppCheckValue),
     /// See [`Check::Shows`].
@@ -257,17 +246,9 @@ pub(crate) const NO_STATE_PROBE: &str = "the state probe is gone: publish the st
     reflected resource (`#[derive(Resource, Reflect)]` with `#[reflect(Resource)]`) and check \
     it with `Resource(path: \"Type.field\", is: Eq(..))`";
 
-/// A check made from a closure has only a label, which cannot be read back,
-/// so writing one out fails, naming it.
 impl Serialize for Check {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Named(name) => Err(serde::ser::Error::custom(format!(
-                "the check `{name}` is a Rust closure on the scenario and cannot be written to a \
-                 file; make it a variant of the app's `#[reflect(AppCheck)]` enum or a built-in check"
-            ))),
-            spelled => Spelled::serialize(spelled, serializer),
-        }
+        Spelled::serialize(self, serializer)
     }
 }
 
@@ -474,12 +455,6 @@ fn join_path(type_path: &str, field: &str) -> String {
 }
 
 impl Check {
-    /// The closure defined on the scenario under the label `name`.
-    #[must_use]
-    pub fn named(name: impl Into<String>) -> Self {
-        Self::Named(name.into())
-    }
-
     /// One of the app's own checks, for example
     /// `Check::app(RailCheck::StationNamed("Alpha".into()))`.
     #[must_use]
@@ -683,14 +658,9 @@ impl Check {
 
     /// Runs the check against `world`, which has waited `waited` frames for
     /// it: `None` while a [`Check::Within`] inside still waits for it to
-    /// hold. Closures defined on the scenario come from `scenario`.
-    pub(crate) fn poll(
-        &self,
-        world: &World,
-        scenario: &Scenario,
-        waited: u32,
-    ) -> Option<CheckResult> {
-        match self.verdict(world, scenario, waited) {
+    /// hold.
+    pub(crate) fn poll(&self, world: &World, waited: u32) -> Option<CheckResult> {
+        match self.verdict(world, waited) {
             Verdict::Holds => Some(Ok(())),
             Verdict::Fails(message) | Verdict::Broken(message) => Some(Err(message)),
             Verdict::Pending(_) => None,
@@ -698,9 +668,9 @@ impl Check {
     }
 
     /// What the check comes to on this frame.
-    fn verdict(&self, world: &World, scenario: &Scenario, waited: u32) -> Verdict {
+    fn verdict(&self, world: &World, waited: u32) -> Verdict {
         match self {
-            Self::Not(inner) => match inner.verdict(world, scenario, waited) {
+            Self::Not(inner) => match inner.verdict(world, waited) {
                 Verdict::Holds => Verdict::Fails(format!("{inner} holds, but should not")),
                 Verdict::Fails(_) => Verdict::Holds,
                 other => other,
@@ -708,7 +678,7 @@ impl Check {
             Self::All(checks) => {
                 let verdicts: Vec<Verdict> = checks
                     .iter()
-                    .map(|check| check.verdict(world, scenario, waited))
+                    .map(|check| check.verdict(world, waited))
                     .collect();
                 first_broken(&verdicts)
                     .or_else(|| verdicts.iter().find(|v| matches!(v, Verdict::Fails(_))))
@@ -719,7 +689,7 @@ impl Check {
             Self::Any(checks) => {
                 let verdicts: Vec<Verdict> = checks
                     .iter()
-                    .map(|check| check.verdict(world, scenario, waited))
+                    .map(|check| check.verdict(world, waited))
                     .collect();
                 if let Some(broken) = first_broken(&verdicts) {
                     return broken.clone();
@@ -737,14 +707,14 @@ impl Check {
                     format!("none holds: {}", reasons.join("; "))
                 })
             }
-            Self::Within(frames, inner) => match inner.verdict(world, scenario, waited) {
+            Self::Within(frames, inner) => match inner.verdict(world, waited) {
                 Verdict::Fails(message) if waited < u32::from(*frames) => Verdict::Pending(message),
                 Verdict::Fails(message) => {
                     Verdict::Fails(format!("{message} (still after {frames} frames)"))
                 }
                 other => other,
             },
-            leaf => match leaf.evaluate(world, scenario) {
+            leaf => match leaf.evaluate(world) {
                 Ok(Ok(())) => Verdict::Holds,
                 Ok(Err(message)) => Verdict::Fails(message),
                 Err(message) => Verdict::Broken(message),
@@ -754,15 +724,9 @@ impl Check {
 
     /// Runs a check with no checks inside it. The outer error means it could
     /// not run at all, which [`Check::Not`] passes on rather than inverting.
-    fn evaluate(&self, world: &World, scenario: &Scenario) -> Result<CheckResult, String> {
+    fn evaluate(&self, world: &World) -> Result<CheckResult, String> {
         let probe = Probe::new(world);
         match self {
-            Self::Named(name) => scenario
-                .checks()
-                .iter()
-                .find(|check| check.name == *name)
-                .map(|check| check.run(&probe))
-                .ok_or_else(|| format!("the scenario defines no check named `{name}`")),
             Self::App(value) => value.run(probe),
             Self::Shows(text) => Ok(if probe.has_text(text) {
                 Ok(())
@@ -1175,7 +1139,6 @@ fn list(checks: &[Check]) -> String {
 impl fmt::Display for Check {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Named(name) => f.write_str(name),
             Self::App(value) => write!(f, "{value}"),
             Self::Shows(text) => write!(f, "\"{text}\" is shown"),
             Self::Hovered(target) => write!(f, "{target:?} is under the pointer"),
@@ -1203,18 +1166,6 @@ impl Not for Check {
 
     fn not(self) -> Self {
         Self::Not(Box::new(self))
-    }
-}
-
-impl From<&str> for Check {
-    fn from(name: &str) -> Self {
-        Self::named(name)
-    }
-}
-
-impl From<String> for Check {
-    fn from(name: String) -> Self {
-        Self::Named(name)
     }
 }
 
