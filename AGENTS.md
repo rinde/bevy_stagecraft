@@ -102,6 +102,8 @@ pinned toolchain (with `rustfmt` and `clippy`), `just`, `cargo-machete` and
 libraries, and warms the build cache in the background. It is idempotent and
 does nothing outside cloud sessions. Run it by hand with
 `.claude/hooks/session-start.sh --force` (this also waits for the cache warm-up).
+`.claude/settings.json` also sets the auto-compact window to 100k tokens for
+Sonnet 5.5 and Opus 5.5 (`modelSettings.<model>.autoCompactWindow`).
 
 ## Code practices
 
