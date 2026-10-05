@@ -31,8 +31,8 @@ use bevy::{
 };
 use rin_bevy_ui_tester::{
     AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryRunReport,
-    GalleryState, HeadlessPlugins, Probe, ReflectAppSetup, Registry, Scenario, ScenariosCamera,
-    ScenariosWindow, Script, Speed, Step, Target, WidgetRole,
+    GalleryState, HeadlessPlugins, NoiseFilter, Probe, ReflectAppSetup, Registry, Scenario,
+    ScenariosCamera, ScenariosWindow, Script, Speed, Step, Target, WidgetRole,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
@@ -1465,10 +1465,7 @@ fn picking_does_not_change_the_apps_state() {
     run_until(&mut app, 100, |world| frames(world) >= 2);
     ask(&mut app, GalleryAction::Record);
     app.update();
-    let before = rin_bevy_ui_tester::WorldSnapshot::take(
-        app.world(),
-        &rin_bevy_ui_tester::NoiseFilter::default(),
-    );
+    let before = rin_bevy_ui_tester::WorldSnapshot::take(app.world(), &NoiseFilter::default());
 
     pick_button(&mut app, "Add");
     for _ in 0..5 {
@@ -1490,10 +1487,7 @@ fn picking_does_not_change_the_apps_state() {
         None,
         "the app saw no cursor in its window"
     );
-    let after = rin_bevy_ui_tester::WorldSnapshot::take(
-        app.world(),
-        &rin_bevy_ui_tester::NoiseFilter::default(),
-    );
+    let after = rin_bevy_ui_tester::WorldSnapshot::take(app.world(), &NoiseFilter::default());
     assert_eq!(before, after);
 
     // Escape in the app window ends pick mode, and the app gets its mouse back.
@@ -1704,4 +1698,95 @@ fn the_controls_do_nothing_while_everything_runs() {
     assert!(state.is_running_all());
     assert!(!state.is_looping());
     assert!(state.is_playing(), "pause was refused");
+}
+
+/// Plays the jump to `step` of the first scenario and waits until the
+/// gallery has paused there.
+fn jumped_to(app: &mut App, step: usize) {
+    ask(app, GalleryAction::Select(0));
+    ask(app, GalleryAction::JumpTo(step));
+    run_until(app, 500, |world| {
+        let state = world.resource::<GalleryState>();
+        state.jumping_to().is_none() && !state.is_playing()
+    });
+}
+
+#[test]
+fn jumping_to_a_step_lands_on_the_frame_a_straight_run_reaches_before_it() {
+    let scenario = adds(2);
+    let mut headless = scenario.headless_app();
+    headless
+        .init_resource::<Count>()
+        .world_mut()
+        .spawn(Camera2d);
+    let (report, trace) = scenario.run_in_traced(&mut headless, NoiseFilter::default());
+    assert!(report.passed(), "{report:?}");
+    // Steps: 0 glide, 1 click, 2 wait, 3 click, 4 wait, 5 check.
+    for step in [1, 3, 5] {
+        let mut app = gallery_app();
+        jumped_to(&mut app, step);
+        let point = trace.before(step).expect("a point before the step");
+        assert_eq!(frames(app.world()), point.frame, "step {step}");
+        let held = app.world().resource::<GalleryState>().status().to_owned();
+        assert!(
+            held.contains(&format!("Paused before step {}", step + 1)),
+            "{held}"
+        );
+    }
+}
+
+#[test]
+fn jumping_to_a_step_leaves_the_app_as_the_steps_before_it_made_it() {
+    let mut app = gallery_app();
+    jumped_to(&mut app, 3);
+    assert_eq!(
+        count(app.world()),
+        1,
+        "the first click happened, not the second"
+    );
+    // The paused app stays put however long it is looked at.
+    for _ in 0..30 {
+        app.update();
+    }
+    assert_eq!(count(app.world()), 1);
+}
+
+#[test]
+fn playing_on_after_a_jump_finishes_the_scenario_from_there() {
+    let mut app = gallery_app();
+    jumped_to(&mut app, 3);
+    ask(&mut app, GalleryAction::TogglePlay);
+    run_until(&mut app, 500, finished);
+    assert_eq!(count(app.world()), 2);
+    assert!(app.world().resource::<ScenarioReport>().passed());
+}
+
+#[test]
+fn jumping_from_the_middle_of_a_run_restarts_it_first() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 500, finished);
+    assert_eq!(count(app.world()), 2);
+    ask(&mut app, GalleryAction::JumpTo(1));
+    run_until(&mut app, 500, |world| {
+        world.resource::<GalleryState>().jumping_to().is_none()
+    });
+    assert_eq!(
+        count(app.world()),
+        0,
+        "the app was put back before the jump"
+    );
+}
+
+#[test]
+fn a_jump_is_refused_while_recording() {
+    let dir = fresh_dir("gallery-jump-recording");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    ask(&mut app, GalleryAction::Record);
+    ask(&mut app, GalleryAction::JumpTo(1));
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_recording(), "the recording went on");
+    assert_eq!(state.jumping_to(), None);
 }

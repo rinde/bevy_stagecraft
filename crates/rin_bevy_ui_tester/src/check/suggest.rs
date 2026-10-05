@@ -295,6 +295,85 @@ impl WorldSnapshot {
     }
 }
 
+/// One line of a [`WorldSnapshot`] that is not the same in another.
+///
+/// It says what it is about (`resource Counter.0`, `text`, `widget "Save"`)
+/// and the value it had before and has after, `None` where it was or is
+/// absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotChange {
+    /// What the line is about.
+    pub key: String,
+    /// Its value in the earlier snapshot.
+    pub before: Option<String>,
+    /// Its value in the later one.
+    pub after: Option<String>,
+}
+
+impl WorldSnapshot {
+    /// Everything the snapshot holds as `(what, value)` lines in a fixed
+    /// order, for showing it to a person and for [`WorldSnapshot::changes_from`].
+    #[must_use]
+    pub fn entries(&self) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        for fields in self.resources.values() {
+            for (path, ron) in fields {
+                out.insert(format!("resource {path}"), ron.clone());
+            }
+        }
+        for (name, count) in &self.counts {
+            out.insert(format!("count {name}"), count.to_string());
+        }
+        for (name, ron) in &self.states {
+            out.insert(format!("state {name}"), ron.clone());
+        }
+        for (text, count) in &self.texts {
+            out.insert(format!("text {text:?}"), format!("shown {count}\u{d7}"));
+        }
+        for (label, states) in &self.widgets {
+            let states: Vec<String> = states.iter().map(|state| format!("{state:?}")).collect();
+            out.insert(format!("widget {label:?}"), states.join(", "));
+        }
+        for (index, fact) in self.facts.iter().enumerate() {
+            out.insert(format!("fact {index:03}"), fact.to_string());
+        }
+        out
+    }
+
+    /// What differs between `before` and this snapshot, by line, in the
+    /// order of [`WorldSnapshot::entries`].
+    #[must_use]
+    pub fn changes_from(&self, before: &Self) -> Vec<SnapshotChange> {
+        let was = before.entries();
+        let now = self.entries();
+        let mut keys: Vec<&String> = was.keys().chain(now.keys()).collect();
+        keys.sort();
+        keys.dedup();
+        keys.into_iter()
+            .filter_map(|key| {
+                let (old, new) = (was.get(key), now.get(key));
+                (old != new).then(|| SnapshotChange {
+                    key: key.clone(),
+                    before: old.cloned(),
+                    after: new.cloned(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// The words of the states `widget` is in, as a snapshot records them.
+pub(crate) fn state_names(world: &World, widget: Entity) -> Vec<String> {
+    if !widget::is_widget(world, widget) {
+        return Vec::new();
+    }
+    WIDGET_STATES
+        .into_iter()
+        .filter(|state| widget::in_state(world, widget, *state, "").is_ok())
+        .map(|state| format!("{state:?}"))
+        .collect()
+}
+
 /// The name a check writes for the type `registration` describes: its short
 /// type path, or the full one where the short one names more than one type.
 pub(super) fn name_of(types: &TypeRegistry, registration: &TypeRegistration) -> String {

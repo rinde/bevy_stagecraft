@@ -3,7 +3,7 @@
 use alloc::collections::VecDeque;
 
 use bevy::{
-    app::{App, Plugin, PreUpdate},
+    app::{App, Last, Plugin, PreUpdate},
     ecs::{
         entity::Entity,
         resource::Resource,
@@ -21,12 +21,13 @@ use bevy::{
 };
 
 use crate::{
-    check::Check,
+    check::{Check, suggest::NoiseFilter},
     headless::HeadlessPlugins,
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems},
     probe::check_hover,
     scenario::{ORIGIN, Scenario, Step},
     targets::{Action, NotActionable, ResolvedTarget, Target, actionable, pressable, resolve},
+    trace::{ScenarioTrace, TargetTrace, TraceCheck, TracePoint},
 };
 
 /// How a step or a check ended.
@@ -139,12 +140,17 @@ impl ScenarioReport {
     }
 }
 
-/// System sets of the player plugin, all in `PreUpdate`.
+/// System sets of the player plugin.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScenarioSystems {
-    /// Advances the script by one frame. Runs before the synthetic input is
-    /// drained, so what it queues reaches Bevy in the same frame.
+    /// Advances the script by one frame, in `PreUpdate`. Runs before the
+    /// synthetic input is drained, so what it queues reaches Bevy in the same
+    /// frame.
     Play,
+    /// Takes a [`TracePoint`] when the player is between steps, in `Last`,
+    /// once the frame has been played. Does nothing unless
+    /// [`ScenarioPlayer::enable_trace`] was called.
+    Trace,
 }
 
 /// Registers [`ScenarioPlayer`], [`ScenarioReport`] and the system that advances the script. Needs `SyntheticInputPlugin`, which
@@ -161,6 +167,10 @@ impl Plugin for ScenarioPlayerPlugin {
                 play.in_set(ScenarioSystems::Play)
                     .run_if(not(resource_exists::<ExternallyDriven>))
                     .before(SyntheticInputSystems::Drain),
+            )
+            .add_systems(
+                Last,
+                trace_point.in_set(ScenarioSystems::Trace).run_if(tracing),
             );
     }
 }
@@ -235,6 +245,11 @@ struct Running {
     aim: Option<Aim>,
     /// Whether a step failed and the rest is being skipped.
     aborted: bool,
+    /// Whether the targets steps look up are written down.
+    tracing: bool,
+    /// What steps found for their targets, until the player moves it into
+    /// its trace.
+    resolved: Vec<(usize, TargetTrace)>,
     /// The expectations' outcomes so far, once the steps are done: `None`
     /// for one still waiting to hold.
     expected: Option<Vec<Option<Outcome>>>,
@@ -251,6 +266,15 @@ pub struct ScenarioPlayer {
     setup_failure: Option<String>,
     /// Being played.
     running: Option<Running>,
+    /// What snapshots leave out, while a trace is being kept.
+    tracing: Option<NoiseFilter>,
+    /// What the last run (or the one going) did, between its steps.
+    trace: Option<ScenarioTrace>,
+    /// The step the run stops before, so a caller can look at the world as
+    /// that step finds it.
+    halt_before: Option<usize>,
+    /// Whether the run has stopped at `halt_before`.
+    halted: bool,
 }
 
 impl ScenarioPlayer {
@@ -297,6 +321,43 @@ impl ScenarioPlayer {
         self.pending = None;
         self.running = None;
         self.setup_failure = None;
+        self.halt_before = None;
+        self.halted = false;
+    }
+
+    /// Keeps a [`ScenarioTrace`] of the runs that begin from now on, its
+    /// snapshots leaving out what `filter` ignores. Needs
+    /// [`ScenarioPlayerPlugin`], which takes the points.
+    pub fn enable_trace(&mut self, filter: NoiseFilter) {
+        self.tracing = Some(filter);
+    }
+
+    /// The trace of the run being played or the last one, if tracing is on.
+    #[must_use]
+    pub const fn trace(&self) -> Option<&ScenarioTrace> {
+        self.trace.as_ref()
+    }
+
+    /// Takes the trace out, leaving none.
+    pub const fn take_trace(&mut self) -> Option<ScenarioTrace> {
+        self.trace.take()
+    }
+
+    /// Makes the run stop, before step `index` begins, with
+    /// [`ScenarioPlayer::halted`] set: the world is then as that step finds
+    /// it, on the frame [`ScenarioTrace::before`] reports for it. Call
+    /// before [`ScenarioPlayer::start`] (which leaves it alone) or while the
+    /// run is going; `None` lets the run on, and a run already stopped
+    /// continues on the next frame.
+    pub const fn pause_before(&mut self, index: Option<usize>) {
+        self.halt_before = index;
+        self.halted = false;
+    }
+
+    /// Whether the run stopped where [`ScenarioPlayer::pause_before`] said.
+    #[must_use]
+    pub const fn halted(&self) -> bool {
+        self.halted
     }
 
     /// How many steps have begun, which is also the index of the next one.
@@ -320,6 +381,43 @@ impl ScenarioPlayer {
             })
         })
     }
+}
+
+/// Whether a trace is being kept; the condition of the system that takes its
+/// points.
+fn tracing(player: Option<bevy::ecs::system::Res<ScenarioPlayer>>) -> bool {
+    player.is_some_and(|player| player.tracing.is_some())
+}
+
+/// Takes a [`TracePoint`] after a frame that left the player between steps
+/// with a later step due than the last point had, and one more when the
+/// scenario ended.
+fn trace_point(world: &mut World) {
+    let Some(mut player) = world.remove_resource::<ScenarioPlayer>() else {
+        return;
+    };
+    if !player.halted
+        && let Some(filter) = player.tracing.clone()
+        && let Some(report) = world.get_resource::<ScenarioReport>()
+    {
+        let (frame, finished) = (report.frames, report.finished);
+        let started = if finished {
+            report.steps.len()
+        } else {
+            player.steps_started()
+        };
+        let boundary = player.at_step_boundary();
+        if let Some(trace) = player.trace.as_mut()
+            && boundary
+            && trace
+                .last()
+                .is_some_and(|last| started > last.started || (finished && !last.finished))
+        {
+            let point = TracePoint::take(world, &filter, frame, started, finished);
+            trace.push(point);
+        }
+    }
+    world.insert_resource(player);
 }
 
 /// The player system: advances the script one frame.
@@ -372,6 +470,13 @@ impl ScenarioPlayer {
     /// Starts `scenario`: a fresh report with every step not yet reached,
     /// or, when its setup failed, a finished report saying so.
     fn begin(&mut self, world: &mut World, report: &mut ScenarioReport, scenario: Scenario) {
+        self.halted = false;
+        self.trace = self.tracing.clone().map(|filter| {
+            let first = TracePoint::take(world, &filter, 0, 0, false);
+            let mut trace = ScenarioTrace::new(filter);
+            trace.push(first);
+            trace
+        });
         *report = ScenarioReport {
             name: scenario.name().into(),
             steps: scenario
@@ -411,6 +516,8 @@ impl ScenarioPlayer {
             cursor,
             aim: None,
             aborted: false,
+            tracing: self.tracing.is_some(),
+            resolved: Vec::new(),
             expected: None,
             expect_waited: 0,
         });
@@ -418,6 +525,18 @@ impl ScenarioPlayer {
 
     /// Does the work of one frame.
     fn advance(&mut self, world: &mut World, report: &mut ScenarioReport, settled: bool) {
+        self.advance_frame(world, report, settled);
+        if let Some(run) = self.running.as_mut() {
+            move_targets(&mut self.trace, run);
+        }
+    }
+
+    /// Does the work of one frame, leaving what the steps found for their
+    /// targets in the run.
+    fn advance_frame(&mut self, world: &mut World, report: &mut ScenarioReport, settled: bool) {
+        if self.halted {
+            return;
+        }
         if let Some(scenario) = self.pending.take() {
             self.begin(world, report, scenario);
         }
@@ -430,6 +549,13 @@ impl ScenarioPlayer {
         report.frames += 1;
         loop {
             let Some(op) = run.ops.pop_front() else {
+                if self.halt_before.is_some_and(|index| run.next_step >= index) {
+                    // This frame did not happen: the world is as the last one
+                    // left it, and the next call takes up from here.
+                    report.frames -= 1;
+                    self.halted = true;
+                    return;
+                }
                 if run.next_step < run.scenario.script().len() {
                     let index = run.next_step;
                     run.next_step += 1;
@@ -437,6 +563,7 @@ impl ScenarioPlayer {
                     continue;
                 }
                 if run.finish(world, report) {
+                    move_targets(&mut self.trace, run);
                     self.running = None;
                 }
                 // Either the end, or a frame for expectations still waiting.
@@ -497,18 +624,7 @@ impl ScenarioPlayer {
                         });
                         return;
                     };
-                    match result {
-                        Ok(()) => record_check(report, &name, CheckKind::Step, Outcome::Pass),
-                        Err(message) => {
-                            record_check(
-                                report,
-                                &name,
-                                CheckKind::Step,
-                                Outcome::Fail(message.clone()),
-                            );
-                            fail_step(report, step, message);
-                        }
-                    }
+                    record_step_check(&mut self.trace, report, step, &name, result);
                 }
                 Op::Caption(text) => report.caption = Some(text),
             }
@@ -516,7 +632,81 @@ impl ScenarioPlayer {
     }
 }
 
+/// Records the end of a step's check in the report and the trace, and fails
+/// the step if it did not hold.
+fn record_step_check(
+    trace: &mut Option<ScenarioTrace>,
+    report: &mut ScenarioReport,
+    step: usize,
+    name: &str,
+    result: Result<(), String>,
+) {
+    let outcome = result
+        .clone()
+        .map_or_else(Outcome::Fail, |()| Outcome::Pass);
+    if let Some(trace) = trace.as_mut() {
+        trace.add_check(
+            step,
+            TraceCheck {
+                name: name.to_owned(),
+                outcome: outcome.clone(),
+            },
+        );
+    }
+    record_check(report, name, CheckKind::Step, outcome);
+    if let Err(message) = result {
+        fail_step(report, step, message);
+    }
+}
+
+/// Moves what the steps of `run` found for their targets into `trace`.
+fn move_targets(trace: &mut Option<ScenarioTrace>, run: &mut Running) {
+    let Some(trace) = trace.as_mut() else {
+        return;
+    };
+    for (step, found) in run.resolved.drain(..) {
+        trace.add_target(step, found);
+    }
+}
+
 impl Running {
+    /// [`reach`], writing down what it found when a trace is kept.
+    fn reach_traced(
+        &mut self,
+        world: &World,
+        step: usize,
+        target: &Target,
+        action: Action,
+        forced: bool,
+    ) -> Result<ResolvedTarget, NotActionable> {
+        let result = reach(world, target, action, forced);
+        if self.tracing {
+            let found = match &result {
+                Ok(to) => Ok(format!(
+                    "at ({:.0}, {:.0}){}",
+                    to.position.x,
+                    to.position.y,
+                    if to.widget.is_some() {
+                        ", a widget"
+                    } else {
+                        ""
+                    }
+                )),
+                Err(NotActionable::Yet(message) | NotActionable::Never(message)) => {
+                    Err(message.clone())
+                }
+            };
+            self.resolved.push((
+                step,
+                TargetTrace {
+                    target: format!("{target:?}"),
+                    found,
+                },
+            ));
+        }
+        result
+    }
+
     /// Stops the script at a failed step; what is left is skipped.
     fn abort(&mut self, report: &mut ScenarioReport, step: usize, message: String) {
         fail_step(report, step, message);
@@ -633,20 +823,20 @@ impl Running {
     ) -> Result<(), NotActionable> {
         match step {
             Step::MoveTo(target) => {
-                let to = reach(world, target, Action::Point, forced)?;
+                let to = self.reach_traced(world, index, target, Action::Point, forced)?;
                 self.move_ops(index, core::iter::once(to.position), to, target, !forced);
                 self.aim_at(to, target, forced);
             }
             Step::Glide { target, frames } => {
-                let to = reach(world, target, Action::Point, forced)?;
+                let to = self.reach_traced(world, index, target, Action::Point, forced)?;
                 self.glide_ops(index, to, *frames, target, !forced);
                 self.aim_at(to, target, forced);
             }
             Step::Drag { from, to, frames } => {
                 // Both ends are checked on the same frame, before anything
                 // moves: the drag presses at its start.
-                let start = reach(world, from, Action::Press, forced)?;
-                let end = reach(world, to, Action::Point, forced)?;
+                let start = self.reach_traced(world, index, from, Action::Press, forced)?;
+                let end = self.reach_traced(world, index, to, Action::Point, forced)?;
                 self.move_ops(
                     index,
                     core::iter::once(start.position),
@@ -859,6 +1049,36 @@ impl Scenario {
     /// then returns the report; a setup that fails fails the report, with
     /// every step skipped.
     pub fn run_in(&self, app: &mut App) -> ScenarioReport {
+        self.play_in(app, None).0
+    }
+
+    /// Plays the scenario in `app` as [`Scenario::run_in`] does, keeping a
+    /// [`ScenarioTrace`] whose snapshots leave out what `filter` ignores.
+    pub fn run_in_traced(
+        &self,
+        app: &mut App,
+        filter: NoiseFilter,
+    ) -> (ScenarioReport, ScenarioTrace) {
+        let (report, trace) = self.play_in(app, Some(filter));
+        (
+            report,
+            trace.unwrap_or_else(|| ScenarioTrace::new(NoiseFilter::nothing())),
+        )
+    }
+
+    /// Plays the scenario in a fresh [`HeadlessPlugins`] app and returns the
+    /// report and its trace, with the default [`NoiseFilter`].
+    #[must_use]
+    pub fn run_headless_traced(&self) -> (ScenarioReport, ScenarioTrace) {
+        self.run_in_traced(&mut self.headless_app(), NoiseFilter::default())
+    }
+
+    /// Plays the scenario, with a trace when `filter` is given.
+    fn play_in(
+        &self,
+        app: &mut App,
+        filter: Option<NoiseFilter>,
+    ) -> (ScenarioReport, Option<ScenarioTrace>) {
         if !app.world().contains_resource::<ScenarioPlayer>() {
             // `add_plugins` refuses once the app is finished, but the app is
             // allowed to gain systems and resources, so build it by hand.
@@ -869,6 +1089,9 @@ impl Scenario {
             app.update();
         }
         if let Some(mut player) = app.world_mut().get_resource_mut::<ScenarioPlayer>() {
+            if let Some(filter) = filter {
+                player.enable_trace(filter);
+            }
             player.start_after_setup(self.clone(), setup);
         }
         while app
@@ -878,10 +1101,16 @@ impl Scenario {
         {
             app.update();
         }
-        app.world()
+        let trace = app
+            .world_mut()
+            .get_resource_mut::<ScenarioPlayer>()
+            .and_then(|mut player| player.take_trace());
+        let report = app
+            .world()
             .get_resource::<ScenarioReport>()
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        (report, trace)
     }
 
     /// Plays the scenario in a fresh [`HeadlessPlugins`] app and returns the

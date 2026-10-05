@@ -62,6 +62,12 @@ impl Speed {
 pub enum GalleryAction {
     /// Reset the app and play the entry with this index.
     Select(usize),
+    /// Reset the app, play the selected entry up to the start of the step with
+    /// this index (counting from 0) and pause there, with the app as it is at
+    /// that point, for looking at it. Nothing is stored: runs are
+    /// deterministic, so the same frames are simply played again, one script
+    /// frame per update whatever the speed.
+    JumpTo(usize),
     /// Play or pause; from the end of a run, play it again.
     TogglePlay,
     /// Pause and run one frame of the script.
@@ -430,6 +436,9 @@ pub struct GalleryState {
     pub(crate) tick: u32,
     /// A single-step request not yet carried out.
     pub(crate) step: Option<PendingStep>,
+    /// The step a jump is fast-forwarding to, until the player halts before
+    /// it or the script ends.
+    pub(crate) jump: Option<usize>,
     /// Requests not yet carried out, oldest first.
     pub(crate) pending: Vec<GalleryAction>,
     /// Whether each entry passed the last time it finished.
@@ -472,6 +481,7 @@ impl GalleryState {
             loop_pause,
             tick: 0,
             step: None,
+            jump: None,
             pending: Vec::new(),
             results: BTreeMap::new(),
             export_dir,
@@ -515,6 +525,12 @@ impl GalleryState {
     #[must_use]
     pub const fn phase(&self) -> GalleryPhase {
         self.phase
+    }
+
+    /// The step a jump to a step is still on its way to, if one is.
+    #[must_use]
+    pub const fn jumping_to(&self) -> Option<usize> {
+        self.jump
     }
 
     /// Whether the script advances (not paused, not taken over).

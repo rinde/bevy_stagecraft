@@ -5,8 +5,12 @@ use std::path::Path;
 
 use crate::{
     capture::{FilmstripCell, Frame, Mark, encode_gif, filmstrip},
-    player::{CheckKind, Outcome},
+    check::suggest::SnapshotChange,
+    overlay::{TargetDescriptions, describe_step},
+    player::{CheckKind, Outcome, StepRecord},
     recorder::{Capture, RecordError, ScenarioRecording, create_dir, write_file},
+    scenario::Step,
+    trace::{ScenarioTrace, TracePoint},
 };
 
 /// Width of a thumbnail in a filmstrip, in pixels.
@@ -27,6 +31,8 @@ const MIN_FRAME_MS: u32 = 20;
 pub const FILMSTRIP_FILE: &str = "filmstrip.png";
 /// File name of a scenario's GIF.
 pub const GIF_FILE: &str = "scenario.gif";
+/// File name of a scenario's per-step trace.
+pub const TRACE_FILE: &str = "trace.html";
 
 /// How long a GIF shows a picture taken at `frame` before the one at `next`.
 fn delay_ms(frame: u32, next: Option<u32>) -> u32 {
@@ -41,8 +47,13 @@ pub fn picture_file(frame: u32) -> String {
     format!("frame-{frame:05}.png")
 }
 
-/// Writes a scenario's pictures, filmstrip and GIF into `folder`.
-pub(crate) fn write_scenario(folder: &Path, pictures: &[Capture]) -> Result<(), RecordError> {
+/// Writes a scenario's pictures, filmstrip, GIF and, where it has a trace,
+/// `trace.html` into `folder`.
+pub(crate) fn write_scenario(
+    folder: &Path,
+    pictures: &[Capture],
+    recording: &ScenarioRecording,
+) -> Result<(), RecordError> {
     create_dir(folder)?;
     for picture in pictures {
         write_file(
@@ -82,6 +93,13 @@ pub(crate) fn write_scenario(folder: &Path, pictures: &[Capture]) -> Result<(), 
         .collect();
     if !gif_frames.is_empty() {
         write_file(&folder.join(GIF_FILE), &encode_gif(&gif_frames)?)?;
+    }
+    if let Some(trace) = &recording.trace {
+        let frames: Vec<u32> = pictures.iter().map(|picture| picture.meta.frame).collect();
+        write_file(
+            &folder.join(TRACE_FILE),
+            trace_html(recording, trace, &frames).as_bytes(),
+        )?;
     }
     Ok(())
 }
@@ -137,12 +155,287 @@ fn card(out: &mut String, scenario: &ScenarioRecording) {
     for failure in scenario.report.failures() {
         let _ = write!(out, "<li class=\"fail\">{}</li>", escape(&failure));
     }
+    out.push_str("</ul>");
+    if !scenario.passed() && scenario.trace.is_some() {
+        card_steps(out, scenario, &slug);
+    }
+    let trace_link = if scenario.trace.is_some() {
+        format!(" \u{b7} <a href=\"{slug}/{TRACE_FILE}\">trace</a>")
+    } else {
+        String::new()
+    };
     let _ = write!(
         out,
-        "</ul><p><a href=\"{slug}/{FILMSTRIP_FILE}\">filmstrip</a> \u{b7} \
+        "<p><a href=\"{slug}/{FILMSTRIP_FILE}\">filmstrip</a>{trace_link} \u{b7} \
          <a href=\"{slug}/\">{} pictures</a></p></article>",
         scenario.pictures
     );
+}
+
+/// What a step is called in a list: its number and its words.
+fn step_title(index: usize, record: &StepRecord, steps: &[StepRecord]) -> String {
+    let before: Vec<Step> = steps
+        .iter()
+        .take(index)
+        .map(|earlier| earlier.step.clone())
+        .collect();
+    format!(
+        "{}. {}",
+        index + 1,
+        describe_step(&record.step, &before, &TargetDescriptions::default())
+    )
+}
+
+/// The mark and class a step's outcome is shown with.
+const fn outcome_mark(outcome: &Outcome) -> (&'static str, &'static str) {
+    match outcome {
+        Outcome::Pass => ("\u{2714}", "pass"),
+        Outcome::Fail(_) => ("\u{2718}", "fail"),
+        Outcome::Skipped => ("-", "skipped"),
+    }
+}
+
+/// The steps of a failed scenario, each linking to its part of the trace.
+fn card_steps(out: &mut String, scenario: &ScenarioRecording, slug: &str) {
+    out.push_str("<ol class=\"steps\">");
+    for (index, record) in scenario.report.steps.iter().enumerate() {
+        let (mark, class) = outcome_mark(&record.outcome);
+        let _ = write!(
+            out,
+            "<li class=\"{class}\"><a href=\"{slug}/{TRACE_FILE}#step-{index}\">{mark} {}</a></li>",
+            escape(&step_title(index, record, &scenario.report.steps))
+        );
+    }
+    out.push_str("</ol>");
+}
+
+/// The page that shows, per step, the world around it.
+///
+/// Each step has what it found, the checks it ran, the pictures before and
+/// after, how the snapshot changed, and the snapshot and UI tree afterwards.
+/// `frames` are the frames that have a picture in the folder next to the page.
+#[must_use]
+pub fn trace_html(recording: &ScenarioRecording, trace: &ScenarioTrace, frames: &[u32]) -> String {
+    let mut out = String::from(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <title>Trace</title><style>\
+         body{font-family:sans-serif;background:#18181c;color:#eee;margin:1.5rem}\
+         details{background:#24242c;border-left:6px solid #3c9a54;margin:.5rem 0;padding:.4rem .8rem}\
+         details.fail{border-left-color:#c84040}details.skipped{border-left-color:#777}\
+         summary{cursor:pointer;font-weight:bold}\
+         .pictures{display:flex;gap:1rem;flex-wrap:wrap}\
+         .pictures figure{margin:.4rem 0;max-width:46%}.pictures img{width:100%}\
+         table{border-collapse:collapse;font-size:.85rem}\
+         td,th{border:1px solid #444;padding:.1rem .5rem;text-align:left;vertical-align:top}\
+         td.added{color:#7fdc8c}td.removed{color:#ff7a7a}\
+         pre{background:#101014;padding:.4rem;overflow:auto;font-size:.8rem}\
+         li.pass{color:#7fdc8c}li.fail{color:#ff7a7a}li.skipped{color:#999}\
+         a{color:#9cc8ff}</style></head><body>",
+    );
+    let _ = write!(
+        out,
+        "<h1>{}</h1><p><a href=\"../index.html#{}\">back to the index</a></p>",
+        escape(&recording.name),
+        escape(&recording.slug)
+    );
+    if let Some(failure) = &recording.report.setup_failure {
+        let _ = write!(
+            out,
+            "<p class=\"fail\">The setup failed: {}</p>",
+            escape(failure)
+        );
+    }
+    let steps = &recording.report.steps;
+    for (index, record) in steps.iter().enumerate() {
+        step_section(&mut out, index, record, steps, trace, frames);
+    }
+    end_section(&mut out, recording, trace);
+    out.push_str("</body></html>\n");
+    out
+}
+
+/// One step's `<details>`; a step that failed is open.
+fn step_section(
+    out: &mut String,
+    index: usize,
+    record: &StepRecord,
+    steps: &[StepRecord],
+    trace: &ScenarioTrace,
+    frames: &[u32],
+) {
+    let (mark, class) = outcome_mark(&record.outcome);
+    let open = if matches!(record.outcome, Outcome::Fail(_)) {
+        " open"
+    } else {
+        ""
+    };
+    let _ = write!(
+        out,
+        "<details id=\"step-{index}\" class=\"{class}\"{open}><summary>{mark} {}</summary>",
+        escape(&step_title(index, record, steps))
+    );
+    if let Outcome::Fail(message) = &record.outcome {
+        let _ = write!(out, "<p class=\"fail\">{}</p>", escape(message));
+    }
+    if matches!(record.outcome, Outcome::Skipped) {
+        out.push_str("<p>Never ran, because an earlier step failed.</p></details>");
+        return;
+    }
+    let (before, after) = (trace.before(index), trace.after(index));
+    if let Some(step) = trace.step(index) {
+        if !step.targets.is_empty() {
+            out.push_str("<h4>Targets</h4><ul>");
+            for target in &step.targets {
+                let (class, text) = match &target.found {
+                    Ok(found) => ("pass", found),
+                    Err(why) => ("fail", why),
+                };
+                let _ = write!(
+                    out,
+                    "<li class=\"{class}\">{} \u{2192} {}</li>",
+                    escape(&target.target),
+                    escape(text)
+                );
+            }
+            out.push_str("</ul>");
+        }
+        if !step.checks.is_empty() {
+            out.push_str("<h4>Checks</h4><ul>");
+            for check in &step.checks {
+                let (mark, class) = outcome_mark(&check.outcome);
+                let why = match &check.outcome {
+                    Outcome::Fail(message) => format!(": {}", escape(message)),
+                    _ => String::new(),
+                };
+                let _ = write!(
+                    out,
+                    "<li class=\"{class}\">{mark} {}{why}</li>",
+                    escape(&check.name)
+                );
+            }
+            out.push_str("</ul>");
+        }
+    }
+    pictures(out, before, after, frames);
+    if let (Some(before), Some(after)) = (before, after) {
+        changes(out, &after.snapshot.changes_from(&before.snapshot));
+    }
+    if let Some(after) = after {
+        point(out, "After the step", after);
+    }
+    out.push_str("</details>");
+}
+
+/// The pictures before and after a step, where the recorder took them.
+fn pictures(
+    out: &mut String,
+    before: Option<&TracePoint>,
+    after: Option<&TracePoint>,
+    frames: &[u32],
+) {
+    let shown: Vec<(&str, u32)> = [("Before", before), ("After", after)]
+        .into_iter()
+        .filter_map(|(label, point)| Some((label, point?.frame)))
+        .filter(|(_, frame)| frames.contains(frame))
+        .collect();
+    if shown.is_empty() {
+        return;
+    }
+    out.push_str("<div class=\"pictures\">");
+    for (label, frame) in shown {
+        let _ = write!(
+            out,
+            "<figure><figcaption>{label} (frame {frame})</figcaption>\
+             <img src=\"{}\" alt=\"{label}\" loading=\"lazy\"></figure>",
+            picture_file(frame)
+        );
+    }
+    out.push_str("</div>");
+}
+
+/// The changes between two snapshots as a table.
+fn changes(out: &mut String, changes: &[SnapshotChange]) {
+    if changes.is_empty() {
+        out.push_str("<h4>Changes</h4><p>The world did not change.</p>");
+        return;
+    }
+    out.push_str("<h4>Changes</h4><table><tr><th>What</th><th>Before</th><th>After</th></tr>");
+    for change in changes {
+        let cell = |value: &Option<String>, class: &str| {
+            value.as_ref().map_or_else(
+                || format!("<td class=\"{class}\">\u{2014}</td>"),
+                |text| format!("<td>{}</td>", escape(text)),
+            )
+        };
+        let _ = write!(
+            out,
+            "<tr><td>{}</td>{}{}</tr>",
+            escape(&change.key),
+            cell(&change.before, "removed"),
+            cell(&change.after, "added")
+        );
+    }
+    out.push_str("</table>");
+}
+
+/// A trace point's UI tree and snapshot, collapsed.
+fn point(out: &mut String, title: &str, point: &TracePoint) {
+    let mut tree = String::new();
+    for line in &point.ui {
+        let _ = writeln!(
+            tree,
+            "{}{}",
+            "  ".repeat(line.depth),
+            escape(&line.describe())
+        );
+    }
+    let mut snapshot = String::new();
+    for (key, value) in point.snapshot.entries() {
+        let _ = writeln!(snapshot, "{} = {}", escape(&key), escape(&value));
+    }
+    let _ = write!(
+        out,
+        "<details><summary>{title} (frame {}): UI and snapshot</summary>\
+         <h4>UI</h4><pre>{tree}</pre><h4>Snapshot</h4><pre>{snapshot}</pre></details>",
+        point.frame
+    );
+}
+
+/// The end of the run: the expectations and the final world.
+fn end_section(out: &mut String, recording: &ScenarioRecording, trace: &ScenarioTrace) {
+    let failed = recording
+        .report
+        .checks
+        .iter()
+        .any(|check| check.kind == CheckKind::Expect && !check.outcome.is_pass());
+    let class = if failed { "fail" } else { "pass" };
+    let _ = write!(
+        out,
+        "<details id=\"end\" class=\"{class}\"{}><summary>End of the run</summary><ul>",
+        if failed { " open" } else { "" }
+    );
+    for check in recording
+        .report
+        .checks
+        .iter()
+        .filter(|check| check.kind == CheckKind::Expect)
+    {
+        let (mark, class) = outcome_mark(&check.outcome);
+        let why = match &check.outcome {
+            Outcome::Fail(message) => format!(": {}", escape(message)),
+            _ => String::new(),
+        };
+        let _ = write!(
+            out,
+            "<li class=\"{class}\">{mark} {}{why}</li>",
+            escape(&check.name)
+        );
+    }
+    out.push_str("</ul>");
+    if let Some(last) = trace.last() {
+        point(out, "The world at the end", last);
+    }
+    out.push_str("</details>");
 }
 
 /// The contact sheet: scenarios grouped as the catalogue groups them, groups
@@ -226,6 +519,7 @@ mod tests {
             slug: name.into(),
             report,
             pictures: 3,
+            trace: None,
         }
     }
 
@@ -241,6 +535,48 @@ mod tests {
         assert!(bad < good, "group B has a failure, so it comes first");
         assert!(html.contains("broken &lt;check&gt;"), "names are escaped");
         assert!(html.contains("1 failed"), "the summary counts failures");
+    }
+
+    /// A recording of a scenario that fails its check, with its trace.
+    fn traced_failure() -> ScenarioRecording {
+        let scenario = crate::Scenario::new("shows it")
+            .setup(|world| {
+                world.spawn(bevy::prelude::Camera2d);
+                world.spawn((
+                    bevy::ui::Node::default(),
+                    bevy::ui::widget::Text::new("Hello <b>"),
+                ));
+            })
+            .steps([Step::wait(2), Step::check(crate::Check::shows("Missing"))]);
+        let (report, trace) = scenario.run_headless_traced();
+        ScenarioRecording {
+            name: "shows it".into(),
+            group: "A".into(),
+            slug: "shows-it".into(),
+            report,
+            pictures: 0,
+            trace: Some(trace),
+        }
+    }
+
+    #[test]
+    fn a_trace_page_has_a_section_per_step_and_marks_the_failed_one() {
+        let recording = traced_failure();
+        let Some(trace) = &recording.trace else {
+            return;
+        };
+        let html = trace_html(&recording, trace, &[]);
+        assert!(html.contains("id=\"step-0\""), "{html}");
+        assert!(html.contains("id=\"step-1\""), "{html}");
+        assert!(html.contains("class=\"fail\""), "the failed step is marked");
+        assert!(html.contains("Hello &lt;b&gt;"), "the UI tree is escaped");
+        assert!(!html.contains("<img"), "no picture was taken");
+    }
+
+    #[test]
+    fn a_failed_scenario_with_a_trace_links_its_steps_from_the_index() {
+        let html = index_html(&[traced_failure()]);
+        assert!(html.contains("shows-it/trace.html#step-1"), "{html}");
     }
 
     #[test]

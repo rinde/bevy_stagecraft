@@ -99,6 +99,7 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     state.playing = true;
     state.taken_over = false;
     state.step = None;
+    state.jump = None;
     state.tick = 0;
     state.status = match (&setup, view) {
         (Err(error), _) => format!("Setup failed: {error}"),
@@ -106,6 +107,31 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         (Ok(_), Ok(_)) => String::new(),
     };
     state.setup = setup;
+}
+
+/// Restarts the selected entry and plays it up to the start of step `step`,
+/// where it pauses (see [`GalleryAction::JumpTo`]).
+fn jump_to(world: &mut World, state: &mut GalleryState, step: usize) {
+    let Some(index) = state.selected else {
+        "Select a scenario to jump in".clone_into(&mut state.status);
+        return;
+    };
+    select(world, state, index);
+    if state.selected != Some(index) || state.phase == GalleryPhase::Idle {
+        return;
+    }
+    state.jump = Some(step);
+    state.status = format!("Playing up to step {}", step + 1);
+}
+
+/// Gives up a jump on its way, for a request that wants the player to go its
+/// own way: the player carries on from wherever it has got to.
+fn cancel_jump(world: &mut World, state: &mut GalleryState) {
+    if state.jump.take().is_some()
+        && let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>()
+    {
+        player.pause_before(None);
+    }
 }
 
 /// A window dimension as the `f32` Bevy's window resolution takes. Sizes above
@@ -333,13 +359,17 @@ fn apply_pick(world: &mut World, state: &mut GalleryState, action: GalleryAction
 fn forget_for(state: &mut GalleryState, action: GalleryAction) {
     if matches!(
         action,
-        GalleryAction::Select(_) | GalleryAction::Restart | GalleryAction::Record
+        GalleryAction::Select(_)
+            | GalleryAction::JumpTo(_)
+            | GalleryAction::Restart
+            | GalleryAction::Record
     ) {
         state.suggestions = None;
     }
     if matches!(
         action,
         GalleryAction::Select(_)
+            | GalleryAction::JumpTo(_)
             | GalleryAction::Restart
             | GalleryAction::TogglePlay
             | GalleryAction::StepFrame
@@ -370,6 +400,7 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         && matches!(
             action,
             GalleryAction::Select(_)
+                | GalleryAction::JumpTo(_)
                 | GalleryAction::Restart
                 | GalleryAction::TogglePlay
                 | GalleryAction::StepFrame
@@ -396,12 +427,14 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         GalleryAction::Record => record(world, state),
         GalleryAction::StopRecording => stop_recording(world, state),
         GalleryAction::Select(index) => select(world, state, index),
+        GalleryAction::JumpTo(step) => jump_to(world, state, step),
         GalleryAction::Restart => {
             if let Some(index) = state.selected {
                 select(world, state, index);
             }
         }
         GalleryAction::TogglePlay => {
+            cancel_jump(world, state);
             if state.taken_over {
                 state.taken_over = false;
                 state.playing = true;
@@ -418,6 +451,7 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
             if matches!(state.phase, GalleryPhase::Idle | GalleryPhase::Finished(_)) {
                 return;
             }
+            cancel_jump(world, state);
             state.taken_over = false;
             state.playing = false;
             state.step = Some(if action == GalleryAction::StepFrame {
@@ -433,6 +467,7 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         GalleryAction::SetSpeed(speed) => state.speed = speed,
         GalleryAction::ToggleLoop => state.looping = !state.looping,
         GalleryAction::TakeOver => {
+            cancel_jump(world, state);
             if state.selected.is_some() && !state.taken_over {
                 state.taken_over = true;
                 state.playing = false;
@@ -511,6 +546,7 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
             if let (Some(scenario), Some(mut player)) =
                 (scenario, world.get_resource_mut::<ScenarioPlayer>())
             {
+                player.pause_before(state.jump);
                 player.start_after_setup(scenario, state.setup.clone());
             }
             state.phase = GalleryPhase::Running;
@@ -534,7 +570,10 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
 /// Runs this update's frames of script and notices when it ends.
 fn run_frames(world: &mut World, state: &mut GalleryState) {
     state.tick = state.tick.wrapping_add(1);
-    let frames = if state.step.is_some() {
+    // A jump plays one script frame per update at any speed, as the headless
+    // runner does, so it lands on the very frame that playing up to the step
+    // would have.
+    let frames = if state.step.is_some() || state.jump.is_some() {
         1
     } else if state.playing {
         state.speed.frames_at(state.tick)
@@ -544,6 +583,12 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
     for index in 0..frames {
         // Only the first frame of an update sees fresh layout and picking.
         advance_world(world, index == 0);
+    }
+    let halted = world
+        .get_resource::<ScenarioPlayer>()
+        .is_some_and(ScenarioPlayer::halted);
+    if halted {
+        arrive(world, state);
     }
     let (active, boundary, started) =
         world
@@ -573,6 +618,7 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
             state.results.insert(index, passed);
         }
         state.step = None;
+        state.jump = None;
         if state.is_running_all() {
             record_outcome(world, state);
             run_next(world, state);
@@ -580,6 +626,20 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
         }
         state.phase = GalleryPhase::Finished(state.loop_pause);
     }
+}
+
+/// The player has halted before the step a jump was after: pause there, with
+/// the live app as it is.
+fn arrive(world: &mut World, state: &mut GalleryState) {
+    let Some(step) = state.jump.take() else {
+        return;
+    };
+    if let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>() {
+        player.pause_before(None);
+    }
+    state.playing = false;
+    state.step = None;
+    state.status = format!("Paused before step {}", step + 1);
 }
 
 /// Adds the scenario that just finished to the run of the whole catalogue.

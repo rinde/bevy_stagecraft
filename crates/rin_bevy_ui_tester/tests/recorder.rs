@@ -166,6 +166,49 @@ fn gpu_recording_a_plain_ui_scenario_writes_a_filmstrip_a_gif_and_an_index() {
 
 #[test]
 #[ignore = "needs a GPU: run by `just test-gpu`"]
+fn gpu_a_failed_scenario_gets_a_trace_page_with_snapshots_and_pictures_per_step() {
+    let dir = output_dir("recorder-trace");
+    let recording = Recorder::new(|_app| {})
+        .every(5)
+        .grouped("Buttons", click_pause("click it twice", true))
+        .record(&dir)
+        .expect("recording works");
+
+    let folder = dir.join("click-it-twice");
+    let page = fs::read_to_string(folder.join("trace.html")).expect("a trace page");
+    for step in 0..6 {
+        assert!(page.contains(&format!("id=\"step-{step}\"")), "step {step}");
+    }
+    assert!(
+        page.contains("activated 1 times, wanted 2"),
+        "the failure is shown"
+    );
+    assert!(
+        page.contains("Activations"),
+        "the snapshot lists the resource"
+    );
+    assert!(page.contains("<img"), "the steps show pictures");
+    let trace = recording
+        .scenarios
+        .first()
+        .and_then(|scenario| scenario.trace.as_ref())
+        .expect("the recording keeps the trace");
+    // Every picture the page refers to was written next to it.
+    for point in trace.points() {
+        let name = format!("frame-{:05}.png", point.frame);
+        if page.contains(&name) {
+            assert!(folder.join(&name).exists(), "{name} is on disk");
+        }
+    }
+    let index = fs::read_to_string(&recording.index).expect("an index");
+    assert!(
+        index.contains("click-it-twice/trace.html#step-"),
+        "the failed card lists its steps"
+    );
+}
+
+#[test]
+#[ignore = "needs a GPU: run by `just test-gpu`"]
 fn gpu_recorded_frame_zero_is_the_same_on_every_run() {
     let first = output_dir("recorder-determinism-a");
     let second = output_dir("recorder-determinism-b");

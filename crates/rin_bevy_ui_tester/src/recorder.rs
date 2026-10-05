@@ -43,12 +43,14 @@ use bevy::{
 
 use crate::{
     capture::{CaptureError, Frame},
+    check::suggest::NoiseFilter,
     headless::{DEFAULT_WINDOW_SIZE, HeadlessPlugins, RenderCameraSupport},
     index,
     input::SyntheticInput,
     overlay::{CursorOverlayPlugin, TargetDescriptions, current_step_text},
-    player::{Outcome, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport},
+    player::{Outcome, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport, ScenarioSystems},
     scenario::Scenario,
+    trace::ScenarioTrace,
 };
 
 /// Every this many frames a picture is taken, unless configured otherwise.
@@ -216,7 +218,13 @@ impl Plugin for RecorderSupport {
                     .before(CameraUpdateSystems)
                     .before(UiSystems::Prepare),
             )
-            .add_systems(Last, request_frames.in_set(RecorderSystems::Capture));
+            .add_systems(
+                Last,
+                // After the trace point, so a point's frame gets its picture.
+                request_frames
+                    .in_set(RecorderSystems::Capture)
+                    .after(ScenarioSystems::Trace),
+            );
     }
 }
 
@@ -279,11 +287,13 @@ fn retarget_cameras(
 }
 
 /// Asks for a picture of the frame just played when it is one worth having:
-/// a step began, it is every `every`th frame, or the scenario just finished.
+/// a step began, the trace took a point, it is every `every`th frame, or the
+/// scenario just finished.
 fn request_frames(
     mut commands: Commands,
     mut captures: ResMut<Captures>,
     report: Res<ScenarioReport>,
+    player: Res<ScenarioPlayer>,
     descriptions: Res<TargetDescriptions>,
     theme: Res<crate::overlay::OverlayTheme>,
     target: Option<Res<RecorderTarget>>,
@@ -303,7 +313,11 @@ fn request_frames(
         .map(|(index, _)| index)
         .collect();
     let on_interval = captures.every != 0 && frame.is_multiple_of(captures.every);
-    if steps.is_empty() && !on_interval && !report.finished {
+    let traced = player
+        .trace()
+        .and_then(|trace| trace.last())
+        .is_some_and(|point| point.frame == frame);
+    if steps.is_empty() && !on_interval && !traced && !report.finished {
         return;
     }
     let meta = CaptureMeta {
@@ -430,6 +444,9 @@ pub struct ScenarioRecording {
     pub report: ScenarioReport,
     /// How many pictures were written.
     pub pictures: usize,
+    /// The world around each step, which `trace.html` in the scenario's
+    /// directory shows.
+    pub trace: Option<ScenarioTrace>,
 }
 
 impl ScenarioRecording {
@@ -459,6 +476,9 @@ impl Recording {
     }
 }
 
+/// What playing one scenario produced: its report, its pictures and, as the
+/// recorder always asks for one, its trace.
+type PlayedScenario = (ScenarioReport, Vec<Capture>, Option<ScenarioTrace>);
 /// How the app says its world has settled.
 type SettleFn = dyn Fn(&mut World) -> bool + Send + Sync;
 /// How the app adds its own plugins to the recorder's render set.
@@ -486,6 +506,8 @@ pub struct Recorder {
     settle: Option<Arc<SettleFn>>,
     /// A picture every this many frames.
     every: u32,
+    /// Which reflected types the traces' snapshots leave out.
+    noise: NoiseFilter,
 }
 
 impl fmt::Debug for Recorder {
@@ -508,6 +530,7 @@ impl Recorder {
             entries: Vec::new(),
             settle: None,
             every: DEFAULT_EVERY,
+            noise: NoiseFilter::default(),
         }
     }
 
@@ -532,6 +555,14 @@ impl Recorder {
     #[must_use]
     pub const fn every(mut self, frames: u32) -> Self {
         self.every = frames;
+        self
+    }
+
+    /// Sets which reflected types the per-step snapshots in `trace.html` leave
+    /// out; by default Bevy's own and this crate's.
+    #[must_use]
+    pub fn with_noise_filter(mut self, noise: NoiseFilter) -> Self {
+        self.noise = noise;
         self
     }
 
@@ -560,8 +591,7 @@ impl Recorder {
         let mut scenarios = Vec::new();
         for entry in &self.entries {
             let slug = unique_slug(entry.scenario.name(), &mut used);
-            let captures = self.play(&entry.scenario)?;
-            let (report, pictures) = captures;
+            let (report, pictures, trace) = self.play(&entry.scenario)?;
             let folder = directory.join(&slug);
             let recording = ScenarioRecording {
                 name: entry.scenario.name().into(),
@@ -569,8 +599,9 @@ impl Recorder {
                 slug,
                 report,
                 pictures: pictures.len(),
+                trace,
             };
-            index::write_scenario(&folder, &pictures)?;
+            index::write_scenario(&folder, &pictures, &recording)?;
             scenarios.push(recording);
         }
         let index = directory.join("index.html");
@@ -582,8 +613,9 @@ impl Recorder {
         })
     }
 
-    /// Plays one scenario in a fresh app and returns its report and pictures.
-    fn play(&self, scenario: &Scenario) -> Result<(ScenarioReport, Vec<Capture>), RecordError> {
+    /// Plays one scenario in a fresh app and returns its report, pictures and
+    /// trace.
+    fn play(&self, scenario: &Scenario) -> Result<PlayedScenario, RecordError> {
         let name = scenario.name().to_owned();
         let (width, height) = scenario.window().unwrap_or(DEFAULT_WINDOW_SIZE);
         let mut app = App::new();
@@ -617,6 +649,7 @@ impl Recorder {
         );
         app.update();
         if let Some(mut player) = app.world_mut().get_resource_mut::<ScenarioPlayer>() {
+            player.enable_trace(self.noise.clone());
             player.start_after_setup(scenario.clone(), setup);
         }
         let mut frames = 0;
@@ -644,7 +677,11 @@ impl Recorder {
             .unwrap_or_default()
             .into_values()
             .collect();
-        Ok((report, pictures))
+        let trace = app
+            .world_mut()
+            .get_resource_mut::<ScenarioPlayer>()
+            .and_then(|mut player| player.take_trace());
+        Ok((report, pictures, trace))
     }
 
     /// Runs updates until the app's settle hook is satisfied.
