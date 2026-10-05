@@ -17,6 +17,7 @@ use bevy::{camera::RenderTarget, prelude::*};
 use common::{Activations, spawn_ui};
 use rin_bevy_ui_tester::{
     CaptureMeta, Captures, Frame, Recorder, RecorderPlugins, Scenario, Step, Target,
+    overlay::{OverlayTheme, PickHighlight},
     recorder::request_capture,
 };
 
@@ -180,5 +181,73 @@ fn gpu_recorded_frame_zero_is_the_same_on_every_run() {
         frame_zero(&first),
         frame_zero(&second),
         "frame 0 is identical"
+    );
+}
+
+/// The colour of `colour` as 8-bit sRGB, as a picture holds it.
+fn srgb8(colour: Color) -> [u8; 3] {
+    let [red, green, blue, _] = colour.to_srgba().to_u8_array();
+    [red, green, blue]
+}
+
+/// Whether `pixel` is within a few levels of `wanted` in every channel.
+fn near(pixel: [u8; 4], wanted: [u8; 3]) -> bool {
+    pixel
+        .iter()
+        .zip(wanted)
+        .all(|(have, want)| have.abs_diff(want) <= 6)
+}
+
+#[test]
+#[ignore = "needs a GPU: run by `just test-gpu`"]
+fn gpu_the_pick_outlines_are_drawn_just_outside_the_node_in_a_recorded_frame() {
+    let dir = output_dir("recorder-pick-outline");
+    let scenario = Scenario::new("pick outline")
+        .window_size(320, 240)
+        .setup(|world| {
+            spawn_ui(world);
+            let label = world
+                .query::<(Entity, &Text)>()
+                .iter(world)
+                .find(|(_, text)| text.0 == "Pause")
+                .expect("the label")
+                .0;
+            let button = world.get::<ChildOf>(label).expect("its button").parent();
+            world.insert_resource(PickHighlight {
+                hovered: Some(button),
+                selected: Some(button),
+                tag: "Text(\"Pause\")".into(),
+            });
+        })
+        .steps([Step::wait(3)]);
+    Recorder::new(|_app| {})
+        .scenario(scenario)
+        .record(&dir)
+        .expect("recording works");
+    let path = dir.join("pick-outline/frame-00000.png");
+    let picture = image::open(&path).expect("frame 0").to_rgba8();
+    let pixel = |x: u32, y: u32| picture.get_pixel(x, y).0;
+    let theme = OverlayTheme::default();
+    // The button spans x 100..200 and y 25..75; the hovered outline is the
+    // two pixels just outside it, the picked one the two beyond those.
+    for (x, y) in [(99, 50), (150, 23), (201, 50), (150, 76)] {
+        assert!(
+            near(pixel(x, y), srgb8(theme.pick_hovered)),
+            "hovered outline at ({x}, {y}): {:?} in {}",
+            pixel(x, y),
+            path.display()
+        );
+    }
+    for (x, y) in [(97, 50), (202, 60)] {
+        assert!(
+            near(pixel(x, y), srgb8(theme.pick_selected)),
+            "picked outline at ({x}, {y}): {:?}",
+            pixel(x, y)
+        );
+    }
+    assert!(
+        pixel(150, 50).iter().take(3).all(|channel| *channel > 200)
+            || pixel(110, 35).iter().take(3).all(|channel| *channel > 200),
+        "the button itself is not covered"
     );
 }

@@ -64,6 +64,13 @@
 //! Each checkpoint also writes a [`CheckpointTaken`] message, which the
 //! cursor overlay shows as a flash and a caption.
 //!
+//! # Checks chosen by hand
+//!
+//! [`add_check`] puts a check of the person's choosing into the script where
+//! the session is now, as a `Check` step that stays whatever is ticked in the
+//! checklists. The gallery's **Pick** mode does this with a check about a
+//! node the person clicked (see [`crate::check::pick`]).
+//!
 //! # Limits
 //!
 //! Only the primary window is recorded, and nothing carrying
@@ -455,6 +462,29 @@ pub fn start(world: &mut World, name: &str) -> Result<(), SessionError> {
 pub fn checkpoint(world: &mut World) -> Result<CheckpointTaken, SessionError> {
     with_recorder(world, |world, recorder, config| {
         recorder.checkpoint(world, config, FRAME_STEP)
+    })
+}
+
+/// Puts `check` into the recording as a `Check` step at this point.
+///
+/// It goes before any input of the next update, as choosing a check in the
+/// gallery's pick mode does, and stays in the file whatever is ticked in the
+/// checklists.
+///
+/// # Errors
+///
+/// [`SessionError`] when no session is on or the plugin is not added.
+pub fn add_check(world: &mut World, check: Check) -> Result<(), SessionError> {
+    with_recorder(world, |_, recorder, _| {
+        let active = recorder
+            .active
+            .as_mut()
+            .ok_or_else(|| SessionError::new("no session is being recorded"))?;
+        active.events.push(RecordedEvent {
+            frame: frame_of(active.elapsed + FRAME_STEP),
+            kind: RecordedKind::Check(check),
+        });
+        Ok(())
     })
 }
 

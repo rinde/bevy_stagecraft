@@ -11,6 +11,7 @@ use bevy::{
 };
 
 use crate::{
+    check::Check,
     scenario::{Modifiers, Step},
     targets::Target,
 };
@@ -51,6 +52,9 @@ pub enum RecordedKind {
     /// The person took a checkpoint: the checks it suggests go here, before
     /// anything else that happened in the same frame.
     Checkpoint,
+    /// The person chose a check here, such as one picked in the gallery: it
+    /// becomes a `Check` step at this point.
+    Check(Check),
 }
 
 /// One piece of real input and the frame it happened in.
@@ -110,7 +114,9 @@ pub struct LoggedSteps {
 }
 
 /// Turns a log into steps. `end` is the frame the session stopped in.
+///
 /// Checkpoints in the log are left out; [`read_log`] says where they fall.
+/// A [`RecordedKind::Check`] becomes a `Check` step where it was chosen.
 ///
 /// * runs of moves become `Glide`s, one per vertex of the simplified path;
 /// * a press and release in place is a `Click`; a straight press, move and
@@ -175,6 +181,7 @@ pub fn read_log(events: &[RecordedEvent], end: u32, options: &StepOptions) -> Lo
             }
             RecordedKind::Key { key, state } => next = out.key(events, next - 1, *key, *state),
             RecordedKind::Checkpoint => out.checkpoint(event.frame),
+            RecordedKind::Check(check) => out.check(event.frame, check),
         }
     }
     out.flush(None);
@@ -222,6 +229,15 @@ impl Emitter {
         self.flush(None);
         self.wait_until(frame);
         self.checkpoints.push(self.steps.len());
+    }
+
+    /// The person chose `check` in recorded frame `frame`. Like a checkpoint
+    /// it ends the run of moves before it and brings the clock up to its
+    /// frame, so it sees what the person saw.
+    fn check(&mut self, frame: u32, check: &Check) {
+        self.flush(None);
+        self.wait_until(frame);
+        self.emit(Step::Check(check.clone()), 0);
     }
 
     /// Adds a step that takes `cost` frames.

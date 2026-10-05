@@ -156,7 +156,7 @@ impl NoiseFilter {
     }
 
     /// Whether the type `table` describes is left out.
-    fn ignores(&self, table: &TypePathTable) -> bool {
+    pub(super) fn ignores(&self, table: &TypePathTable) -> bool {
         let short = table.short_path();
         let ident = table.ident().unwrap_or(short);
         self.ignores_names(table.path(), short, ident)
@@ -296,7 +296,7 @@ impl WorldSnapshot {
 
 /// The name a check writes for the type `registration` describes: its short
 /// type path, or the full one where the short one names more than one type.
-fn name_of(types: &TypeRegistry, registration: &TypeRegistration) -> String {
+pub(super) fn name_of(types: &TypeRegistry, registration: &TypeRegistration) -> String {
     let table = registration.type_info().type_path_table();
     if types.is_ambiguous(table.short_path()) {
         table.path().to_owned()
@@ -307,14 +307,14 @@ fn name_of(types: &TypeRegistry, registration: &TypeRegistration) -> String {
 
 /// `value` as compact RON through reflection, the form a check's value is
 /// read back from; `None` when reflection cannot write it.
-fn ron_of(types: &TypeRegistry, value: &dyn PartialReflect) -> Option<String> {
+pub(super) fn ron_of(types: &TypeRegistry, value: &dyn PartialReflect) -> Option<String> {
     ron::to_string(&TypedReflectSerializer::new(value, types)).ok()
 }
 
 /// Adds every field of `value`, which sits at `path`, to `out`: structs and
 /// tuples are opened, anything else (numbers, text, enums, lists, maps) is
 /// one value.
-fn flatten(
+pub(super) fn flatten(
     types: &TypeRegistry,
     path: &str,
     value: &dyn PartialReflect,
@@ -448,7 +448,7 @@ fn widget_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<C
 }
 
 /// The check that the target's widget is in `state`.
-const fn widget_check(state: WidgetState, target: Target) -> Check {
+pub(super) const fn widget_check(state: WidgetState, target: Target) -> Check {
     match state {
         WidgetState::Disabled => Check::Disabled(target),
         WidgetState::Checked => Check::Checked(target),
@@ -475,7 +475,7 @@ fn fact_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Che
 }
 
 /// Whether `check` would load from a file and holds in `world` now.
-fn holds(world: &World, check: &Check) -> bool {
+pub(super) fn holds(world: &World, check: &Check) -> bool {
     let loads = world
         .get_resource::<AppTypeRegistry>()
         .is_none_or(|registry| {

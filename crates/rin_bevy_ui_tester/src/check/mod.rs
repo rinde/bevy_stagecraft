@@ -12,6 +12,7 @@
 //! with `#[reflect(AppCheck)]` (see [`AppCheck`]), written inside `App(..)`.
 
 mod app;
+pub mod pick;
 mod reflect;
 pub mod suggest;
 mod value;
