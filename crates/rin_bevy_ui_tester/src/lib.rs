@@ -39,6 +39,7 @@ pub use check::{
         subject_of, target_alternatives,
     },
     suggest::{DEFAULT_IGNORED, NoiseFilter, SnapshotChange, WorldSnapshot, suggest_checks},
+    tree_snapshot,
 };
 pub use extension::{
     AppCheckValue, AppField, AppSetup, AppSetupValue, AppTarget, AppTargetValue, AppType, AppValue,

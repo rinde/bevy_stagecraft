@@ -13,7 +13,7 @@ mod common;
 use bevy::prelude::*;
 use common::{Activations, spawn_ui};
 use rin_bevy_ui_tester::{
-    Outcome, Scenario, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport, Step, Target,
+    Check, Outcome, Scenario, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport, Step, Target,
 };
 
 /// Frames the app runs before the scenario begins, as the player's own runs do.
@@ -29,16 +29,8 @@ fn click_pause(wanted: u32) -> Scenario {
             Step::move_to(Target::text("Pause")),
             Step::click(),
             Step::wait(2),
-            Step::check("activated"),
+            Step::check(Check::resource::<Activations>(".0").eq(wanted)),
         ])
-        .check("activated", move |probe| {
-            let count = probe.resource::<Activations>().map_or(0, |a| a.0);
-            if count == wanted {
-                Ok(())
-            } else {
-                Err(format!("activated {count} times, wanted {wanted}"))
-            }
-        })
 }
 
 #[test]
@@ -96,7 +88,7 @@ fn a_failing_check_is_in_the_trace_with_its_message() {
     let checked = trace.step(3).expect("what step 3 recorded");
     let outcome = checked.checks.first().map(|c| c.outcome.clone());
     assert!(
-        matches!(outcome, Some(Outcome::Fail(ref why)) if why.contains("wanted 2")),
+        matches!(outcome, Some(Outcome::Fail(ref why)) if why.contains("expected 2")),
         "{outcome:?}"
     );
 }

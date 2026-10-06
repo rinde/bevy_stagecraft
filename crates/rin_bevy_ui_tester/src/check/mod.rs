@@ -15,6 +15,7 @@ mod app;
 pub mod pick;
 mod reflect;
 pub mod suggest;
+mod tree;
 mod value;
 mod widget;
 
@@ -66,6 +67,11 @@ use crate::{
 /// Check(InState(state: "Mode", value: Editing)),
 /// Check(Disabled(Text("Save"))),
 /// Check(TextOf(Text("Score"), StartsWith("Score: "))),
+/// Check(Tree(of: Name("Toolbar"), matches: r#"
+///     - panel:
+///       - button "Pause"
+///       - slider "Speed" [value=0.5]
+/// "#)),
 /// Check(All([Shows("Saved"), Not(Shows("Error"))])),
 /// Check(Within(30, Shows("Saved"))),
 /// ```
@@ -150,6 +156,23 @@ pub enum Check {
     /// The text the target's widget shows, which is every text node at or
     /// below it in order, joined by spaces, matches.
     TextOf(Target, TextMatch),
+    /// The UI at and below the target's node matches an expected tree. The
+    /// tree is indented lines of role, label and states, as
+    /// [`tree_snapshot`] writes it, and partial: it lists only what matters,
+    /// siblings may be left out, their order must hold. A mismatch fails
+    /// with a line diff.
+    ///
+    /// ```text
+    /// - panel:
+    ///   - button "Pause"
+    ///   - slider "Speed" [value=0.5]
+    /// ```
+    Tree {
+        /// The node whose tree is read.
+        of: Target,
+        /// The expected tree.
+        matches: String,
+    },
     /// The check inside does not hold. A check that cannot run at all, such
     /// as a name nobody defined, still fails.
     Not(Box<Self>),
@@ -219,6 +242,13 @@ enum Spelled {
     Exists(Target),
     /// See [`Check::TextOf`].
     TextOf(Target, TextMatch),
+    /// See [`Check::Tree`].
+    Tree {
+        /// See [`Check::Tree`].
+        of: Target,
+        /// See [`Check::Tree`].
+        matches: String,
+    },
     /// See [`Check::Not`].
     Not(Box<Check>),
     /// See [`Check::All`].
@@ -232,7 +262,7 @@ enum Spelled {
 /// The forms a check can take, for a check that does not parse.
 const FORMS: &str = "a check: App(..), Shows(..), Hovered(..), Count(..), Resource(..), \
     Component(..), InState(..), Disabled(..), Checked(..), Pressed(..), Focused(..), \
-    Visible(..), Exists(..), TextOf(..), Not(..), All(..), Any(..) or Within(..)";
+    Visible(..), Exists(..), TextOf(..), Tree(..), Not(..), All(..), Any(..) or Within(..)";
 
 /// What a file that refers to a check by name, as format versions 1 and 2
 /// could, is told.
@@ -559,6 +589,16 @@ impl Check {
         Self::TextOf(target, matching)
     }
 
+    /// The UI at and below the target's node matches the expected `tree`:
+    /// see [`Check::Tree`].
+    #[must_use]
+    pub fn tree(of: Target, tree: impl Into<String>) -> Self {
+        Self::Tree {
+            of,
+            matches: tree.into(),
+        }
+    }
+
     /// Every one of `checks` holds.
     #[must_use]
     pub fn all(checks: impl IntoIterator<Item = impl Into<Self>>) -> Self {
@@ -603,7 +643,8 @@ impl Check {
             | Self::Focused(target)
             | Self::Visible(target)
             | Self::Exists(target)
-            | Self::TextOf(target, _) => Some(target),
+            | Self::TextOf(target, _)
+            | Self::Tree { of: target, .. } => Some(target),
             _ => None,
         }
     }
@@ -652,6 +693,7 @@ impl Check {
                 let registration = find_type(types, state, Role::State)?;
                 reflect::read_value(types, registration, value).map(|_| ())
             }
+            Self::Tree { matches, .. } => tree::parse(matches).map(|_| ()).map_err(Problem::Other),
             _ => Ok(()),
         }
     }
@@ -778,6 +820,17 @@ impl Check {
                 } else {
                     Err(format!("{target:?} shows \"{text}\""))
                 })
+            }
+            Self::Tree { of, matches } => {
+                let node = match widget::node(world, of) {
+                    Lookup::Found(node) => node,
+                    Lookup::Missing(message) => return Ok(Err(message)),
+                    Lookup::Ambiguous(message) | Lookup::NotANode(message) => return Err(message),
+                };
+                let expected = tree::parse(matches)?;
+                Ok(expected.compare(world, node).map_err(|diff| {
+                    format!("the tree of {of:?} differs (- expected, + actual):\n{diff}")
+                }))
             }
             Self::Not(_) | Self::All(_) | Self::Any(_) | Self::Within(..) => {
                 Err("a check with checks inside it is not a leaf".into())
@@ -910,6 +963,21 @@ pub(crate) fn close_matches<'a>(
 /// order, joined by spaces, as [`Check::TextOf`] reads it.
 pub(crate) fn text_of(world: &World, entity: Entity) -> String {
     widget::text_of(world, entity)
+}
+
+/// The tree of the UI at and below the node `target` names, written as
+/// [`Check::Tree`] reads it; what pick mode offers to snapshot a node.
+///
+/// # Errors
+///
+/// Says why when `target` names no one node.
+pub fn tree_snapshot(world: &World, target: &Target) -> Result<String, String> {
+    match widget::node(world, target) {
+        Lookup::Found(node) => Ok(tree::snapshot(world, node)),
+        Lookup::Missing(message) | Lookup::Ambiguous(message) | Lookup::NotANode(message) => {
+            Err(message)
+        }
+    }
 }
 
 /// The widget `node` belongs to: the nearest widget at or above it,
@@ -1153,6 +1221,7 @@ impl fmt::Display for Check {
             Self::Visible(target) => write!(f, "{target:?} {}", WidgetState::Visible.words()),
             Self::Exists(target) => write!(f, "{target:?} {}", WidgetState::Exists.words()),
             Self::TextOf(target, matching) => write!(f, "text of {target:?} {matching}"),
+            Self::Tree { of, .. } => write!(f, "tree of {of:?} matches"),
             Self::Not(inner) => write!(f, "not: {inner}"),
             Self::All(checks) => write!(f, "all of [{}]", list(checks)),
             Self::Any(checks) => write!(f, "any of [{}]", list(checks)),
