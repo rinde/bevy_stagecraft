@@ -28,6 +28,7 @@ pub mod scenario;
 pub mod script;
 pub mod session;
 pub mod targets;
+pub mod trace;
 
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
@@ -37,7 +38,7 @@ pub use check::{
         AppCheckForm, FieldValue, Picked, PickedForm, app_check_forms, checks_that_hold, node_at,
         subject_of, target_alternatives,
     },
-    suggest::{DEFAULT_IGNORED, NoiseFilter, WorldSnapshot, suggest_checks},
+    suggest::{DEFAULT_IGNORED, NoiseFilter, SnapshotChange, WorldSnapshot, suggest_checks},
     tree_snapshot,
 };
 pub use extension::{
@@ -68,7 +69,7 @@ pub use recorder::{
     Capture, CaptureMeta, Captures, RecordError, Recorder, RecorderPlugins, RecorderSystems,
     RecorderTarget, Recording, ScenarioRecording,
 };
-pub use scenario::{CheckResult, IntoCheckResult, Modifiers, NamedCheck, Scenario, Step};
+pub use scenario::{CheckResult, Modifiers, Scenario, Step};
 pub use script::{
     ExportError, FORMAT_VERSION, LoadError, OLDEST_FORMAT_VERSION, Registry, Script, export_ron,
 };
@@ -80,3 +81,4 @@ pub use session::{
 pub use targets::{
     DEFAULT_ACTION_TIMEOUT, NotUnderTest, ResolvedTarget, Target, WidgetRole, resolve,
 };
+pub use trace::{ScenarioTrace, StepTrace, TargetTrace, TraceCheck, TracePoint, UiLine};

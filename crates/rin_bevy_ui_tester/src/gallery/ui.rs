@@ -37,9 +37,9 @@ use super::{
 };
 use crate::{
     check::{Check, pick::Picked},
-    overlay::OverlayTheme,
+    overlay::{OverlayTheme, TargetDescriptions, describe_step},
     player::{CheckKind, Outcome, ScenarioReport},
-    scenario::Step,
+    scenario::{Scenario, Step},
     targets::NotUnderTest,
 };
 
@@ -101,6 +101,8 @@ pub(super) enum Control {
     Record,
     /// A catalogue entry.
     Entry(usize),
+    /// A step of the selected entry, to jump to the start of.
+    JumpTo(usize),
     /// A check the last recording suggested at its end, in the checklist.
     Suggestion(usize),
     /// A check the last recording suggested at a checkpoint: the checkpoint
@@ -182,6 +184,7 @@ fn control_text(control: Control, state: &GalleryState) -> String {
         }
         .into(),
         Control::Entry(_)
+        | Control::JumpTo(_)
         | Control::Suggestion(_)
         | Control::CheckpointSuggestion(..)
         | Control::PickTarget(_)
@@ -216,6 +219,7 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
             }
         }
         Control::Entry(index) => GalleryAction::Select(index),
+        Control::JumpTo(step) => GalleryAction::JumpTo(step),
         Control::Suggestion(index) => GalleryAction::ToggleSuggestion(index),
         Control::CheckpointSuggestion(checkpoint, index) => {
             GalleryAction::ToggleCheckpointSuggestion { checkpoint, index }
@@ -507,7 +511,8 @@ pub(super) fn style_controls(
                     .and_then(|form| form.check.as_ref().ok())
                     .is_some_and(|check| picked.is_added(check))
             }),
-            Control::StepFrame
+            Control::JumpTo(_)
+            | Control::StepFrame
             | Control::StepStep
             | Control::Restart
             | Control::Export
@@ -651,6 +656,7 @@ pub(super) fn update_details(
     report: Res<ScenarioReport>,
     gallery: Res<Gallery>,
     theme: Res<OverlayTheme>,
+    descriptions: Option<Res<TargetDescriptions>>,
     details: Query<Entity, With<Details>>,
     mut shown: Local<Option<DetailsKey>>,
 ) {
@@ -695,6 +701,46 @@ pub(super) fn update_details(
         return;
     };
     let scenario = &entry.scenario;
+    let lines = check_lines(scenario, &report, &theme);
+    let descriptions = descriptions.as_deref().cloned().unwrap_or_default();
+    let steps = step_lines(scenario, &report, &theme, &descriptions);
+    for entity in &details {
+        commands
+            .entity(entity)
+            .despawn_children()
+            .with_children(|panel| {
+                label(panel, scenario.name(), TEXT);
+                if !entry.description.is_empty() {
+                    label(panel, entry.description.clone(), DIM);
+                }
+                if lines.is_empty() {
+                    label(panel, "No checks", DIM);
+                }
+                for (line, tint) in &lines {
+                    label(panel, line.clone(), *tint);
+                }
+                if !steps.is_empty() {
+                    label(panel, "Steps (click to play up to one and pause)", DIM);
+                }
+                for (index, (mark, words)) in steps.iter().enumerate() {
+                    panel_button(
+                        panel,
+                        Control::JumpTo(index),
+                        format!("{mark} {words}"),
+                        false,
+                    );
+                }
+            });
+    }
+}
+
+/// Each check of `scenario`, with its mark and failure message once it has
+/// run, and the colour to show it in.
+fn check_lines(
+    scenario: &Scenario,
+    report: &ScenarioReport,
+    theme: &OverlayTheme,
+) -> Vec<(String, Color)> {
     // Slots in the order the player records them: step checks as the script
     // reaches them, then the expectations.
     let step_checks = scenario.script().iter().filter_map(|step| match step {
@@ -730,23 +776,34 @@ pub(super) fn update_details(
         };
         lines.push((format!("{mark} {name}{why}"), tint));
     }
-    for entity in &details {
-        commands
-            .entity(entity)
-            .despawn_children()
-            .with_children(|panel| {
-                label(panel, scenario.name(), TEXT);
-                if !entry.description.is_empty() {
-                    label(panel, entry.description.clone(), DIM);
-                }
-                if lines.is_empty() {
-                    label(panel, "No checks", DIM);
-                }
-                for (line, tint) in &lines {
-                    label(panel, line.clone(), *tint);
-                }
-            });
-    }
+    lines
+}
+
+/// Each step of `scenario` as a mark for how it went and its number and words.
+fn step_lines(
+    scenario: &Scenario,
+    report: &ScenarioReport,
+    theme: &OverlayTheme,
+    descriptions: &TargetDescriptions,
+) -> Vec<(String, String)> {
+    scenario
+        .script()
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let mark = match report.steps.get(index).map(|record| &record.outcome) {
+                Some(Outcome::Pass) => theme.pass_mark.clone(),
+                Some(Outcome::Fail(_)) => theme.fail_mark.clone(),
+                Some(Outcome::Skipped) | None => theme.skipped_mark.clone(),
+            };
+            let words = describe_step(
+                step,
+                scenario.script().get(..index).unwrap_or(&[]),
+                descriptions,
+            );
+            (mark, format!("{}. {words}", index + 1))
+        })
+        .collect()
 }
 
 /// What a ticked candidate starts with. ASCII, as the bundled font has no

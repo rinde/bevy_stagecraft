@@ -16,7 +16,7 @@ use std::{fs, path::PathBuf};
 use bevy::{camera::RenderTarget, prelude::*};
 use common::{Activations, spawn_ui};
 use rin_bevy_ui_tester::{
-    CaptureMeta, Captures, Frame, Recorder, RecorderPlugins, Scenario, Step, Target,
+    CaptureMeta, Captures, Check, Frame, Recorder, RecorderPlugins, Scenario, Step, Target,
     overlay::{OverlayTheme, PickHighlight},
     recorder::request_capture,
 };
@@ -24,7 +24,7 @@ use rin_bevy_ui_tester::{
 /// A scenario over the plain UI that clicks "Pause" and checks it was
 /// activated, or, when `broken`, expects it twice.
 fn click_pause(name: &str, broken: bool) -> Scenario {
-    let wanted = if broken { 2 } else { 1 };
+    let wanted: u32 = if broken { 2 } else { 1 };
     Scenario::new(name)
         .window_size(320, 240)
         .setup(spawn_ui)
@@ -34,16 +34,8 @@ fn click_pause(name: &str, broken: bool) -> Scenario {
             Step::glide(Target::text("Pause"), 6),
             Step::click(),
             Step::wait(2),
-            Step::check("activated"),
+            Step::check(Check::resource::<Activations>(".0").eq(wanted)),
         ])
-        .check("activated", move |probe| {
-            let count = probe.resource::<Activations>().map_or(0, |a| a.0);
-            if count == wanted {
-                Ok(())
-            } else {
-                Err(format!("activated {count} times, wanted {wanted}"))
-            }
-        })
 }
 
 /// A fresh output directory under cargo's scratch space.
@@ -162,6 +154,49 @@ fn gpu_recording_a_plain_ui_scenario_writes_a_filmstrip_a_gif_and_an_index() {
         .find("id=\"click-the-pause-button\"")
         .expect("passed card");
     assert!(failed < passed, "failures come first");
+}
+
+#[test]
+#[ignore = "needs a GPU: run by `just test-gpu`"]
+fn gpu_a_failed_scenario_gets_a_trace_page_with_snapshots_and_pictures_per_step() {
+    let dir = output_dir("recorder-trace");
+    let recording = Recorder::new(|_app| {})
+        .every(5)
+        .grouped("Buttons", click_pause("click it twice", true))
+        .record(&dir)
+        .expect("recording works");
+
+    let folder = dir.join("click-it-twice");
+    let page = fs::read_to_string(folder.join("trace.html")).expect("a trace page");
+    for step in 0..6 {
+        assert!(page.contains(&format!("id=\"step-{step}\"")), "step {step}");
+    }
+    assert!(
+        page.contains("activated 1 times, wanted 2"),
+        "the failure is shown"
+    );
+    assert!(
+        page.contains("Activations"),
+        "the snapshot lists the resource"
+    );
+    assert!(page.contains("<img"), "the steps show pictures");
+    let trace = recording
+        .scenarios
+        .first()
+        .and_then(|scenario| scenario.trace.as_ref())
+        .expect("the recording keeps the trace");
+    // Every picture the page refers to was written next to it.
+    for point in trace.points() {
+        let name = format!("frame-{:05}.png", point.frame);
+        if page.contains(&name) {
+            assert!(folder.join(&name).exists(), "{name} is on disk");
+        }
+    }
+    let index = fs::read_to_string(&recording.index).expect("an index");
+    assert!(
+        index.contains("click-it-twice/trace.html#step-"),
+        "the failed card lists its steps"
+    );
 }
 
 #[test]

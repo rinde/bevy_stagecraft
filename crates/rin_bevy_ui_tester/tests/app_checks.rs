@@ -246,38 +246,3 @@ fn the_registry_lists_the_app_check_variants_and_their_field_types() {
     assert_eq!(between[1].short_type_path, "u32");
     assert!(found.variants[3].named_fields);
 }
-
-#[test]
-fn exporting_a_scenario_with_a_closure_check_is_an_error_naming_it() {
-    let scenario = Scenario::new("closures")
-        .step(Step::check(Check::all([
-            Check::shows("Pause"),
-            Check::named("looks right"),
-        ])))
-        .check("looks right", |_probe| true);
-    let error = scenario.to_ron().unwrap_err().to_string();
-    assert!(
-        error.contains("`looks right`") && error.contains("closure"),
-        "{error}"
-    );
-    let expected = Scenario::new("expects")
-        .expect("ends well", |_probe| true)
-        .to_ron()
-        .unwrap_err()
-        .to_string();
-    assert!(expected.contains("`ends well`"), "{expected}");
-}
-
-#[test]
-fn a_closure_label_is_never_looked_up_from_a_script() {
-    let script = Scenario::new("labels")
-        .step(Step::check("looks right"))
-        .check("looks right", |_probe| true)
-        .to_script();
-    let error = Scenario::from_script(script, &registry()).unwrap_err();
-    assert!(
-        matches!(&error, LoadError::BadCheck { used_by, message }
-            if used_by == "step 0" && message.contains("`looks right`")),
-        "{error:?}"
-    );
-}

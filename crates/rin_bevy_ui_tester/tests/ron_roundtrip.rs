@@ -94,9 +94,7 @@ fn mixed_use_adds_rust_assertions_to_a_recorded_file() {
     let text = include_str!("ron/click_pause.ron");
     let scenario = Scenario::from_ron_with(text, &registry())
         .unwrap()
-        .expect("also once", |probe| {
-            probe.resource::<Activations>().is_some_and(|c| c.0 == 1)
-        });
+        .expect_check(Check::resource::<Activations>(".0").eq(1_u32));
     assert_eq!(scenario.expects().len(), 2);
     let report = scenario.run_headless();
     assert!(report.passed(), "{:?}", report.failures());

@@ -37,7 +37,6 @@ use super::{
 };
 use crate::{
     extension::{AppCheckValue, AppField, AppVariant, Extension, app_target_at, app_type},
-    scenario::Scenario,
     targets::{Lookup, Target, WidgetRole, is_tooling, locate},
 };
 
@@ -776,11 +775,10 @@ impl Picked {
             })
             .unwrap_or_default();
         // The lock is let go first: running a check takes it again.
-        let scenario = Scenario::new("pick");
         for (picked, check) in self.forms.iter_mut().zip(built) {
             picked.holds = check
                 .as_ref()
-                .is_ok_and(|check| matches!(check.poll(world, &scenario, 0), Some(Ok(()))));
+                .is_ok_and(|check| matches!(check.poll(world, 0), Some(Ok(()))));
             picked.check = check;
         }
     }
