@@ -213,6 +213,39 @@ fn record(world: &mut World, state: &mut GalleryState) {
     }
 }
 
+/// Drops the selected entry and puts the app's state back, so what follows
+/// starts from an empty world with nothing selected.
+fn clear(world: &mut World, state: &mut GalleryState) {
+    release_held(world);
+    if let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>() {
+        player.stop();
+    }
+    if let Some(reset) = world.get_resource::<GalleryReset>().cloned() {
+        (reset.0)(world);
+    }
+    if let Some(mut input) = world.get_resource_mut::<SyntheticInput>() {
+        input.forget_cursor();
+    }
+    world.insert_resource(ScenarioReport::default());
+    state.selected = None;
+    state.phase = GalleryPhase::Idle;
+    state.playing = false;
+    state.taken_over = false;
+    state.step = None;
+    state.jump = None;
+    state.tick = 0;
+    state.setup = Ok(false);
+}
+
+/// Starts recording a new scenario, from an empty world or from the app as it
+/// is.
+fn new_recording(world: &mut World, state: &mut GalleryState, empty: bool) {
+    if empty {
+        clear(world, state);
+    }
+    record(world, state);
+}
+
 /// Stops recording, says where the file went and offers the checks it
 /// suggests.
 fn stop_recording(world: &mut World, state: &mut GalleryState) {
@@ -363,6 +396,8 @@ fn forget_for(state: &mut GalleryState, action: GalleryAction) {
             | GalleryAction::JumpTo(_)
             | GalleryAction::Restart
             | GalleryAction::Record
+            | GalleryAction::NewEmpty
+            | GalleryAction::NewFromCurrent
     ) {
         state.suggestions = None;
     }
@@ -377,6 +412,8 @@ fn forget_for(state: &mut GalleryState, action: GalleryAction) {
             | GalleryAction::TakeOver
             | GalleryAction::Resume
             | GalleryAction::Record
+            | GalleryAction::NewEmpty
+            | GalleryAction::NewFromCurrent
             | GalleryAction::StopRecording
     ) {
         state.picking = Picking::Off;
@@ -408,6 +445,8 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
                 | GalleryAction::Resume
                 | GalleryAction::TakeOver
                 | GalleryAction::Record
+                | GalleryAction::NewEmpty
+                | GalleryAction::NewFromCurrent
         )
     {
         "Stop recording first".clone_into(&mut state.status);
@@ -425,6 +464,8 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
             toggle_suggestion(state, Some(checkpoint), index);
         }
         GalleryAction::Record => record(world, state),
+        GalleryAction::NewEmpty => new_recording(world, state, true),
+        GalleryAction::NewFromCurrent => new_recording(world, state, false),
         GalleryAction::StopRecording => stop_recording(world, state),
         GalleryAction::Select(index) => select(world, state, index),
         GalleryAction::JumpTo(step) => jump_to(world, state, step),

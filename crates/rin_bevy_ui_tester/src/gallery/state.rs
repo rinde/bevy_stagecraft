@@ -92,6 +92,13 @@ pub enum GalleryAction {
     /// primary window over and log what the real mouse and keyboard do there
     /// (see [`crate::session`]).
     Record,
+    /// Start recording a new scenario from an empty world: whatever is
+    /// selected is dropped, the app's reset hook puts its state back, and
+    /// nothing is set up before the session starts.
+    NewEmpty,
+    /// Start recording a new scenario from the app as it is now, scenario or
+    /// no scenario: as [`Self::Record`], under the name of a new scenario.
+    NewFromCurrent,
     /// Stop recording, write the scenario into the export directory and
     /// show the checks it suggests as a checklist.
     StopRecording,

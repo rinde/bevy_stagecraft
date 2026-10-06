@@ -99,6 +99,10 @@ pub(super) enum Control {
     Export,
     /// Start or stop recording a session.
     Record,
+    /// Start recording a new scenario from an empty world.
+    NewEmpty,
+    /// Start recording a new scenario from the app as it is.
+    NewFromCurrent,
     /// A catalogue entry.
     Entry(usize),
     /// A step of the selected entry, to jump to the start of.
@@ -177,6 +181,8 @@ fn control_text(control: Control, state: &GalleryState) -> String {
             "Record"
         }
         .into(),
+        Control::NewEmpty => "New: empty world".into(),
+        Control::NewFromCurrent => "New: current state".into(),
         Control::Pick => if state.is_picking() {
             "Stop picking"
         } else {
@@ -218,6 +224,8 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
                 GalleryAction::Record
             }
         }
+        Control::NewEmpty => GalleryAction::NewEmpty,
+        Control::NewFromCurrent => GalleryAction::NewFromCurrent,
         Control::Entry(index) => GalleryAction::Select(index),
         Control::JumpTo(step) => GalleryAction::JumpTo(step),
         Control::Suggestion(index) => GalleryAction::ToggleSuggestion(index),
@@ -373,22 +381,7 @@ pub(super) fn spawn_window(
                 }
                 button(row, Control::Loop, &state);
             });
-            root.spawn((
-                GalleryToolbar,
-                NotUnderTest,
-                Node {
-                    flex_wrap: FlexWrap::Wrap,
-                    column_gap: px(GAP),
-                    row_gap: px(GAP),
-                    ..Node::default()
-                },
-            ))
-            .with_children(|row| {
-                button(row, Control::TakeOver, &state);
-                button(row, Control::Export, &state);
-                button(row, Control::Record, &state);
-                button(row, Control::Pick, &state);
-            });
+            toolbar(root, &state);
             root.spawn((
                 StatusLine,
                 NotUnderTest,
@@ -425,6 +418,29 @@ pub(super) fn spawn_window(
                 BackgroundColor(Color::srgb(0.07, 0.08, 0.1)),
             ));
         });
+}
+
+/// Spawns the row of toolbar buttons: take over, export, the recording
+/// starters, and pick.
+fn toolbar(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState) {
+    root.spawn((
+        GalleryToolbar,
+        NotUnderTest,
+        Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: px(GAP),
+            row_gap: px(GAP),
+            ..Node::default()
+        },
+    ))
+    .with_children(|row| {
+        button(row, Control::TakeOver, state);
+        button(row, Control::Export, state);
+        button(row, Control::Record, state);
+        button(row, Control::NewEmpty, state);
+        button(row, Control::NewFromCurrent, state);
+        button(row, Control::Pick, state);
+    });
 }
 
 /// Spawns the groups and their entries.
@@ -516,6 +532,8 @@ pub(super) fn style_controls(
             | Control::StepStep
             | Control::Restart
             | Control::Export
+            | Control::NewEmpty
+            | Control::NewFromCurrent
             | Control::FormField(..) => false,
         };
         let wanted = if on { BUTTON_ON } else { BUTTON };

@@ -29,6 +29,7 @@ use bevy::{
     ui_widgets::{Activate, Button},
     window::{CursorMoved, PrimaryWindow, WindowEvent},
 };
+use rin_bevy_ui_tester::gallery::GalleryPhase;
 use rin_bevy_ui_tester::{
     AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryRunReport,
     GalleryState, HeadlessPlugins, NoiseFilter, Probe, ReflectAppSetup, Registry, Scenario,
@@ -1331,6 +1332,107 @@ fn a_failing_capture_leaves_the_gallery_as_it_was() {
     assert!(!state.is_recording());
     assert!(state.is_playing(), "the script carries on");
     assert!(state.status().contains("no way to save this app"));
+}
+
+#[test]
+fn new_from_the_current_state_records_what_is_on_screen_and_keeps_it() {
+    let dir = fresh_dir("gallery-new-current");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Select(1));
+    run_until(&mut app, 200, finished);
+    assert_eq!(count(app.world()), 3);
+    let resets = app.world().resource::<Resets>().0;
+
+    ask(&mut app, GalleryAction::NewFromCurrent);
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_recording());
+    assert!(state.is_taken_over(), "the script lets go of the window");
+    assert_eq!(app.world().resource::<Resets>().0, resets, "no reset");
+    assert_eq!(count(app.world()), 3, "the state is kept");
+
+    ask(&mut app, GalleryAction::StopRecording);
+    let text = std::fs::read_to_string(dir.join("recording.ron")).expect("written");
+    let script = Script::from_ron(&text).expect("it reads back");
+    let Some(Setup::App(setup)) = &script.setup else {
+        panic!("the app's setup was captured: {text}");
+    };
+    assert!(
+        setup
+            .ron()
+            .is_ok_and(|ron| ron.replace(' ', "").starts_with("Counted(count:3")),
+        "{text}"
+    );
+}
+
+#[test]
+fn new_from_an_empty_world_resets_the_app_drops_the_selection_and_records_from_nothing() {
+    let dir = fresh_dir("gallery-new-empty");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Select(1));
+    run_until(&mut app, 200, finished);
+    let resets = app.world().resource::<Resets>().0;
+
+    ask(&mut app, GalleryAction::NewEmpty);
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_recording());
+    assert_eq!(state.selected(), None, "no scenario is selected");
+    assert_eq!(state.phase(), GalleryPhase::Idle);
+    assert_eq!(app.world().resource::<Resets>().0, resets + 1);
+    assert_eq!(count(app.world()), 0, "the app's state was put back");
+    let left = app
+        .world_mut()
+        .query_filtered::<Entity, With<AppRoot>>()
+        .iter(app.world())
+        .count();
+    assert_eq!(left, 0, "nothing of the old scenario is left");
+    assert!(
+        !app.world().resource::<GalleryState>().input_is_scripted(),
+        "the real mouse and keyboard have the app window"
+    );
+
+    ask(&mut app, GalleryAction::StopRecording);
+    let text = std::fs::read_to_string(dir.join("recording.ron")).expect("written");
+    let script = Script::from_ron(&text).expect("it reads back");
+    let Some(Setup::App(setup)) = &script.setup else {
+        panic!("the app's setup was captured: {text}");
+    };
+    assert!(
+        setup.ron().is_ok_and(|ron| ron
+            .replace(' ', "")
+            .starts_with("Counted(count:0,form:false")),
+        "{text}"
+    );
+}
+
+#[test]
+fn new_is_refused_while_recording_and_its_buttons_ask_for_it() {
+    let dir = fresh_dir("gallery-new-refused");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::NewEmpty);
+    let resets = app.world().resource::<Resets>().0;
+    ask(&mut app, GalleryAction::NewEmpty);
+    ask(&mut app, GalleryAction::NewFromCurrent);
+    assert_eq!(
+        app.world().resource::<Resets>().0,
+        resets,
+        "no second reset"
+    );
+    assert!(
+        app.world()
+            .resource::<GalleryState>()
+            .status()
+            .contains("Stop recording first")
+    );
+    ask(&mut app, GalleryAction::StopRecording);
+
+    let second = scenarios_window(&mut app);
+    let button = centre_of_button_with(&mut app, "New: empty world");
+    real_move(&mut app, second, button);
+    app.update();
+    app.update();
+    real_click(&mut app, second);
+    app.update();
+    assert!(app.world().resource::<GalleryState>().is_recording());
 }
 
 /// How many times the pointer went over a node of the app.

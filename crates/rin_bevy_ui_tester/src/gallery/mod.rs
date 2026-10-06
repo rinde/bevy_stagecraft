@@ -66,6 +66,12 @@
 //! which writes a `.ron` file into the export directory. Nothing in the
 //! Scenarios window is recorded, and its nodes are never named as targets.
 //!
+//! **New: empty world** ([`GalleryAction::NewEmpty`]) starts a recording of a
+//! new scenario from nothing: the selected scenario is dropped, the app's reset
+//! hook puts its state back and the session starts on what is left.
+//! **New: current state** ([`GalleryAction::NewFromCurrent`]) starts it from the
+//! app as it is, which is what **Record** does too.
+//!
 //! While recording, the checkpoint key (F8 unless the session hooks set
 //! another) takes a [checkpoint](crate::session#checkpoints): the overlay
 //! flashes and names it, and the app never sees the key.
