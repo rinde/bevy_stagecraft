@@ -19,6 +19,7 @@ use super::{
         GalleryAction, GalleryPhase, GalleryState, GalleryTab, PendingStep, Picking, Recording,
         ScenarioOutcome, Suggestions, TraceWorld,
     },
+    ui::followed_step,
 };
 use crate::{
     check::{Check, suggest::NoiseFilter},
@@ -364,7 +365,6 @@ fn forget_for(state: &mut GalleryState, action: GalleryAction) {
     // restart starts over.
     if matches!(action, GalleryAction::Select(_) | GalleryAction::Restart) {
         state.trace = None;
-        state.trace_follow = true;
         state.trace_step = None;
     }
     if matches!(
@@ -394,6 +394,42 @@ fn forget_for(state: &mut GalleryState, action: GalleryAction) {
     }
 }
 
+/// Whether the request takes the primary window back from the person or resets
+/// the app, which would spoil what is being recorded.
+const fn spoils_a_recording(action: GalleryAction) -> bool {
+    matches!(
+        action,
+        GalleryAction::Select(_)
+            | GalleryAction::JumpTo(_)
+            | GalleryAction::Restart
+            | GalleryAction::TogglePlay
+            | GalleryAction::StepFrame
+            | GalleryAction::StepStep
+            | GalleryAction::Resume
+            | GalleryAction::TakeOver
+            | GalleryAction::Record
+    )
+}
+
+/// Shows a panel of the Scenarios window.
+fn show_tab(state: &mut GalleryState, tab: GalleryTab) {
+    state.tab = tab;
+    if state.is_picking() {
+        "Stop picking to see the panel".clone_into(&mut state.status);
+    }
+}
+
+/// Pins the Trace tab to the step it shows now, or lets it follow again.
+fn toggle_trace_follow(world: &World, state: &mut GalleryState) {
+    state.trace_step = if state.trace_step.is_some() {
+        None
+    } else {
+        world
+            .get_resource::<ScenarioReport>()
+            .map(|report| followed_step(report, world.get_resource::<ScenarioPlayer>()))
+    };
+}
+
 /// Carries out one request.
 fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
     if state.is_running_all() {
@@ -404,22 +440,7 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
     let recording = world
         .get_resource::<SessionRecorder>()
         .is_some_and(SessionRecorder::is_recording);
-    // These take the primary window back from the person or reset the app,
-    // which would spoil what is being recorded.
-    if recording
-        && matches!(
-            action,
-            GalleryAction::Select(_)
-                | GalleryAction::JumpTo(_)
-                | GalleryAction::Restart
-                | GalleryAction::TogglePlay
-                | GalleryAction::StepFrame
-                | GalleryAction::StepStep
-                | GalleryAction::Resume
-                | GalleryAction::TakeOver
-                | GalleryAction::Record
-        )
-    {
+    if recording && spoils_a_recording(action) {
         "Stop recording first".clone_into(&mut state.status);
         return;
     }
@@ -440,17 +461,9 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
             state.tab = GalleryTab::Scenario;
             stop_recording(world, state);
         }
-        GalleryAction::ShowTab(tab) => {
-            state.tab = tab;
-            if state.is_picking() {
-                "Stop picking to see the panel".clone_into(&mut state.status);
-            }
-        }
-        GalleryAction::ToggleTraceFollow => state.trace_follow = !state.trace_follow,
-        GalleryAction::InspectStep(step) => {
-            state.trace_follow = false;
-            state.trace_step = Some(step);
-        }
+        GalleryAction::ShowTab(tab) => show_tab(state, tab),
+        GalleryAction::ToggleTraceFollow => toggle_trace_follow(world, state),
+        GalleryAction::InspectStep(step) => state.trace_step = Some(step),
         GalleryAction::ShowTraceWorld(shown) => state.trace_world = shown,
         GalleryAction::Select(index) => select(world, state, index),
         GalleryAction::JumpTo(step) => jump_to(world, state, step),
@@ -679,7 +692,6 @@ fn arrive(world: &mut World, state: &mut GalleryState) {
     state.step = None;
     // The step it stopped before is what the person came for; the world as
     // it found it is the one on screen.
-    state.trace_follow = false;
     state.trace_step = Some(step);
     state.trace_world = TraceWorld::Before;
     state.status = format!("Paused before step {}", step + 1);

@@ -248,10 +248,11 @@ pub fn step_title(
     ))
 }
 
-/// Everything the trace knows about one step, in one place: what it is
-/// called, how it ended, what it found, the checks it ran and the world around
-/// it. Renderers (`trace.html`, the gallery's Trace tab) show this and add
-/// only their own marks and markup.
+/// Everything the trace knows about one step, in one place.
+///
+/// That is what it is called, how it ended, what it found, the checks it ran
+/// and the world around it. Renderers (`trace.html`, the gallery's Trace tab)
+/// show this and add only their own marks and markup.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepView<'a> {
     /// The step's index, counting from 0.

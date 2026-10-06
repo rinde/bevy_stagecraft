@@ -530,9 +530,8 @@ pub struct GalleryState {
     /// ended: runs are deterministic, so it is also the trace of a run that
     /// is on its way (a jump) and is kept across one.
     pub(crate) trace: Option<ScenarioTrace>,
-    /// Whether the Trace tab follows the script.
-    pub(crate) trace_follow: bool,
-    /// The step the Trace tab shows when it is not following.
+    /// The step the Trace tab was pinned to; `None` while it follows the
+    /// script.
     pub(crate) trace_step: Option<usize>,
     /// Which world around the step the Trace tab shows.
     pub(crate) trace_world: TraceWorld,
@@ -566,7 +565,6 @@ impl GalleryState {
             run_all: None,
             tab: GalleryTab::Scenario,
             trace: None,
-            trace_follow: true,
             trace_step: None,
             trace_world: TraceWorld::After,
         }
@@ -695,11 +693,11 @@ impl GalleryState {
     /// Whether the Trace tab follows the script.
     #[must_use]
     pub const fn is_following_trace(&self) -> bool {
-        self.trace_follow
+        self.trace_step.is_none()
     }
 
-    /// The step the Trace tab was asked to show, which it shows while it is
-    /// not following.
+    /// The step the Trace tab was pinned to: the one it shows while it is not
+    /// following.
     #[must_use]
     pub const fn trace_step(&self) -> Option<usize> {
         self.trace_step

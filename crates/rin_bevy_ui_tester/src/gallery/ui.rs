@@ -41,7 +41,7 @@ use crate::{
     player::{CheckKind, Outcome, ScenarioPlayer, ScenarioReport},
     scenario::{Scenario, Step},
     targets::NotUnderTest,
-    trace::{StepView, TargetTrace, TraceCheck, step_title},
+    trace::{ScenarioTrace, StepView, TargetTrace, TraceCheck, step_title},
 };
 
 /// Default size of the Scenarios window, in logical pixels.
@@ -353,6 +353,38 @@ pub(super) fn place_scenarios_window(
     *done = true;
 }
 
+/// The play, speed and tool buttons at the top of the window.
+fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState) {
+    row(root, |row| {
+        button(row, Control::Play, state);
+        button(row, Control::StepFrame, state);
+        button(row, Control::StepStep, state);
+        button(row, Control::Restart, state);
+    });
+    row(root, |row| {
+        for speed in Speed::ALL {
+            button(row, Control::Speed(speed), state);
+        }
+        button(row, Control::Loop, state);
+    });
+    root.spawn((
+        GalleryToolbar,
+        NotUnderTest,
+        Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: px(GAP),
+            row_gap: px(GAP),
+            ..Node::default()
+        },
+    ))
+    .with_children(|row| {
+        button(row, Control::TakeOver, state);
+        button(row, Control::Export, state);
+        button(row, Control::Record, state);
+        button(row, Control::Pick, state);
+    });
+}
+
 /// Spawns the Scenarios window, its camera and everything in it.
 pub(super) fn spawn_window(
     mut commands: Commands,
@@ -394,34 +426,7 @@ pub(super) fn spawn_window(
         ))
         .with_children(|root| {
             label(root, "Scenarios", TEXT);
-            row(root, |row| {
-                button(row, Control::Play, &state);
-                button(row, Control::StepFrame, &state);
-                button(row, Control::StepStep, &state);
-                button(row, Control::Restart, &state);
-            });
-            row(root, |row| {
-                for speed in Speed::ALL {
-                    button(row, Control::Speed(speed), &state);
-                }
-                button(row, Control::Loop, &state);
-            });
-            root.spawn((
-                GalleryToolbar,
-                NotUnderTest,
-                Node {
-                    flex_wrap: FlexWrap::Wrap,
-                    column_gap: px(GAP),
-                    row_gap: px(GAP),
-                    ..Node::default()
-                },
-            ))
-            .with_children(|row| {
-                button(row, Control::TakeOver, &state);
-                button(row, Control::Export, &state);
-                button(row, Control::Record, &state);
-                button(row, Control::Pick, &state);
-            });
+            spawn_controls(root, &state);
             root.spawn((
                 StatusLine,
                 NotUnderTest,
@@ -718,30 +723,86 @@ struct TraceKey {
     found: (Vec<TargetTrace>, Vec<TraceCheck>),
 }
 
-/// The step the Trace tab shows: the one chosen last when it is not following,
-/// else the one being played, or after the run the first that failed, or the
-/// last.
+/// The step the script is at while it plays, else once it is over the first
+/// that failed, or the last.
+pub(super) fn followed_step(report: &ScenarioReport, player: Option<&ScenarioPlayer>) -> usize {
+    let last = report.steps.len().saturating_sub(1);
+    player.filter(|player| player.is_active()).map_or_else(
+        || {
+            report
+                .steps
+                .iter()
+                .position(|record| matches!(record.outcome, Outcome::Fail(_)))
+                .unwrap_or(last)
+        },
+        |player| player.steps_started().saturating_sub(1).min(last),
+    )
+}
+
+/// The step the Trace tab shows: the one it was pinned to, else the one it
+/// follows.
 fn shown_step(
     state: &GalleryState,
     report: &ScenarioReport,
     player: Option<&ScenarioPlayer>,
 ) -> Option<usize> {
     let last = report.steps.len().checked_sub(1)?;
-    if !state.is_following_trace()
-        && let Some(step) = state.trace_step()
-    {
-        return Some(step.min(last));
+    Some(
+        state
+            .trace_step()
+            .map_or_else(|| followed_step(report, player), |step| step.min(last)),
+    )
+}
+
+/// Empties every details panel and fills it again.
+fn redraw(
+    commands: &mut Commands,
+    details: &Query<(Entity, &mut Node), With<Details>>,
+    fill: impl Fn(&mut ChildSpawnerCommands<'_>),
+) {
+    for (entity, _) in details {
+        commands
+            .entity(entity)
+            .despawn_children()
+            .with_children(|panel| fill(panel));
     }
-    match player.filter(|player| player.is_active()) {
-        Some(player) => Some(player.steps_started().saturating_sub(1).min(last)),
-        None => Some(
-            report
-                .steps
-                .iter()
-                .position(|record| matches!(record.outcome, Outcome::Fail(_)))
-                .unwrap_or(last),
-        ),
+}
+
+/// What the Trace tab redraws on, for the step it shows.
+fn trace_key(
+    state: &GalleryState,
+    report: &ScenarioReport,
+    trace: Option<&ScenarioTrace>,
+    step: Option<usize>,
+) -> TraceKey {
+    TraceKey {
+        step,
+        follow: state.is_following_trace(),
+        world: state.trace_world(),
+        outcomes: report
+            .steps
+            .iter()
+            .map(|record| record.outcome.clone())
+            .collect(),
+        points: trace.map_or(0, |trace| trace.points().len()),
+        found: step
+            .and_then(|step| trace?.step(step))
+            .map(|step| (step.targets.clone(), step.checks.clone()))
+            .unwrap_or_default(),
     }
+}
+
+/// Every step's title and how it ended, for the Trace tab's list.
+fn step_titles(
+    report: &ScenarioReport,
+    descriptions: &TargetDescriptions,
+) -> Vec<(String, Outcome)> {
+    (0..report.steps.len())
+        .filter_map(|index| {
+            let title = step_title(index, &report.steps, descriptions)?;
+            Some((title, report.steps.get(index)?.outcome.clone()))
+        })
+        .collect()
 }
 
 /// Rewrites the selected entry's description and its checks, with a mark for
@@ -768,21 +829,7 @@ pub(super) fn update_details(
         .trace()
         .or_else(|| player.as_deref().and_then(ScenarioPlayer::trace));
     let step = shown_step(&state, &report, player.as_deref());
-    let trace_key = tracing_tab.then(|| TraceKey {
-        step,
-        follow: state.is_following_trace(),
-        world: state.trace_world(),
-        outcomes: report
-            .steps
-            .iter()
-            .map(|record| record.outcome.clone())
-            .collect(),
-        points: trace.map_or(0, |trace| trace.points().len()),
-        found: step
-            .and_then(|step| trace?.step(step))
-            .map(|step| (step.targets.clone(), step.checks.clone()))
-            .unwrap_or_default(),
-    });
+    let trace_key = tracing_tab.then(|| trace_key(&state, &report, trace, step));
     let key = DetailsKey {
         selected: state.selected(),
         report: (!tracing_tab).then(|| report.clone()),
@@ -797,14 +844,14 @@ pub(super) fn update_details(
         return;
     }
     *shown = Some(key);
-    let height = if tracing_tab {
+    let height = px(if tracing_tab {
         TRACE_HEIGHT
     } else {
         DETAILS_HEIGHT
-    };
+    });
     for (_, mut node) in &mut details {
-        if node.height != px(height) {
-            node.height = px(height);
+        if node.height != height {
+            node.height = height;
         }
     }
     if state.is_picking() {
@@ -813,23 +860,15 @@ pub(super) fn update_details(
         } else {
             "the expect"
         };
-        for (entity, _) in &details {
-            commands
-                .entity(entity)
-                .despawn_children()
-                .with_children(|panel| {
-                    spawn_pick_panel(panel, state.picked(), destination, &theme);
-                });
-        }
+        redraw(&mut commands, &details, |panel| {
+            spawn_pick_panel(panel, state.picked(), destination, &theme);
+        });
         return;
     }
     if let Some(suggestions) = state.suggestions() {
-        for (entity, _) in &details {
-            commands
-                .entity(entity)
-                .despawn_children()
-                .with_children(|panel| spawn_checklist(panel, suggestions));
-        }
+        redraw(&mut commands, &details, |panel| {
+            spawn_checklist(panel, suggestions);
+        });
         return;
     }
     let descriptions = descriptions.as_deref().cloned().unwrap_or_default();
@@ -837,20 +876,10 @@ pub(super) fn update_details(
         let view = step
             .zip(trace)
             .and_then(|(step, trace)| StepView::new(step, &report.steps, trace, &descriptions));
-        let titles: Vec<(String, Outcome)> = (0..report.steps.len())
-            .filter_map(|index| {
-                let title = step_title(index, &report.steps, &descriptions)?;
-                Some((title, report.steps.get(index)?.outcome.clone()))
-            })
-            .collect();
-        for (entity, _) in &details {
-            commands
-                .entity(entity)
-                .despawn_children()
-                .with_children(|panel| {
-                    spawn_trace_panel(panel, &titles, view.as_ref(), &state, &theme);
-                });
-        }
+        let titles = step_titles(&report, &descriptions);
+        redraw(&mut commands, &details, |panel| {
+            spawn_trace_panel(panel, &titles, view.as_ref(), &state, &theme);
+        });
         return;
     }
     let Some(entry) = state.selected().and_then(|index| gallery.get(index)) else {
@@ -1004,7 +1033,12 @@ fn spawn_trace_panel(
         // `style_controls` has nothing to say about which step is shown.
         panel.commands().entity(button).insert(StaticShade);
     }
-    let (point, words) = match state.trace_world() {
+    spawn_trace_tree(panel, view, state.trace_world());
+}
+
+/// The UI tree before or after the step, one indented line per node.
+fn spawn_trace_tree(panel: &mut ChildSpawnerCommands<'_>, view: &StepView<'_>, world: TraceWorld) {
+    let (point, words) = match world {
         TraceWorld::Before => (view.before, "UI before the step"),
         TraceWorld::After => (view.after, "UI after the step"),
     };
