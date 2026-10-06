@@ -471,6 +471,26 @@ failure first and failures first within each. There is no golden-image
 comparison; a failed check fails the scenario, and `any_failed()` tells the
 calling binary to exit non-zero.
 
+### The trace: what the world looked like at each step
+
+Every recorded scenario is also traced (`Recorder::with_noise_filter` chooses
+which reflected types the snapshots leave out; the default ignores `bevy_*` and
+this crate). Between steps the player takes a point in `Last`, the moment the
+recorder asks for its picture: a `WorldSnapshot` (the one suggested checks are
+made from: reflected resources, counts, UI texts, widget states), the UI tree,
+and the frame. Per step it also keeps the targets it looked up and where it
+found them, and the checks it ran. `trace.html` in each scenario's folder shows,
+per step, the failure message, the targets, the checks, the pictures before and
+after, how the snapshot changed, and the UI tree and snapshot afterwards. In
+`index.html` a failed scenario's card lists its steps, each linking to its
+section.
+
+Without the recorder the same data comes from `Scenario::run_headless_traced()`
+(or `run_in_traced(app, filter)`), which returns a `ScenarioTrace`:
+`before(k)` and `after(k)` are the points around step `k`, and
+`WorldSnapshot::changes_from` diffs two of them. A step that takes no frame (a
+check, a caption) shares its world with the step before it.
+
 `RecorderPlugins` is the render set: a headless app with the real renderer and
 `bevy_ui_render`, every camera that would render to the primary window pointed
 at an offscreen `Image` of the scenario's window size, and the synthetic
@@ -491,8 +511,8 @@ plugins. The app under test runs untouched in the primary window; a second OS
 window, **Scenarios**, with its own UI camera, holds the catalogue (grouped,
 with descriptions and each entry's last result), play and pause, step one
 frame, step to the next step, restart, speed (1/4x, 1/2x, 1x, 2x), loop on and
-off, **Take over**, **Export RON**, **Record**, **Pick**, and the live list of
-the selected scenario's checks. Space plays and pauses, Right steps a frame, Down steps to the next
+off, **Take over**, **Export RON**, **Record**, **Pick**, the live list of
+the selected scenario's checks, and its steps (see below). Space plays and pauses, Right steps a frame, Down steps to the next
 step and Left restarts, read from the Scenarios window only.
 
 ```rust,ignore
@@ -506,6 +526,14 @@ App::new()
     )
     .run();
 ```
+
+Clicking a step in the selected scenario's list jumps to it: the gallery
+restarts the scenario, plays it up to the start of that step with nothing
+stored, and pauses, so the live app can be inspected (use **Take over**, or
+play on). It plays one script frame per update however the speed is set, and
+lands on the same frame and world as a straight run reaches before that step,
+which is the point `ScenarioTrace::before` reports. A jump is refused while
+recording.
 
 Picking a scenario calls the app's reset hook, then the scenario's setup and
 view (a setup that fails is shown in the status line, and the run fails with

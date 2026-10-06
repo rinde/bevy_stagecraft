@@ -41,6 +41,14 @@
 //! plays or pauses, Right steps one frame, Down steps to the next step, Left
 //! restarts.
 //!
+//! # Jumping to a step
+//!
+//! Clicking a step in the selected scenario's list ([`GalleryAction::JumpTo`])
+//! restarts the scenario and plays it, one script frame per update, up to the
+//! start of that step, where it pauses. Nothing is stored: the world is the
+//! one a straight run has before the step, on the same frame
+//! ([`crate::ScenarioTrace::before`]), so the live app can be inspected there.
+//!
 //! # Running everything
 //!
 //! [`GalleryPlugin::with_run_all`] plays the whole catalogue once, front to
