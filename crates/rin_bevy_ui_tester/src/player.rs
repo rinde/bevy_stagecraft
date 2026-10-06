@@ -488,7 +488,7 @@ impl ScenarioPlayer {
                     waited,
                 } => {
                     let name = check.to_string();
-                    let Some(result) = check.poll(world, &run.scenario, waited) else {
+                    let Some(result) = check.poll(world, waited) else {
                         // Not yet: look again after one more frame.
                         run.ops.push_front(Op::Check {
                             step,
@@ -759,12 +759,10 @@ impl Running {
             *outcome = if self.aborted {
                 Some(Outcome::Skipped)
             } else {
-                expect
-                    .poll(world, &self.scenario, waited)
-                    .map(|result| match result {
-                        Ok(()) => Outcome::Pass,
-                        Err(message) => Outcome::Fail(message),
-                    })
+                expect.poll(world, waited).map(|result| match result {
+                    Ok(()) => Outcome::Pass,
+                    Err(message) => Outcome::Fail(message),
+                })
             };
         }
         if outcomes.iter().any(Option::is_none) {

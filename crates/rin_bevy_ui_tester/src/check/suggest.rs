@@ -49,7 +49,6 @@ use super::{
 use crate::{
     extension::AppCheckValue,
     probe::Probe,
-    scenario::Scenario,
     targets::{Target, is_tooling},
 };
 
@@ -487,11 +486,7 @@ pub(super) fn holds(world: &World, check: &Check) -> bool {
             })
         });
     // The lock is let go first: running the check takes it again.
-    loads
-        && matches!(
-            check.poll(world, &Scenario::new("suggest"), 0),
-            Some(Ok(()))
-        )
+    loads && matches!(check.poll(world, 0), Some(Ok(())))
 }
 
 #[cfg(test)]

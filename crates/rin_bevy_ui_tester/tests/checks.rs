@@ -79,20 +79,6 @@ fn hovered_fails_for_a_bare_position_even_inside_not() {
 }
 
 #[test]
-fn not_fails_on_a_check_nobody_defined_rather_than_passing() {
-    let report = Scenario::new("undefined")
-        .setup(spawn_ui)
-        .step(Step::check(!Check::named("nope")))
-        .run_headless();
-    assert_eq!(
-        step_outcomes(&report),
-        [Outcome::Fail(
-            "the scenario defines no check named `nope`".into()
-        )]
-    );
-}
-
-#[test]
 fn not_fails_when_the_check_inside_holds_and_says_which() {
     let report = Scenario::new("negated")
         .setup(spawn_ui)
@@ -160,7 +146,7 @@ fn expectations_run_at_the_end_in_order_and_are_named_in_words() {
     let report = Scenario::new("expectations")
         .setup(spawn_ui)
         .expect_check(Check::shows("Pause"))
-        .expect("never", |_probe| false)
+        .expect_check(Check::shows("Never shown"))
         .expect_check(Check::resource::<Activations>(".0").eq(0_u32))
         .run_headless();
     let checks: Vec<_> = report
@@ -172,7 +158,7 @@ fn expectations_run_at_the_end_in_order_and_are_named_in_words() {
         checks,
         [
             (CheckKind::Expect, "\"Pause\" is shown", true),
-            (CheckKind::Expect, "never", false),
+            (CheckKind::Expect, "\"Never shown\" is shown", false),
             (CheckKind::Expect, "`Activations.0` is 0", true),
         ]
     );

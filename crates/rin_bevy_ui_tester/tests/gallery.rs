@@ -193,9 +193,7 @@ fn restart_the_app_button() -> Scenario {
     Scenario::new("restart button")
         .setup(spawn_app)
         .steps([Step::glide(Target::text("Restart"), 5), Step::click()])
-        .expect("clicked once", |probe| {
-            probe.resource::<Count>().is_some_and(|count| count.0 == 1)
-        })
+        .expect_check(Check::resource::<Count>(".0").eq(1_u32))
 }
 
 /// A catalogue of three scenarios.
@@ -1617,9 +1615,7 @@ fn never_satisfied() -> Scenario {
     Scenario::new("never satisfied")
         .setup(spawn_app)
         .window_size(640, 480)
-        .expect("a count of 99", |probe| {
-            probe.resource::<Count>().is_some_and(|count| count.0 == 99)
-        })
+        .expect_check(Check::resource::<Count>(".0").eq(99_u32))
 }
 
 /// The exit the app asked for during the last update, if any.
@@ -1671,7 +1667,7 @@ fn running_everything_goes_on_after_a_failure_and_reports_every_one() {
     assert!(summary.starts_with("1 of 3 scenarios passed"), "{summary}");
     assert!(summary.contains("PASS add 2"), "{summary}");
     assert!(summary.contains("FAIL never satisfied"), "{summary}");
-    assert!(summary.contains("a count of 99"), "{summary}");
+    assert!(summary.contains("`Count.0` is 0, expected 99"), "{summary}");
 }
 
 #[test]

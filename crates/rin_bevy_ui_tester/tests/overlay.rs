@@ -16,8 +16,8 @@ use bevy::{
     ui_widgets::{Activate, Button},
 };
 use rin_bevy_ui_tester::{
-    AppTarget, HeadlessPlugins, Probe, ReflectAppTarget, ResolvedTarget, Scenario, Step, Target,
-    TargetDescriptions, describe_step,
+    AppCheck, AppTarget, Check, CheckResult, HeadlessPlugins, Probe, ReflectAppCheck,
+    ReflectAppTarget, ResolvedTarget, Scenario, Step, Target, TargetDescriptions, describe_step,
     overlay::{
         CursorOverlayPlugin, OverlayCamera, OverlayCaptionStrip, OverlayChecksText, OverlayCursor,
         OverlayHeld, OverlayRing, OverlayRoot, OverlayStepText, OverlayTheme, OverlayTrailDot,
@@ -25,8 +25,41 @@ use rin_bevy_ui_tester::{
 };
 
 /// How many times the button was activated.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 struct Activations(u32);
+
+/// This test's own checks, over the overlay.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq)]
+#[reflect(AppCheck)]
+enum OverlayCheck {
+    /// The overlay exists and took none of the picking hits.
+    NotHovered,
+    /// Never holds.
+    Never,
+}
+
+impl AppCheck for OverlayCheck {
+    fn run(&self, probe: &Probe<'_>) -> CheckResult {
+        match self {
+            Self::NotHovered => {
+                let overlay = overlay_entities(probe.world());
+                if overlay.is_empty() {
+                    return Err("the overlay should exist".to_owned());
+                }
+                let hovered = probe.hovered();
+                if hovered.is_empty() {
+                    return Err("the button should be hovered".to_owned());
+                }
+                if hovered.iter().any(|entity| overlay.contains(entity)) {
+                    return Err("the overlay took a picking hit".to_owned());
+                }
+                Ok(())
+            }
+            Self::Never => Err("always fails".to_owned()),
+        }
+    }
+}
 
 /// Spawns a camera and a "Pause" button.
 fn spawn_ui(world: &mut World) {
@@ -105,37 +138,13 @@ fn the_overlay_cursor_follows_the_scripted_pointer() {
 
 #[test]
 fn the_overlay_takes_no_picking_hits_and_clicks_reach_the_app() {
-    let scenario = Scenario::new("no hits")
-        .setup(spawn_ui)
-        .steps([
-            Step::move_to(Target::text("Pause")),
-            Step::click(),
-            Step::wait(1),
-            Step::check("overlay is not hovered"),
-            Step::check("activated"),
-        ])
-        .check("overlay is not hovered", |probe: &Probe| {
-            let overlay = overlay_entities(probe.world());
-            if overlay.is_empty() {
-                return Err("the overlay should exist".to_owned());
-            }
-            let hovered = probe.hovered();
-            if hovered.is_empty() {
-                return Err("the button should be hovered".to_owned());
-            }
-            if hovered.iter().any(|entity| overlay.contains(entity)) {
-                return Err("the overlay took a picking hit".to_owned());
-            }
-            Ok(())
-        })
-        .check("activated", |probe| {
-            let count = probe.resource::<Activations>().map_or(0, |a| a.0);
-            if count == 1 {
-                Ok(())
-            } else {
-                Err(format!("activated {count} times"))
-            }
-        });
+    let scenario = Scenario::new("no hits").setup(spawn_ui).steps([
+        Step::move_to(Target::text("Pause")),
+        Step::click(),
+        Step::wait(1),
+        Step::check(Check::app(OverlayCheck::NotHovered)),
+        Step::check(Check::resource::<Activations>(".0").eq(1_u32)),
+    ]);
     let report = scenario.run_in(&mut overlay_app());
     assert!(report.passed(), "{:?}", report.failures());
 }
@@ -196,13 +205,9 @@ fn the_caption_strip_names_the_step_and_marks_each_check() {
         .steps([
             Step::move_to(Target::text("Pause")),
             Step::click(),
-            Step::check("activated"),
-            Step::check("never"),
+            Step::check(Check::resource::<Activations>(".0").eq(1_u32)),
+            Step::check(Check::app(OverlayCheck::Never)),
         ])
-        .check("activated", |probe| {
-            probe.resource::<Activations>().is_some_and(|a| a.0 == 1)
-        })
-        .check("never", |_: &Probe| Err("always fails".to_owned()))
         .run_in(&mut app);
     assert!(!report.passed());
     app.update();
@@ -213,14 +218,14 @@ fn the_caption_strip_names_the_step_and_marks_each_check() {
         .map(|text| text.0.clone())
         .next()
         .expect("a step line");
-    assert_eq!(step, "Check: never", "the last step that ran");
+    assert_eq!(step, "Check: Never", "the last step that ran");
     let checks = world
         .query_filtered::<&Text, With<OverlayChecksText>>()
         .iter(world)
         .map(|text| text.0.clone())
         .next()
         .expect("a checks line");
-    assert_eq!(checks, "PASS activated  FAIL never");
+    assert_eq!(checks, "PASS `Activations.0` is 1  FAIL Never");
 }
 
 #[test]

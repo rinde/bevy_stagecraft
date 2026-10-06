@@ -66,11 +66,11 @@ A `Check` is one of:
 - the built-in checks on plain Bevy data below, such as
   `Check::resource::<Score>(".0").eq(3)`;
 - `!check`: the check does not hold. A check that cannot run at all, such as
-  a name nobody defined, still fails;
-- a label (`Check::named`, or just a `&str`) for a closure defined on the
-  scenario with `Scenario::check` or `Scenario::expect`. The label is never
-  looked up from a file, and exporting a scenario that uses one is an error
-  naming it.
+  a type nobody defined, still fails.
+
+Every check is data: there are no check closures, so every scenario can be
+written to a file, recorded over and shown in the gallery with its checks. A
+check only your app can make is a variant of its own `AppCheck` enum.
 
 ### The app's own checks
 
@@ -417,7 +417,7 @@ lines, look at the lines before the one reported.
 
 ```rust,ignore
 let scenario = Scenario::from_ron_with(include_str!("x.ron"), &registry)?
-    .expect("also true in Rust", |probe| probe.has_text("1"));
+    .expect_check(Check::shows("1"));
 ```
 
 `scenario.to_ron()` / `export_ron(&script)` write pretty RON. A test target

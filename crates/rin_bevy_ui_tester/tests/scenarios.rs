@@ -14,12 +14,14 @@ use bevy::{
     ui_widgets::{Activate, Button},
 };
 use rin_bevy_ui_tester::{
-    AppTarget, AppTargetValue, HeadlessPlugins, Modifiers, Outcome, ReflectAppTarget,
-    ResolvedTarget, Scenario, ScenarioPlayerPlugin, ScenarioReport, Step, Target,
+    AppCheck, AppTarget, AppTargetValue, Check, CheckResult, HeadlessPlugins, Modifiers, Outcome,
+    Probe, ReflectAppCheck, ReflectAppTarget, ResolvedTarget, Scenario, ScenarioPlayerPlugin,
+    ScenarioReport, Step, Target,
 };
 
 /// How many times a button was activated.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 struct Activations(u32);
 
 /// Total distance dragged over the drag pad.
@@ -64,6 +66,58 @@ fn spawn_ui(world: &mut World) {
         });
 }
 
+/// This app's own checks over the pad, the cursor and the keyboard.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+#[reflect(AppCheck)]
+enum PadCheck {
+    /// The window's cursor is at this position.
+    CursorAt(Vec2),
+    /// The pad was dragged this far to the right and not up or down.
+    DraggedRight(f32),
+    /// Control and A are both held.
+    ShortcutHeld,
+}
+
+impl AppCheck for PadCheck {
+    fn run(&self, probe: &Probe<'_>) -> CheckResult {
+        match self {
+            Self::CursorAt(wanted) => {
+                let found = probe.world().try_query::<&Window>().and_then(|query| {
+                    query
+                        .iter_manual(probe.world())
+                        .next()
+                        .and_then(Window::cursor_position)
+                });
+                match found {
+                    Some(at) if at.distance(*wanted) < 0.01 => Ok(()),
+                    Some(at) => Err(format!("the cursor is at {at}, not {wanted}")),
+                    None => Err("the cursor is outside the window".to_owned()),
+                }
+            }
+            Self::DraggedRight(wanted) => {
+                let total = probe.resource::<Dragged>().map_or(Vec2::ZERO, |d| d.0);
+                if (total.x - wanted).abs() < 1.0 && total.y.abs() < 1.0 {
+                    Ok(())
+                } else {
+                    Err(format!("dragged {total}"))
+                }
+            }
+            Self::ShortcutHeld => {
+                let held = probe
+                    .resource::<ButtonInput<KeyCode>>()
+                    .is_some_and(|keys| {
+                        keys.pressed(KeyCode::ControlLeft) && keys.pressed(KeyCode::KeyA)
+                    });
+                if held {
+                    Ok(())
+                } else {
+                    Err("Control and A are not both held".to_owned())
+                }
+            }
+        }
+    }
+}
+
 /// Covers the button with a named panel.
 fn spawn_cover(world: &mut World) {
     world.spawn((
@@ -83,31 +137,33 @@ fn spawn_cover(world: &mut World) {
 
 /// A scenario over the plain UI that clicks "Pause".
 fn click_pause() -> Scenario {
-    Scenario::new("click pause")
-        .setup(spawn_ui)
-        .steps([
-            Step::move_to(Target::text("Pause")),
-            Step::click(),
-            Step::wait(1),
-            Step::check("activated once"),
-        ])
-        .check("activated once", |probe| {
-            let count = probe.resource::<Activations>().map_or(0, |a| a.0);
-            if count == 1 {
-                Ok(())
-            } else {
-                Err(format!("activated {count} times"))
-            }
-        })
+    Scenario::new("click pause").setup(spawn_ui).steps([
+        Step::move_to(Target::text("Pause")),
+        Step::click(),
+        Step::wait(1),
+        Step::check(activated_once()),
+    ])
+}
+
+/// The button was activated exactly once.
+fn activated_once() -> Check {
+    Check::resource::<Activations>(".0").eq(1_u32)
+}
+
+#[test]
+fn a_scenario_with_checks_writes_out_and_reads_back_the_same() {
+    let scenario = click_pause()
+        .expect_check(activated_once())
+        .expect_check(Check::app(PadCheck::DraggedRight(200.0)))
+        .expect_check(!Check::app(PadCheck::ShortcutHeld));
+    let text = scenario.to_ron().expect("every check is data");
+    let read = Scenario::from_ron(&text).expect("the file reads back");
+    assert_eq!(read.to_script(), scenario.to_script());
 }
 
 #[test]
 fn clicking_a_button_by_its_text_activates_it() {
-    let report = click_pause()
-        .expect("still once at the end", |probe| {
-            probe.resource::<Activations>().is_some_and(|a| a.0 == 1)
-        })
-        .run_headless();
+    let report = click_pause().expect_check(activated_once()).run_headless();
     assert!(report.passed(), "{:?}", report.failures());
     assert_eq!(
         report.checks.len(),
@@ -170,19 +226,8 @@ fn a_glide_ends_on_its_target() {
         .setup(spawn_ui)
         .steps([
             Step::glide(Target::screen(Vec2::new(600.0, 600.0)), 10),
-            Step::check("arrived"),
+            Step::check(Check::app(PadCheck::CursorAt(Vec2::new(600.0, 600.0)))),
         ])
-        .check("arrived", |probe| {
-            probe
-                .world()
-                .try_query::<&Window>()
-                .and_then(|q| {
-                    q.iter_manual(probe.world())
-                        .next()
-                        .and_then(Window::cursor_position)
-                })
-                .is_some_and(|p| p.distance(Vec2::new(600.0, 600.0)) < 0.01)
-        })
         .run_headless();
     assert!(report.passed(), "{:?}", report.failures());
 }
@@ -214,14 +259,7 @@ fn dragging_across_a_pad_reports_the_distance() {
             ),
             Step::wait(1),
         ])
-        .expect("dragged 200 pixels right", |probe| {
-            let total = probe.resource::<Dragged>().map_or(Vec2::ZERO, |d| d.0);
-            if (total.x - 200.0).abs() < 1.0 && total.y.abs() < 1.0 {
-                Ok(())
-            } else {
-                Err(format!("dragged {total}"))
-            }
-        })
+        .expect_check(Check::app(PadCheck::DraggedRight(200.0)))
         .run_headless();
     assert!(report.passed(), "{:?}", report.failures());
 }
@@ -256,9 +294,7 @@ fn the_apps_own_targets_resolve_with_no_registration_call() {
             Step::click(),
             Step::wait(1),
         ])
-        .expect("button activated", |probe| {
-            probe.resource::<Activations>().is_some_and(|a| a.0 == 1)
-        })
+        .expect_check(activated_once())
         .run_in(&mut app);
     assert!(report.passed(), "{:?}", report.failures());
 
@@ -282,9 +318,7 @@ fn an_app_target_written_as_ron_in_rust_is_read_as_the_apps_type_when_it_is_used
             Step::click(),
             Step::wait(1),
         ])
-        .expect("button activated", |probe| {
-            probe.resource::<Activations>().is_some_and(|a| a.0 == 1)
-        })
+        .expect_check(activated_once())
         .run_headless();
     assert!(report.passed(), "{:?}", report.failures());
 
@@ -300,11 +334,7 @@ fn an_app_target_written_as_ron_in_rust_is_read_as_the_apps_type_when_it_is_used
 
 #[test]
 fn key_steps_hold_modifiers_until_released() {
-    let held = |probe: &rin_bevy_ui_tester::Probe<'_>| {
-        probe
-            .resource::<ButtonInput<KeyCode>>()
-            .is_some_and(|keys| keys.pressed(KeyCode::ControlLeft) && keys.pressed(KeyCode::KeyA))
-    };
+    let held = || Check::app(PadCheck::ShortcutHeld);
     let report = Scenario::new("keys")
         .setup(spawn_ui)
         .steps([
@@ -312,29 +342,26 @@ fn key_steps_hold_modifiers_until_released() {
                 key: KeyCode::KeyA,
                 modifiers: Modifiers::CTRL,
             },
-            Step::check("held"),
+            Step::check(held()),
             Step::KeyUp {
                 key: KeyCode::KeyA,
                 modifiers: Modifiers::CTRL,
             },
             Step::wait(1),
-            Step::check("released"),
+            Step::check(!held()),
         ])
-        .check("held", held)
-        .check("released", move |probe| !held(probe))
         .run_headless();
     assert!(report.passed(), "{:?}", report.failures());
 }
 
 #[test]
-fn captions_and_unknown_checks_are_reported() {
+fn captions_are_reported() {
     let report = Scenario::new("meta")
         .setup(spawn_ui)
-        .steps([Step::caption("hello"), Step::check("ghost")])
+        .steps([Step::caption("hello"), Step::wait(1)])
         .run_headless();
     assert_eq!(report.caption.as_deref(), Some("hello"));
-    assert!(!report.passed());
-    assert!(report.failures()[0].contains("no check named `ghost`"));
+    assert!(report.passed(), "{:?}", report.failures());
 }
 
 #[test]

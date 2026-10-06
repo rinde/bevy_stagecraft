@@ -67,7 +67,7 @@ pub use recorder::{
     Capture, CaptureMeta, Captures, RecordError, Recorder, RecorderPlugins, RecorderSystems,
     RecorderTarget, Recording, ScenarioRecording,
 };
-pub use scenario::{CheckResult, IntoCheckResult, Modifiers, NamedCheck, Scenario, Step};
+pub use scenario::{CheckResult, Modifiers, Scenario, Step};
 pub use script::{
     ExportError, FORMAT_VERSION, LoadError, OLDEST_FORMAT_VERSION, Registry, Script, export_ron,
 };
