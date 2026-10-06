@@ -1,0 +1,19 @@
+#![enable(implicit_some)]
+(
+    format_version: 3,
+    name: "tree snapshot",
+    window_size: (800, 600),
+    setup: App(PlainUi),
+    steps: [
+        Check(Tree(of: Role(role: Button, label: "Pause"), matches: "- button \"Pause\"")),
+        Glide(target: Text("Pause"), frames: 10),
+        Click(Left),
+        Wait(1),
+        Check(Not(Tree(of: Role(role: Button, label: "Pause"), matches: "- button \"Play\""))),
+    ],
+    expect: [
+        Tree(of: Role(role: Button, label: "Pause"), matches: r#"
+            - button "Pause"
+        "#),
+    ],
+)

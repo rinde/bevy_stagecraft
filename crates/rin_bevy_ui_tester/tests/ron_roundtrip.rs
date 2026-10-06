@@ -276,6 +276,7 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
             "app_target",
             "click_pause",
             "reflected_checks",
+            "tree_snapshot",
             "typed_checks"
         ]
     );
