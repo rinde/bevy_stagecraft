@@ -8,6 +8,7 @@ use bevy::ecs::resource::Resource;
 use crate::{
     check::{Check, pick::Picked},
     session::{SavedSession, SessionError},
+    trace::ScenarioTrace,
 };
 
 /// How fast the script plays.
@@ -51,6 +52,54 @@ impl Speed {
             Self::Half => u8::from(tick.is_multiple_of(2)),
             Self::Normal => 1,
             Self::Double => 2,
+        }
+    }
+}
+
+/// Which panel of the Scenarios window shows the selected entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum GalleryTab {
+    /// Its description, its checks and its steps.
+    #[default]
+    Scenario,
+    /// What the run did step by step: see [`crate::trace`].
+    Trace,
+}
+
+impl GalleryTab {
+    /// Every tab, in the order of the tab bar.
+    pub const ALL: [Self; 2] = [Self::Scenario, Self::Trace];
+
+    /// How the tab reads on its button.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Scenario => "Scenario",
+            Self::Trace => "Trace",
+        }
+    }
+}
+
+/// Which of the two worlds around a step the Trace tab shows the UI of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum TraceWorld {
+    /// As the step found it.
+    Before,
+    /// As the step left it.
+    #[default]
+    After,
+}
+
+impl TraceWorld {
+    /// Both, in the order of their buttons.
+    pub const ALL: [Self; 2] = [Self::Before, Self::After];
+
+    /// How the world reads on its button.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Before => "Before",
+            Self::After => "After",
         }
     }
 }
@@ -129,6 +178,16 @@ pub enum GalleryAction {
     /// Take the check app check form `n` makes, as [`Self::AddPickedCheck`]
     /// does.
     AddFormCheck(usize),
+    /// Show this tab of the Scenarios window's panel.
+    ShowTab(GalleryTab),
+    /// Turn following on or off in the Trace tab: on, it shows the step being
+    /// played (or, once the run is over, the first that failed); off, the step
+    /// last chosen.
+    ToggleTraceFollow,
+    /// Show this step (counting from 0) in the Trace tab, and stop following.
+    InspectStep(usize),
+    /// Show the UI before or after the step in the Trace tab.
+    ShowTraceWorld(TraceWorld),
 }
 
 /// What the gallery is in the middle of.
@@ -465,6 +524,18 @@ pub struct GalleryState {
     /// Set while the whole catalogue is being played once, front to back: what
     /// has finished so far. The next entry is the one after the last of them.
     pub(crate) run_all: Option<GalleryRunReport>,
+    /// The Scenarios window's panel being shown.
+    pub(crate) tab: GalleryTab,
+    /// The trace of the selected entry's last complete run, taken when it
+    /// ended: runs are deterministic, so it is also the trace of a run that
+    /// is on its way (a jump) and is kept across one.
+    pub(crate) trace: Option<ScenarioTrace>,
+    /// Whether the Trace tab follows the script.
+    pub(crate) trace_follow: bool,
+    /// The step the Trace tab shows when it is not following.
+    pub(crate) trace_step: Option<usize>,
+    /// Which world around the step the Trace tab shows.
+    pub(crate) trace_world: TraceWorld,
 }
 
 impl GalleryState {
@@ -493,6 +564,11 @@ impl GalleryState {
             revision: 0,
             setup: Ok(false),
             run_all: None,
+            tab: GalleryTab::Scenario,
+            trace: None,
+            trace_follow: true,
+            trace_step: None,
+            trace_world: TraceWorld::After,
         }
     }
 
@@ -601,6 +677,38 @@ impl GalleryState {
     #[must_use]
     pub const fn picked(&self) -> Option<&Picked> {
         self.picked.as_ref()
+    }
+
+    /// The panel of the Scenarios window being shown.
+    #[must_use]
+    pub const fn tab(&self) -> GalleryTab {
+        self.tab
+    }
+
+    /// The trace of the selected entry's last complete run, if the gallery has
+    /// seen one end.
+    #[must_use]
+    pub const fn trace(&self) -> Option<&ScenarioTrace> {
+        self.trace.as_ref()
+    }
+
+    /// Whether the Trace tab follows the script.
+    #[must_use]
+    pub const fn is_following_trace(&self) -> bool {
+        self.trace_follow
+    }
+
+    /// The step the Trace tab was asked to show, which it shows while it is
+    /// not following.
+    #[must_use]
+    pub const fn trace_step(&self) -> Option<usize> {
+        self.trace_step
+    }
+
+    /// Which world around the step the Trace tab shows.
+    #[must_use]
+    pub const fn trace_world(&self) -> TraceWorld {
+        self.trace_world
     }
 
     /// Whether the script, not the real mouse and keyboard, has the primary

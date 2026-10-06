@@ -6,11 +6,10 @@ use std::path::Path;
 use crate::{
     capture::{FilmstripCell, Frame, Mark, encode_gif, filmstrip},
     check::suggest::SnapshotChange,
-    overlay::{TargetDescriptions, describe_step},
+    overlay::TargetDescriptions,
     player::{CheckKind, Outcome, StepRecord},
     recorder::{Capture, RecordError, ScenarioRecording, create_dir, write_file},
-    scenario::Step,
-    trace::{ScenarioTrace, TracePoint},
+    trace::{ScenarioTrace, StepView, TracePoint, step_title},
 };
 
 /// Width of a thumbnail in a filmstrip, in pixels.
@@ -173,17 +172,8 @@ fn card(out: &mut String, scenario: &ScenarioRecording) {
 }
 
 /// What a step is called in a list: its number and its words.
-fn step_title(index: usize, record: &StepRecord, steps: &[StepRecord]) -> String {
-    let before: Vec<Step> = steps
-        .iter()
-        .take(index)
-        .map(|earlier| earlier.step.clone())
-        .collect();
-    format!(
-        "{}. {}",
-        index + 1,
-        describe_step(&record.step, &before, &TargetDescriptions::default())
-    )
+fn title(index: usize, steps: &[StepRecord]) -> String {
+    step_title(index, steps, &TargetDescriptions::default()).unwrap_or_default()
 }
 
 /// The mark and class a step's outcome is shown with.
@@ -203,7 +193,7 @@ fn card_steps(out: &mut String, scenario: &ScenarioRecording, slug: &str) {
         let _ = write!(
             out,
             "<li class=\"{class}\"><a href=\"{slug}/{TRACE_FILE}#step-{index}\">{mark} {}</a></li>",
-            escape(&step_title(index, record, &scenario.report.steps))
+            escape(&title(index, &scenario.report.steps))
         );
     }
     out.push_str("</ol>");
@@ -246,8 +236,11 @@ pub fn trace_html(recording: &ScenarioRecording, trace: &ScenarioTrace, frames: 
         );
     }
     let steps = &recording.report.steps;
-    for (index, record) in steps.iter().enumerate() {
-        step_section(&mut out, index, record, steps, trace, frames);
+    let descriptions = TargetDescriptions::default();
+    for index in 0..steps.len() {
+        if let Some(view) = StepView::new(index, steps, trace, &descriptions) {
+            step_section(&mut out, &view, frames);
+        }
     }
     end_section(&mut out, recording, trace);
     out.push_str("</body></html>\n");
@@ -255,72 +248,60 @@ pub fn trace_html(recording: &ScenarioRecording, trace: &ScenarioTrace, frames: 
 }
 
 /// One step's `<details>`; a step that failed is open.
-fn step_section(
-    out: &mut String,
-    index: usize,
-    record: &StepRecord,
-    steps: &[StepRecord],
-    trace: &ScenarioTrace,
-    frames: &[u32],
-) {
-    let (mark, class) = outcome_mark(&record.outcome);
-    let open = if matches!(record.outcome, Outcome::Fail(_)) {
+fn step_section(out: &mut String, view: &StepView<'_>, frames: &[u32]) {
+    let (mark, class) = outcome_mark(&view.outcome);
+    let open = if view.failure().is_some() {
         " open"
     } else {
         ""
     };
     let _ = write!(
         out,
-        "<details id=\"step-{index}\" class=\"{class}\"{open}><summary>{mark} {}</summary>",
-        escape(&step_title(index, record, steps))
+        "<details id=\"step-{}\" class=\"{class}\"{open}><summary>{mark} {}</summary>",
+        view.index,
+        escape(&view.title)
     );
-    if let Outcome::Fail(message) = &record.outcome {
+    if let Some(message) = view.failure() {
         let _ = write!(out, "<p class=\"fail\">{}</p>", escape(message));
     }
-    if matches!(record.outcome, Outcome::Skipped) {
+    if !view.ran() {
         out.push_str("<p>Never ran, because an earlier step failed.</p></details>");
         return;
     }
-    let (before, after) = (trace.before(index), trace.after(index));
-    if let Some(step) = trace.step(index) {
-        if !step.targets.is_empty() {
-            out.push_str("<h4>Targets</h4><ul>");
-            for target in &step.targets {
-                let (class, text) = match &target.found {
-                    Ok(found) => ("pass", found),
-                    Err(why) => ("fail", why),
-                };
-                let _ = write!(
-                    out,
-                    "<li class=\"{class}\">{} \u{2192} {}</li>",
-                    escape(&target.target),
-                    escape(text)
-                );
-            }
-            out.push_str("</ul>");
+    if !view.targets.is_empty() {
+        out.push_str("<h4>Targets</h4><ul>");
+        for target in view.targets {
+            let class = if target.is_found() { "pass" } else { "fail" };
+            let _ = write!(
+                out,
+                "<li class=\"{class}\">{} \u{2192} {}</li>",
+                escape(&target.target),
+                escape(target.answer())
+            );
         }
-        if !step.checks.is_empty() {
-            out.push_str("<h4>Checks</h4><ul>");
-            for check in &step.checks {
-                let (mark, class) = outcome_mark(&check.outcome);
-                let why = match &check.outcome {
-                    Outcome::Fail(message) => format!(": {}", escape(message)),
-                    _ => String::new(),
-                };
-                let _ = write!(
-                    out,
-                    "<li class=\"{class}\">{mark} {}{why}</li>",
-                    escape(&check.name)
-                );
-            }
-            out.push_str("</ul>");
+        out.push_str("</ul>");
+    }
+    if !view.checks.is_empty() {
+        out.push_str("<h4>Checks</h4><ul>");
+        for check in view.checks {
+            let (mark, class) = outcome_mark(&check.outcome);
+            let why = match check.failure() {
+                "" => String::new(),
+                message => format!(": {}", escape(message)),
+            };
+            let _ = write!(
+                out,
+                "<li class=\"{class}\">{mark} {}{why}</li>",
+                escape(&check.name)
+            );
         }
+        out.push_str("</ul>");
     }
-    pictures(out, before, after, frames);
-    if let (Some(before), Some(after)) = (before, after) {
-        changes(out, &after.snapshot.changes_from(&before.snapshot));
+    pictures(out, view.before, view.after, frames);
+    if view.before.is_some() && view.after.is_some() {
+        changes(out, &view.changes);
     }
-    if let Some(after) = after {
+    if let Some(after) = view.after {
         point(out, "After the step", after);
     }
     out.push_str("</details>");
@@ -498,7 +479,7 @@ pub fn index_html(scenarios: &[ScenarioRecording]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::player::ScenarioReport;
+    use crate::{Step, player::ScenarioReport};
 
     /// A recording with a finished report that passed or not.
     fn recording(name: &str, group: &str, passed: bool) -> ScenarioRecording {

@@ -33,14 +33,15 @@ use super::{
     Gallery, GalleryAction, GalleryState, Speed,
     input::{ScenariosScroll, scenarios_pointer},
     pick::spelled,
-    state::{GalleryPhase, Suggestions},
+    state::{GalleryPhase, GalleryTab, Suggestions, TraceWorld},
 };
 use crate::{
-    check::{Check, pick::Picked},
+    check::{Check, pick::Picked, suggest::SnapshotChange},
     overlay::{OverlayTheme, TargetDescriptions, describe_step},
-    player::{CheckKind, Outcome, ScenarioReport},
+    player::{CheckKind, Outcome, ScenarioPlayer, ScenarioReport},
     scenario::{Scenario, Step},
     targets::NotUnderTest,
+    trace::{StepView, TargetTrace, TraceCheck, step_title},
 };
 
 /// Default size of the Scenarios window, in logical pixels.
@@ -53,6 +54,10 @@ const PADDING: f32 = 6.0;
 const GAP: f32 = 6.0;
 /// Height of the panel with the selected scenario's checks, in logical pixels.
 const DETAILS_HEIGHT: f32 = 220.0;
+/// Height of the same panel on the Trace tab, which has more to say.
+const TRACE_HEIGHT: f32 = 440.0;
+/// Indent of a UI tree line per level of depth.
+const TREE_INDENT: &str = "  ";
 
 /// Background of the window.
 const BACKGROUND: Color = Color::srgb(0.1, 0.11, 0.14);
@@ -118,7 +123,20 @@ pub(super) enum Control {
     FormCheck(usize),
     /// Steps a form's field: the form, the field, and up rather than down.
     FormField(usize, usize, bool),
+    /// A tab of the panel under the catalogue.
+    Tab(GalleryTab),
+    /// Whether the Trace tab follows the script.
+    TraceFollow,
+    /// Which world around the step the Trace tab shows.
+    TraceWorld(TraceWorld),
+    /// A step to show in the Trace tab.
+    InspectStep(usize),
 }
+
+/// Marks a button whose shade is decided where it is spawned, not by
+/// [`style_controls`], because what it stands for is not in the state.
+#[derive(Component, Debug, Clone, Copy)]
+pub(super) struct StaticShade;
 
 /// Text that shows a control's current wording.
 #[derive(Component, Debug, Clone, Copy)]
@@ -183,7 +201,18 @@ fn control_text(control: Control, state: &GalleryState) -> String {
             "Pick"
         }
         .into(),
+        Control::Tab(tab) => tab.label().into(),
+        Control::TraceFollow => format!(
+            "Follow: {}",
+            if state.is_following_trace() {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        Control::TraceWorld(world) => world.label().into(),
         Control::Entry(_)
+        | Control::InspectStep(_)
         | Control::JumpTo(_)
         | Control::Suggestion(_)
         | Control::CheckpointSuggestion(..)
@@ -229,6 +258,10 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
         Control::PickCheck(index) => GalleryAction::AddPickedCheck(index),
         Control::FormCheck(index) => GalleryAction::AddFormCheck(index),
         Control::FormField(form, field, up) => GalleryAction::StepFormField { form, field, up },
+        Control::Tab(tab) => GalleryAction::ShowTab(tab),
+        Control::TraceFollow => GalleryAction::ToggleTraceFollow,
+        Control::TraceWorld(world) => GalleryAction::ShowTraceWorld(world),
+        Control::InspectStep(step) => GalleryAction::InspectStep(step),
     }
 }
 
@@ -410,6 +443,11 @@ pub(super) fn spawn_window(
                 },
             ))
             .with_children(|list| spawn_catalogue(list, &gallery));
+            row(root, |row| {
+                for tab in GalleryTab::ALL {
+                    button(row, Control::Tab(tab), &state);
+                }
+            });
             root.spawn((
                 Details,
                 NotUnderTest,
@@ -478,7 +516,7 @@ fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
 /// Shades the buttons whose state is on.
 pub(super) fn style_controls(
     state: Res<GalleryState>,
-    mut buttons: Query<(&Control, &mut BackgroundColor)>,
+    mut buttons: Query<(&Control, &mut BackgroundColor), Without<StaticShade>>,
 ) {
     for (control, mut colour) in &mut buttons {
         let on = match control {
@@ -495,6 +533,9 @@ pub(super) fn style_controls(
                 .suggestions()
                 .is_some_and(|suggestions| suggestions.is_checkpoint_ticked(*checkpoint, *index)),
             Control::Pick => state.is_picking(),
+            Control::Tab(tab) => state.tab() == *tab,
+            Control::TraceFollow => state.is_following_trace(),
+            Control::TraceWorld(world) => state.trace_world() == *world,
             Control::PickTarget(index) => state
                 .picked()
                 .is_some_and(|picked| picked.chosen() == *index),
@@ -511,7 +552,8 @@ pub(super) fn style_controls(
                     .and_then(|form| form.check.as_ref().ok())
                     .is_some_and(|check| picked.is_added(check))
             }),
-            Control::JumpTo(_)
+            Control::InspectStep(_)
+            | Control::JumpTo(_)
             | Control::StepFrame
             | Control::StepStep
             | Control::Restart
@@ -635,21 +677,78 @@ pub(super) fn scroll_catalogue(
 }
 
 /// What the details panel shows: the selection, its report, the checklist
-/// of a recording, pick mode and what it picked, and the scenarios'
-/// revision.
-type DetailsKey = (
-    Option<usize>,
-    ScenarioReport,
-    Option<Suggestions>,
-    bool,
-    Option<Picked>,
-    u32,
-);
+/// of a recording, pick mode and what it picked, the scenarios' revision, the
+/// tab, and on the Trace tab what it shows.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct DetailsKey {
+    /// The selected entry.
+    selected: Option<usize>,
+    /// The report, where the panel shows it. Not on the Trace tab, which
+    /// would be redrawn every frame by the frame count alone.
+    report: Option<ScenarioReport>,
+    /// The checklist of the last recording.
+    suggestions: Option<Suggestions>,
+    /// Whether pick mode is on.
+    picking: bool,
+    /// What it picked.
+    picked: Option<Picked>,
+    /// Changes to the scenarios themselves.
+    revision: u32,
+    /// The tab.
+    tab: GalleryTab,
+    /// What the Trace tab shows, while it is the panel on screen.
+    trace: Option<TraceKey>,
+}
+
+/// What the Trace tab shows, cheap enough to compare every frame.
+#[derive(Debug, Clone, PartialEq)]
+struct TraceKey {
+    /// The step shown.
+    step: Option<usize>,
+    /// Whether it follows the script.
+    follow: bool,
+    /// The world shown around the step.
+    world: TraceWorld,
+    /// How each step went, for the list.
+    outcomes: Vec<Outcome>,
+    /// How many points the trace has taken, which grows while it is live.
+    points: usize,
+    /// What the shown step looked up and checked, which a waiting step keeps
+    /// changing.
+    found: (Vec<TargetTrace>, Vec<TraceCheck>),
+}
+
+/// The step the Trace tab shows: the one chosen last when it is not following,
+/// else the one being played, or after the run the first that failed, or the
+/// last.
+fn shown_step(
+    state: &GalleryState,
+    report: &ScenarioReport,
+    player: Option<&ScenarioPlayer>,
+) -> Option<usize> {
+    let last = report.steps.len().checked_sub(1)?;
+    if !state.is_following_trace()
+        && let Some(step) = state.trace_step()
+    {
+        return Some(step.min(last));
+    }
+    match player.filter(|player| player.is_active()) {
+        Some(player) => Some(player.steps_started().saturating_sub(1).min(last)),
+        None => Some(
+            report
+                .steps
+                .iter()
+                .position(|record| matches!(record.outcome, Outcome::Fail(_)))
+                .unwrap_or(last),
+        ),
+    }
+}
 
 /// Rewrites the selected entry's description and its checks, with a mark for
 /// each: the checks the scenario names, in the order they run, with those not
 /// reached yet shown as such. After a recording it shows the checks the
-/// recording suggests instead, as a checklist.
+/// recording suggests instead, as a checklist. On the Trace tab it shows the
+/// trace of the run instead.
 pub(super) fn update_details(
     mut commands: Commands,
     state: Res<GalleryState>,
@@ -657,28 +756,64 @@ pub(super) fn update_details(
     gallery: Res<Gallery>,
     theme: Res<OverlayTheme>,
     descriptions: Option<Res<TargetDescriptions>>,
-    details: Query<Entity, With<Details>>,
+    player: Option<Res<ScenarioPlayer>>,
+    mut details: Query<(Entity, &mut Node), With<Details>>,
     mut shown: Local<Option<DetailsKey>>,
 ) {
-    let key = (
-        state.selected(),
-        report.clone(),
-        state.suggestions().cloned(),
-        state.is_picking(),
-        state.picked().cloned(),
-        state.revision,
-    );
+    let tracing_tab =
+        state.tab() == GalleryTab::Trace && !state.is_picking() && state.suggestions().is_none();
+    // A finished run's trace is the whole one; until there is one, the
+    // player's own, which grows as the script plays.
+    let trace = state
+        .trace()
+        .or_else(|| player.as_deref().and_then(ScenarioPlayer::trace));
+    let step = shown_step(&state, &report, player.as_deref());
+    let trace_key = tracing_tab.then(|| TraceKey {
+        step,
+        follow: state.is_following_trace(),
+        world: state.trace_world(),
+        outcomes: report
+            .steps
+            .iter()
+            .map(|record| record.outcome.clone())
+            .collect(),
+        points: trace.map_or(0, |trace| trace.points().len()),
+        found: step
+            .and_then(|step| trace?.step(step))
+            .map(|step| (step.targets.clone(), step.checks.clone()))
+            .unwrap_or_default(),
+    });
+    let key = DetailsKey {
+        selected: state.selected(),
+        report: (!tracing_tab).then(|| report.clone()),
+        suggestions: state.suggestions().cloned(),
+        picking: state.is_picking(),
+        picked: state.picked().cloned(),
+        revision: state.revision,
+        tab: state.tab(),
+        trace: trace_key,
+    };
     if shown.as_ref() == Some(&key) {
         return;
     }
     *shown = Some(key);
+    let height = if tracing_tab {
+        TRACE_HEIGHT
+    } else {
+        DETAILS_HEIGHT
+    };
+    for (_, mut node) in &mut details {
+        if node.height != px(height) {
+            node.height = px(height);
+        }
+    }
     if state.is_picking() {
         let destination = if state.is_recording() {
             "the recording, here"
         } else {
             "the expect"
         };
-        for entity in &details {
+        for (entity, _) in &details {
             commands
                 .entity(entity)
                 .despawn_children()
@@ -689,11 +824,32 @@ pub(super) fn update_details(
         return;
     }
     if let Some(suggestions) = state.suggestions() {
-        for entity in &details {
+        for (entity, _) in &details {
             commands
                 .entity(entity)
                 .despawn_children()
                 .with_children(|panel| spawn_checklist(panel, suggestions));
+        }
+        return;
+    }
+    let descriptions = descriptions.as_deref().cloned().unwrap_or_default();
+    if tracing_tab {
+        let view = step
+            .zip(trace)
+            .and_then(|(step, trace)| StepView::new(step, &report.steps, trace, &descriptions));
+        let titles: Vec<(String, Outcome)> = (0..report.steps.len())
+            .filter_map(|index| {
+                let title = step_title(index, &report.steps, &descriptions)?;
+                Some((title, report.steps.get(index)?.outcome.clone()))
+            })
+            .collect();
+        for (entity, _) in &details {
+            commands
+                .entity(entity)
+                .despawn_children()
+                .with_children(|panel| {
+                    spawn_trace_panel(panel, &titles, view.as_ref(), &state, &theme);
+                });
         }
         return;
     }
@@ -702,9 +858,8 @@ pub(super) fn update_details(
     };
     let scenario = &entry.scenario;
     let lines = check_lines(scenario, &report, &theme);
-    let descriptions = descriptions.as_deref().cloned().unwrap_or_default();
     let steps = step_lines(scenario, &report, &theme, &descriptions);
-    for entity in &details {
+    for (entity, _) in &details {
         commands
             .entity(entity)
             .despawn_children()
@@ -732,6 +887,155 @@ pub(super) fn update_details(
                 }
             });
     }
+}
+
+/// The mark and the colour a step or check that ended as `outcome` is shown
+/// in.
+fn outcome_mark(outcome: &Outcome, theme: &OverlayTheme) -> (String, Color) {
+    match outcome {
+        Outcome::Pass => (theme.pass_mark.clone(), theme.pass_text),
+        Outcome::Fail(_) => (theme.fail_mark.clone(), theme.fail_text),
+        Outcome::Skipped => (theme.skipped_mark.clone(), DIM),
+    }
+}
+
+/// How many snapshot changes the Trace tab lists before it says how many more
+/// there are.
+const MAX_CHANGES: usize = 30;
+
+/// How many UI tree lines the Trace tab lists before it says how many more
+/// there are: a real app's tree has hundreds, and each is an entity.
+const MAX_TREE_LINES: usize = 150;
+
+/// The Trace tab: the step shown with how it went, what it looked up and
+/// checked, what it changed, the list of steps to choose from, and the UI
+/// around it.
+fn spawn_trace_panel(
+    panel: &mut ChildSpawnerCommands<'_>,
+    titles: &[(String, Outcome)],
+    view: Option<&StepView<'_>>,
+    state: &GalleryState,
+    theme: &OverlayTheme,
+) {
+    let Some(view) = view else {
+        let words = if state.selected().is_none() {
+            "Pick a scenario to trace it"
+        } else {
+            "No trace yet: it fills in as the script plays"
+        };
+        label(panel, words, DIM);
+        return;
+    };
+    row(panel, |row| {
+        panel_button(
+            row,
+            Control::TraceFollow,
+            control_text(Control::TraceFollow, state),
+            state.is_following_trace(),
+        );
+        for world in TraceWorld::ALL {
+            panel_button(
+                row,
+                Control::TraceWorld(world),
+                control_text(Control::TraceWorld(world), state),
+                state.trace_world() == world,
+            );
+        }
+        panel_button(
+            row,
+            Control::JumpTo(view.index),
+            "Jump to the start of it",
+            false,
+        );
+    });
+    let (mark, tint) = outcome_mark(&view.outcome, theme);
+    label(panel, format!("{mark} {}", view.title), tint);
+    if let Some(why) = view.failure() {
+        label(panel, why, theme.fail_text);
+    }
+    if !view.ran() {
+        label(panel, "Never ran", DIM);
+    }
+    for target in view.targets {
+        let tint = if target.is_found() {
+            TEXT
+        } else {
+            theme.fail_text
+        };
+        label(
+            panel,
+            format!("target {}: {}", target.target, target.answer()),
+            tint,
+        );
+    }
+    for check in view.checks {
+        let (mark, tint) = outcome_mark(&check.outcome, theme);
+        let why = match check.failure() {
+            "" => String::new(),
+            message => format!(": {message}"),
+        };
+        label(panel, format!("{mark} {}{why}", check.name), tint);
+    }
+    if view.changes.is_empty() {
+        label(panel, "Changed nothing in the world's state", DIM);
+    } else {
+        label(panel, "Changed", DIM);
+    }
+    for change in view.changes.iter().take(MAX_CHANGES) {
+        label(panel, change_text(change), TEXT);
+    }
+    if let Some(more) = view
+        .changes
+        .len()
+        .checked_sub(MAX_CHANGES)
+        .filter(|more| *more > 0)
+    {
+        label(panel, format!("... and {more} more"), DIM);
+    }
+    label(panel, "Steps (click to look at one)", DIM);
+    for (index, (title, outcome)) in titles.iter().enumerate() {
+        let (mark, _) = outcome_mark(outcome, theme);
+        let button = panel_button(
+            panel,
+            Control::InspectStep(index),
+            format!("{mark} {title}"),
+            index == view.index,
+        );
+        // `style_controls` has nothing to say about which step is shown.
+        panel.commands().entity(button).insert(StaticShade);
+    }
+    let (point, words) = match state.trace_world() {
+        TraceWorld::Before => (view.before, "UI before the step"),
+        TraceWorld::After => (view.after, "UI after the step"),
+    };
+    let Some(point) = point else {
+        label(panel, "The step has not finished yet", DIM);
+        return;
+    };
+    label(panel, format!("{words} (frame {})", point.frame), DIM);
+    for line in point.ui.iter().take(MAX_TREE_LINES) {
+        let indent = TREE_INDENT.repeat(line.depth);
+        label(panel, format!("{indent}{}", line.describe()), TEXT);
+    }
+    if let Some(more) = point
+        .ui
+        .len()
+        .checked_sub(MAX_TREE_LINES)
+        .filter(|more| *more > 0)
+    {
+        label(panel, format!("... and {more} more"), DIM);
+    }
+}
+
+/// One change to the world's state in a line: what it was and what it became.
+fn change_text(change: &SnapshotChange) -> String {
+    let words = |value: &Option<String>| value.clone().unwrap_or_else(|| "(none)".into());
+    format!(
+        "{}: {} -> {}",
+        change.key,
+        words(&change.before),
+        words(&change.after)
+    )
 }
 
 /// Each check of `scenario`, with its mark and failure message once it has
@@ -791,11 +1095,11 @@ fn step_lines(
         .iter()
         .enumerate()
         .map(|(index, step)| {
-            let mark = match report.steps.get(index).map(|record| &record.outcome) {
-                Some(Outcome::Pass) => theme.pass_mark.clone(),
-                Some(Outcome::Fail(_)) => theme.fail_mark.clone(),
-                Some(Outcome::Skipped) | None => theme.skipped_mark.clone(),
-            };
+            let outcome = report
+                .steps
+                .get(index)
+                .map_or(&Outcome::Skipped, |record| &record.outcome);
+            let (mark, _) = outcome_mark(outcome, theme);
             let words = describe_step(
                 step,
                 scenario.script().get(..index).unwrap_or(&[]),
@@ -888,13 +1192,13 @@ const TO_ADD: &str = "[+]";
 const ADDED: &str = "[added]";
 
 /// A button in the details panel that asks for `control`'s action, with
-/// `text` on it.
+/// `text` on it. Returns the button.
 fn panel_button(
     parent: &mut ChildSpawnerCommands<'_>,
     control: Control,
     text: impl Into<String>,
     on: bool,
-) {
+) -> Entity {
     parent
         .spawn((
             control,
@@ -916,7 +1220,8 @@ fn panel_button(
         )
         .with_children(|button| {
             label(button, text, TEXT);
-        });
+        })
+        .id()
 }
 
 /// The pick panel: how to pick, or the picked node's targets, the checks that

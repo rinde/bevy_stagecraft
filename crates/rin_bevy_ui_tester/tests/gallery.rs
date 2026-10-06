@@ -31,8 +31,9 @@ use bevy::{
 };
 use rin_bevy_ui_tester::{
     AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryRunReport,
-    GalleryState, HeadlessPlugins, NoiseFilter, Probe, ReflectAppSetup, Registry, Scenario,
-    ScenariosCamera, ScenariosWindow, Script, Speed, Step, Target, WidgetRole,
+    GalleryState, GalleryTab, HeadlessPlugins, NoiseFilter, Outcome, Probe, ReflectAppSetup,
+    Registry, Scenario, ScenarioPlayer, ScenariosCamera, ScenariosWindow, Script, Speed, Step,
+    Target, TraceWorld, WidgetRole,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
@@ -1785,4 +1786,181 @@ fn a_jump_is_refused_while_recording() {
     let state = app.world().resource::<GalleryState>();
     assert!(state.is_recording(), "the recording went on");
     assert_eq!(state.jumping_to(), None);
+}
+
+/// Every text on screen, in no particular order.
+fn texts(app: &mut App) -> Vec<String> {
+    app.world_mut()
+        .query::<&Text>()
+        .iter(app.world())
+        .map(|text| text.0.clone())
+        .collect()
+}
+
+/// Whether some text on screen is exactly `wanted`.
+fn shows(app: &mut App, wanted: &str) -> bool {
+    texts(app).iter().any(|text| text == wanted)
+}
+
+/// Selects the first entry and shows its trace, as the person would.
+fn on_the_trace_tab(app: &mut App) {
+    ask(app, GalleryAction::Select(0));
+    ask(app, GalleryAction::ShowTab(GalleryTab::Trace));
+}
+
+#[test]
+fn the_trace_tab_says_there_is_nothing_to_trace_before_a_scenario_is_picked() {
+    let mut app = gallery_app();
+    ask(&mut app, GalleryAction::ShowTab(GalleryTab::Trace));
+    assert!(shows(&mut app, "Pick a scenario to trace it"));
+}
+
+#[test]
+fn the_trace_tab_follows_the_step_the_script_is_at_while_it_plays() {
+    let mut app = gallery_app();
+    on_the_trace_tab(&mut app);
+    ask(&mut app, GalleryAction::ShowTraceWorld(TraceWorld::Before));
+    assert!(app.world().resource::<GalleryState>().is_following_trace());
+    run_until(&mut app, 500, |world| frames(world) >= 14);
+    ask(&mut app, GalleryAction::TogglePlay);
+    app.update();
+    let player = app.world().resource::<ScenarioPlayer>();
+    let step = player
+        .steps_started()
+        .checked_sub(1)
+        .expect("a step has started");
+    assert!(step >= 1, "the script is past its first step");
+    let frame = player
+        .trace()
+        .and_then(|trace| trace.before(step))
+        .expect("the step has a point before it")
+        .frame;
+    assert!(
+        shows(&mut app, &format!("UI before the step (frame {frame})")),
+        "{:?}",
+        texts(&mut app)
+    );
+}
+
+#[test]
+fn the_trace_tab_shows_the_first_failing_step_once_the_run_is_over() {
+    let failing = Scenario::new("fails in the middle")
+        .setup(spawn_app)
+        .window_size(640, 480)
+        .steps([
+            Step::wait(2),
+            Step::check(Check::resource::<Count>(".0").eq(99_u32)),
+            Step::wait(2),
+        ]);
+    let mut app = app_with(
+        GalleryPlugin::new(Gallery::new().group("All", [failing]))
+            .with_reset(reset_app)
+            .with_loop_pause(2),
+    );
+    on_the_trace_tab(&mut app);
+    ask(&mut app, GalleryAction::ToggleLoop);
+    run_until(&mut app, 500, finished);
+    app.update();
+    let report = app.world().resource::<ScenarioReport>();
+    let why = report
+        .steps
+        .iter()
+        .find_map(|record| match &record.outcome {
+            Outcome::Fail(why) => Some(why.clone()),
+            Outcome::Pass | Outcome::Skipped => None,
+        })
+        .expect("a step failed");
+    let all = texts(&mut app);
+    assert!(all.iter().any(|text| text == &why), "{all:?}");
+    assert!(
+        all.iter().any(|text| text.starts_with("FAIL 2.")),
+        "the failing step is titled with its mark: {all:?}"
+    );
+}
+
+#[test]
+fn a_jump_keeps_the_trace_and_looks_at_the_step_jumped_to() {
+    let mut app = gallery_app();
+    on_the_trace_tab(&mut app);
+    ask(&mut app, GalleryAction::ToggleLoop);
+    run_until(&mut app, 500, finished);
+    assert!(app.world().resource::<GalleryState>().trace().is_some());
+    ask(&mut app, GalleryAction::JumpTo(3));
+    run_until(&mut app, 500, |world| {
+        let state = world.resource::<GalleryState>();
+        state.jumping_to().is_none() && !state.is_playing()
+    });
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.trace().is_some(), "the trace of the run is kept");
+    assert_eq!(state.trace_step(), Some(3));
+    assert!(!state.is_following_trace());
+    assert_eq!(state.trace_world(), TraceWorld::Before);
+}
+
+#[test]
+fn the_trace_tab_redraws_when_the_step_or_the_world_looked_at_changes() {
+    let mut app = gallery_app();
+    on_the_trace_tab(&mut app);
+    ask(&mut app, GalleryAction::ToggleLoop);
+    run_until(&mut app, 500, finished);
+    app.update();
+    ask(&mut app, GalleryAction::InspectStep(1));
+    ask(&mut app, GalleryAction::ShowTraceWorld(TraceWorld::After));
+    let after = app
+        .world()
+        .resource::<GalleryState>()
+        .trace()
+        .and_then(|trace| trace.after(1))
+        .expect("the step finished")
+        .frame;
+    assert!(shows(
+        &mut app,
+        &format!("UI after the step (frame {after})")
+    ));
+    ask(&mut app, GalleryAction::ShowTraceWorld(TraceWorld::Before));
+    let before = app
+        .world()
+        .resource::<GalleryState>()
+        .trace()
+        .and_then(|trace| trace.before(1))
+        .expect("the step has a point before it")
+        .frame;
+    assert!(shows(
+        &mut app,
+        &format!("UI before the step (frame {before})")
+    ));
+    assert!(!shows(
+        &mut app,
+        &format!("UI after the step (frame {after})")
+    ));
+}
+
+#[test]
+fn the_tabs_swap_the_step_list_between_playing_up_to_a_step_and_looking_at_one() {
+    let mut app = gallery_app();
+    on_the_trace_tab(&mut app);
+    assert!(shows(&mut app, "Steps (click to look at one)"));
+    ask(&mut app, GalleryAction::ShowTab(GalleryTab::Scenario));
+    assert!(shows(&mut app, "Steps (click to play up to one and pause)"));
+    assert!(!shows(&mut app, "Steps (click to look at one)"));
+    ask(&mut app, GalleryAction::ShowTab(GalleryTab::Trace));
+    assert!(shows(&mut app, "Steps (click to look at one)"));
+}
+
+#[test]
+fn selecting_another_entry_forgets_the_trace() {
+    let mut app = gallery_app();
+    on_the_trace_tab(&mut app);
+    ask(&mut app, GalleryAction::ToggleLoop);
+    run_until(&mut app, 500, finished);
+    assert!(app.world().resource::<GalleryState>().trace().is_some());
+    ask(&mut app, GalleryAction::Select(1));
+    assert!(app.world().resource::<GalleryState>().trace().is_none());
+}
+
+#[test]
+fn running_everything_traces_nothing() {
+    let (app, _) = run_all([adds(2)]);
+    assert!(app.world().resource::<GalleryState>().trace().is_none());
+    assert!(app.world().resource::<ScenarioPlayer>().trace().is_none());
 }

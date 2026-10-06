@@ -16,12 +16,12 @@ use super::{
     catalogue::Gallery,
     pick::spelled,
     state::{
-        GalleryAction, GalleryPhase, GalleryState, PendingStep, Picking, Recording,
-        ScenarioOutcome, Suggestions,
+        GalleryAction, GalleryPhase, GalleryState, GalleryTab, PendingStep, Picking, Recording,
+        ScenarioOutcome, Suggestions, TraceWorld,
     },
 };
 use crate::{
-    check::Check,
+    check::{Check, suggest::NoiseFilter},
     input::SyntheticInput,
     player::{ScenarioPlayer, ScenarioReport, advance_world},
     session::{self, DEFAULT_CHECKPOINT_KEY, SessionConfig, SessionRecorder},
@@ -70,6 +70,9 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     release_held(world);
     if let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>() {
         player.stop();
+        // What the run before kept belongs to a run that is over: the next
+        // one starts its own, and until then nothing should show this one.
+        drop(player.take_trace());
     }
     if let Some(reset) = world.get_resource::<GalleryReset>().cloned() {
         (reset.0)(world);
@@ -357,6 +360,13 @@ fn apply_pick(world: &mut World, state: &mut GalleryState, action: GalleryAction
 /// recording it came from, and what is picked to the state on screen, which
 /// playing on, resetting or starting and stopping a recording moves on from.
 fn forget_for(state: &mut GalleryState, action: GalleryAction) {
+    // A jump replays the same run, so the trace stays; a new selection or a
+    // restart starts over.
+    if matches!(action, GalleryAction::Select(_) | GalleryAction::Restart) {
+        state.trace = None;
+        state.trace_follow = true;
+        state.trace_step = None;
+    }
     if matches!(
         action,
         GalleryAction::Select(_)
@@ -425,7 +435,23 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
             toggle_suggestion(state, Some(checkpoint), index);
         }
         GalleryAction::Record => record(world, state),
-        GalleryAction::StopRecording => stop_recording(world, state),
+        GalleryAction::StopRecording => {
+            // The checklist is on the Scenario tab.
+            state.tab = GalleryTab::Scenario;
+            stop_recording(world, state);
+        }
+        GalleryAction::ShowTab(tab) => {
+            state.tab = tab;
+            if state.is_picking() {
+                "Stop picking to see the panel".clone_into(&mut state.status);
+            }
+        }
+        GalleryAction::ToggleTraceFollow => state.trace_follow = !state.trace_follow,
+        GalleryAction::InspectStep(step) => {
+            state.trace_follow = false;
+            state.trace_step = Some(step);
+        }
+        GalleryAction::ShowTraceWorld(shown) => state.trace_world = shown,
         GalleryAction::Select(index) => select(world, state, index),
         GalleryAction::JumpTo(step) => jump_to(world, state, step),
         GalleryAction::Restart => {
@@ -547,6 +573,11 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
                 (scenario, world.get_resource_mut::<ScenarioPlayer>())
             {
                 player.pause_before(state.jump);
+                // Not for a run of everything, which keeps nothing but its
+                // outcomes.
+                if !state.is_running_all() {
+                    player.enable_trace(NoiseFilter::default());
+                }
                 player.start_after_setup(scenario, state.setup.clone());
             }
             state.phase = GalleryPhase::Running;
@@ -619,6 +650,13 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
         }
         state.step = None;
         state.jump = None;
+        if let Some(trace) = world
+            .get_resource_mut::<ScenarioPlayer>()
+            .and_then(|mut player| player.take_trace())
+        {
+            state.trace = Some(trace);
+            state.revision = state.revision.wrapping_add(1);
+        }
         if state.is_running_all() {
             record_outcome(world, state);
             run_next(world, state);
@@ -639,6 +677,11 @@ fn arrive(world: &mut World, state: &mut GalleryState) {
     }
     state.playing = false;
     state.step = None;
+    // The step it stopped before is what the person came for; the world as
+    // it found it is the one on screen.
+    state.trace_follow = false;
+    state.trace_step = Some(step);
+    state.trace_world = TraceWorld::Before;
     state.status = format!("Paused before step {}", step + 1);
 }
 
