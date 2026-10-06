@@ -1939,6 +1939,10 @@ fn the_trace_tab_redraws_when_the_step_or_the_world_looked_at_changes() {
 fn the_tabs_swap_the_step_list_between_playing_up_to_a_step_and_looking_at_one() {
     let mut app = gallery_app();
     on_the_trace_tab(&mut app);
+    // The Trace tab has nothing to list until the script has played a while.
+    run_until(&mut app, 500, |world| frames(world) >= 14);
+    ask(&mut app, GalleryAction::TogglePlay);
+    app.update();
     assert!(shows(&mut app, "Steps (click to look at one)"));
     ask(&mut app, GalleryAction::ShowTab(GalleryTab::Scenario));
     assert!(shows(&mut app, "Steps (click to play up to one and pause)"));
