@@ -45,7 +45,7 @@ use crate::{
 };
 
 /// Default size of the Scenarios window, in logical pixels.
-pub const SCENARIOS_WINDOW_SIZE: (u32, u32) = (460, 760);
+pub const SCENARIOS_WINDOW_SIZE: (u32, u32) = (460, 800);
 /// Font size of the Scenarios window's text, in logical pixels.
 const FONT_SIZE: f32 = 15.0;
 /// Padding inside buttons and around panels, in logical pixels.
@@ -104,6 +104,10 @@ pub(super) enum Control {
     Export,
     /// Start or stop recording a session.
     Record,
+    /// Start recording a new scenario from an empty world.
+    NewEmpty,
+    /// Start recording a new scenario from the app as it is.
+    NewFromCurrent,
     /// A catalogue entry.
     Entry(usize),
     /// A step of the selected entry, to jump to the start of.
@@ -195,6 +199,8 @@ fn control_text(control: Control, state: &GalleryState) -> String {
             "Record"
         }
         .into(),
+        Control::NewEmpty => "New: empty world".into(),
+        Control::NewFromCurrent => "New: current state".into(),
         Control::Pick => if state.is_picking() {
             "Stop picking"
         } else {
@@ -247,6 +253,8 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
                 GalleryAction::Record
             }
         }
+        Control::NewEmpty => GalleryAction::NewEmpty,
+        Control::NewFromCurrent => GalleryAction::NewFromCurrent,
         Control::Entry(index) => GalleryAction::Select(index),
         Control::JumpTo(step) => GalleryAction::JumpTo(step),
         Control::Suggestion(index) => GalleryAction::ToggleSuggestion(index),
@@ -381,6 +389,8 @@ fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState) {
         button(row, Control::TakeOver, state);
         button(row, Control::Export, state);
         button(row, Control::Record, state);
+        button(row, Control::NewEmpty, state);
+        button(row, Control::NewFromCurrent, state);
         button(row, Control::Pick, state);
     });
 }
@@ -563,6 +573,8 @@ pub(super) fn style_controls(
             | Control::StepStep
             | Control::Restart
             | Control::Export
+            | Control::NewEmpty
+            | Control::NewFromCurrent
             | Control::FormField(..) => false,
         };
         let wanted = if on { BUTTON_ON } else { BUTTON };

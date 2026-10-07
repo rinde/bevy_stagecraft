@@ -566,7 +566,7 @@ plugins. The app under test runs untouched in the primary window; a second OS
 window, **Scenarios**, with its own UI camera, holds the catalogue (grouped,
 with descriptions and each entry's last result), play and pause, step one
 frame, step to the next step, restart, speed (1/4x, 1/2x, 1x, 2x), loop on and
-off, **Take over**, **Export RON**, **Record**, **Pick**, the live list of
+off, **Take over**, **Export RON**, **Record**, **New: empty world** / **New: current state**, **Pick**, the live list of
 the selected scenario's checks, and its steps (see below). Space plays and pauses, Right steps a frame, Down steps to the next
 step and Left restarts, read from the Scenarios window only.
 
@@ -637,7 +637,9 @@ Use the app by hand and save what you did as a `.ron` scenario. `SessionPlugin`
 (added by `GalleryPlugin` for you) logs the real mouse and keyboard of the
 primary window against a frame counter at the fixed 1/60 s, so playback is
 deterministic whatever frame rate the session ran at. Start and stop with the
-gallery's **Record** / **Stop recording** button, with
+gallery's **Record** / **Stop recording** button (**New: empty world** starts a
+recording from the app's reset state with nothing selected, **New: current
+state** from the app as it is; both are `GalleryAction`s too), with
 `SessionRecorder::request_start` / `request_stop` (at the next update), or
 straight away with `session::start(world, name)` / `session::stop(world)`; a
 command-line flag is a system that calls one of them (see the example's
