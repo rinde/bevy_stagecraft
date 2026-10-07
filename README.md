@@ -590,6 +590,16 @@ lands on the same frame and world as a straight run reaches before that step,
 which is the point `ScenarioTrace::before` reports. A jump is refused while
 recording.
 
+The details panel has two tabs, **Scenario** and **Trace**. Runs in the gallery
+are traced (a run-all is not), and the Trace tab shows what the run did step by
+step, the same description as `trace.html` in a recording: the failure, what
+each target resolved to, each check, what changed in the world's state, and the
+UI tree before or after the step (**Before** / **After**). **Follow** keeps it
+on the step the script is at, then on the first failing step once the run is
+over; clicking a step in its list looks at that one instead, and **Jump to the
+start of it** is the jump above. The trace of a finished run is kept across
+jumps until another scenario is picked or the scenario restarts.
+
 Picking a scenario calls the app's reset hook, then the scenario's setup and
 view (a setup that fails is shown in the status line, and the run fails with
 every step skipped), resizes the primary window to the scenario's window size and plays it

@@ -45,9 +45,30 @@
 //!
 //! Clicking a step in the selected scenario's list ([`GalleryAction::JumpTo`])
 //! restarts the scenario and plays it, one script frame per update, up to the
-//! start of that step, where it pauses. Nothing is stored: the world is the
-//! one a straight run has before the step, on the same frame
+//! start of that step, where it pauses. No snapshot of the app is stored: the
+//! world is the one a straight run has before the step, on the same frame
 //! ([`crate::ScenarioTrace::before`]), so the live app can be inspected there.
+//!
+//! # The Trace tab
+//!
+//! The **Trace** tab of the Scenarios window ([`GalleryTab::Trace`], or
+//! [`GalleryAction::ShowTab`]) shows what the run did, step by step, as the
+//! recorder's `trace.html` does and in the same words ([`crate::StepView`]):
+//! the step's number and description, why it failed, the targets it looked up
+//! and what it found, the checks it ran, what it changed in the reflected
+//! state, and the app's UI tree before or after it
+//! ([`GalleryAction::ShowTraceWorld`]).
+//!
+//! The gallery keeps a trace of every run it plays (not of **Run all**, which
+//! is for CI). **Follow** (on to begin with, [`GalleryAction::ToggleTraceFollow`])
+//! shows the step being played, and once the run is over the first that
+//! failed. A click on a step in the list, or on the arrows, shows that step
+//! instead ([`GalleryAction::InspectStep`]) and turns following off; a jump
+//! to a step shows that step as the world was before it. The run's whole
+//! trace is stored when it ends, and kept across a jump and a loop, since a
+//! run is deterministic; selecting or restarting drops it. The tab redraws
+//! only when what it shows has changed, which includes the scenarios'
+//! revision (see [`GalleryState`]).
 //!
 //! # Running everything
 //!
@@ -132,8 +153,8 @@ mod ui;
 pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
 pub use input::scenarios_pointer;
 pub use state::{
-    GalleryAction, GalleryPhase, GalleryRunReport, GalleryState, PendingStep, Picking, Recording,
-    ScenarioOutcome, Speed, Suggestions,
+    GalleryAction, GalleryPhase, GalleryRunReport, GalleryState, GalleryTab, PendingStep, Picking,
+    Recording, ScenarioOutcome, Speed, Suggestions, TraceWorld,
 };
 pub use ui::{GalleryToolbar, SCENARIOS_WINDOW_SIZE, ScenariosCamera, ScenariosWindow};
 
