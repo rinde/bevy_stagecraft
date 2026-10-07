@@ -50,8 +50,8 @@ pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tes
 #[cfg(feature = "gallery")]
 pub use gallery::{
     Gallery, GalleryAction, GalleryEntry, GalleryGroup, GalleryPlugin, GalleryRunReport,
-    GalleryState, GallerySystems, ScenarioOutcome, ScenariosCamera, ScenariosWindow, Speed,
-    Suggestions,
+    GalleryState, GallerySystems, GalleryTab, ScenarioOutcome, ScenariosCamera, ScenariosWindow,
+    Speed, Suggestions, TraceWorld,
 };
 pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};
@@ -81,4 +81,6 @@ pub use session::{
 pub use targets::{
     DEFAULT_ACTION_TIMEOUT, NotUnderTest, ResolvedTarget, Target, WidgetRole, resolve,
 };
-pub use trace::{ScenarioTrace, StepTrace, TargetTrace, TraceCheck, TracePoint, UiLine};
+pub use trace::{
+    ScenarioTrace, StepTrace, StepView, TargetTrace, TraceCheck, TracePoint, UiLine, step_title,
+};
