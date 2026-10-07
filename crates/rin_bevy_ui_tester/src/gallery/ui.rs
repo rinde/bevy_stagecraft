@@ -45,7 +45,7 @@ use crate::{
 };
 
 /// Default size of the Scenarios window, in logical pixels.
-pub const SCENARIOS_WINDOW_SIZE: (u32, u32) = (460, 760);
+pub const SCENARIOS_WINDOW_SIZE: (u32, u32) = (460, 800);
 /// Font size of the Scenarios window's text, in logical pixels.
 const FONT_SIZE: f32 = 15.0;
 /// Padding inside buttons and around panels, in logical pixels.
