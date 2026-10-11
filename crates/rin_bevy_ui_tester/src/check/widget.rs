@@ -1,5 +1,5 @@
-//! What a target's widget is doing: disabled, checked, pressed, focused,
-//! visible, and the text it shows.
+//! What a target's widget is doing: disabled, checked, selected, pressed,
+//! focused, visible, and the text it shows.
 //!
 //! These read the components Bevy's own widgets keep (`bevy_ui_widgets`) and
 //! the interaction components of `bevy_ui`, so they work for any toolkit that
@@ -16,7 +16,7 @@ use bevy::{
     text::TextSpan,
     ui::{
         Checkable, Checked, ComputedNode, Interaction, InteractionDisabled, Pressed, Selectable,
-        widget::Text,
+        Selected, widget::Text,
     },
     ui_widgets::{Button, MenuButton, MenuItem, Slider},
 };
@@ -28,6 +28,8 @@ pub(super) enum WidgetState {
     Disabled,
     /// Carries `Checked`.
     Checked,
+    /// Carries `Selected`.
+    Selected,
     /// Carries `Pressed`, or its `Interaction` is `Pressed`.
     Pressed,
     /// Has input focus, or something below it has.
@@ -44,6 +46,7 @@ impl WidgetState {
         match self {
             Self::Disabled => "is disabled",
             Self::Checked => "is checked",
+            Self::Selected => "is selected",
             Self::Pressed => "is pressed",
             Self::Focused => "has focus",
             Self::Visible => "is visible",
@@ -109,6 +112,7 @@ pub(super) fn in_state(
             "is not disabled",
         ),
         WidgetState::Checked => holds(world.get::<Checked>(widget).is_some(), "is not checked"),
+        WidgetState::Selected => holds(world.get::<Selected>(widget).is_some(), "is not selected"),
         WidgetState::Pressed => holds(
             world.get::<Pressed>(widget).is_some()
                 || world.get::<Interaction>(widget) == Some(&Interaction::Pressed),

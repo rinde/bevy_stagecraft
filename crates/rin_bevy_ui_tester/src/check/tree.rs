@@ -12,7 +12,7 @@
 //!
 //! Every line is a role (`panel`, `text`, or the [`WidgetRole`] in kebab case,
 //! as `menu-item`), perhaps a quoted label, and perhaps states in brackets
-//! (`disabled`, `checked`, `pressed`, `focused`, `value=..`). A line with
+//! (`disabled`, `checked`, `selected`, `pressed`, `focused`, `value=..`). A line with
 //! lines below it ends in a colon.
 //!
 //! An expected tree is partial: it lists only what matters. A line matches an
@@ -100,6 +100,8 @@ enum State {
     Disabled,
     /// `checked`.
     Checked,
+    /// `selected`.
+    Selected,
     /// `pressed`.
     Pressed,
     /// `focused`.
@@ -114,6 +116,7 @@ impl State {
         match self {
             Self::Disabled => "disabled".into(),
             Self::Checked => "checked".into(),
+            Self::Selected => "selected".into(),
             Self::Pressed => "pressed".into(),
             Self::Focused => "focused".into(),
             Self::Value(value) => format!("value={value}"),
@@ -125,13 +128,14 @@ impl State {
         match text.trim() {
             "disabled" => Ok(Self::Disabled),
             "checked" => Ok(Self::Checked),
+            "selected" => Ok(Self::Selected),
             "pressed" => Ok(Self::Pressed),
             "focused" => Ok(Self::Focused),
             other => match other.strip_prefix("value=") {
                 Some(value) if !value.trim().is_empty() => Ok(Self::Value(value.trim().into())),
                 _ => Err(format!(
-                    "`{other}` is not a state; write disabled, checked, pressed, focused or \
-                     value=<number>"
+                    "`{other}` is not a state; write disabled, checked, selected, pressed, focused \
+                     or value=<number>"
                 )),
             },
         }
@@ -350,6 +354,9 @@ fn states_of(world: &World, entity: &EntityRef<'_>) -> Vec<State> {
     }
     if entity.contains::<bevy::ui::Checked>() {
         states.insert(State::Checked);
+    }
+    if entity.contains::<bevy::ui::Selected>() {
+        states.insert(State::Selected);
     }
     if entity.contains::<Pressed>() || entity.get::<Interaction>() == Some(&Interaction::Pressed) {
         states.insert(State::Pressed);

@@ -7,7 +7,7 @@
 //! * the fields of every reflected resource;
 //! * how many entities have each reflected component;
 //! * the texts the app's UI nodes show, and the states of the widgets they
-//!   label (disabled, checked, pressed, focused, visible);
+//!   label (disabled, checked, selected, pressed, focused, visible);
 //! * the current value of every reflected Bevy `State`;
 //! * the app's own facts, from [`AppCheck::facts`](crate::AppCheck::facts).
 //!
@@ -61,9 +61,10 @@ pub const DEFAULT_IGNORED: [&str; 2] = ["bevy_*", "rin_bevy_ui_tester::*"];
 const MAX_FIELD_DEPTH: usize = 8;
 
 /// The widget states a snapshot records, in the order suggestions name them.
-const WIDGET_STATES: [WidgetState; 5] = [
+const WIDGET_STATES: [WidgetState; 6] = [
     WidgetState::Disabled,
     WidgetState::Checked,
+    WidgetState::Selected,
     WidgetState::Pressed,
     WidgetState::Focused,
     WidgetState::Visible,
@@ -531,6 +532,7 @@ pub(super) const fn widget_check(state: WidgetState, target: Target) -> Check {
     match state {
         WidgetState::Disabled => Check::Disabled(target),
         WidgetState::Checked => Check::Checked(target),
+        WidgetState::Selected => Check::Selected(target),
         WidgetState::Pressed => Check::Pressed(target),
         WidgetState::Focused => Check::Focused(target),
         WidgetState::Visible => Check::Visible(target),
