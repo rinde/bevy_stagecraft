@@ -378,7 +378,8 @@ node, fails at once: waiting would not fix the script. Positions (`Screen`,
 wait. `step.forced()` (`Force(Click(Left))`, Playwright's `force`) acts at
 once, with none of these checks and no hover check after it, for a script that
 means to click a disabled or covered widget. `Timeout(..)` and `Force(..)`
-wrap one `MoveTo`, `Glide`, `Drag`, `Click` or `Press`; around anything else
+wrap one `MoveTo`, `Glide`, `Drag`, `Click` or `Press`, or a `Type` that has an
+`into`; around anything else
 the file is refused when it loads.
 
 Frames are fixed at 1/60 s and stability is told by Bevy's change detection
@@ -390,6 +391,33 @@ wait unless they say so with `Within(..)`.
 After moving onto a widget target the player also checks that the widget, or a
 descendant, is under the pointer, and otherwise fails naming what covers it. A
 failed step skips the rest of the script.
+
+### Typing text
+
+`Step::type_text("Alpha")` (`Type(text: "Alpha")` in a file) types into
+whatever has keyboard focus, like Playwright's `pressSequentially`. For every
+character it sends a key press and release with the logical key and the text
+the character produces, one character per frame, with Shift held around the
+characters that need it (capitals and the shifted symbols of a US layout), so
+Bevy's own `EditableText` ends up holding exactly that text. A character no key of the US layout types is sent on an unidentified
+physical key, carrying the text, which text fields read all the same. `Step::type_into("Alpha",
+Target::text("Name"))` (`Type(text: "Alpha", into: Text("Name"))`, Playwright's
+`fill`) first moves to the target and clicks it, which focuses a text field,
+waiting for it to be actionable as a click does (so `Timeout(..)` and
+`Force(..)` may wrap a `Type` that has an `into`, and no other).
+
+```ron
+steps: [
+    Type(text: "Alpha", into: Text("Name")),   // click the field, then type
+    Type(text: "Smith"),                       // type into the focused widget
+    Tap(key: Enter, modifiers: []),            // keys that are not text stay taps
+],
+```
+
+The file syntax is the struct form `Type(text: "..")`; a bare `Type("..")` is
+not read. Enter, Tab and Backspace are not text: use `Tap`. Typing with no
+focused widget does nothing and does not fail. `Type` only adds a form to
+format version 3, so every older file still loads.
 
 ## Scenarios as RON
 
@@ -442,6 +470,7 @@ version 3 and only add forms. Any other older file is also a newer one.
         Timeout(120, MoveTo(Text("Loaded"))),     // wait longer for this one
         Force(Click(Left)),                        // click without the checks
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
+        Type(text: "Alpha", into: Name("Station name")), // click, then type
         Check(App(ActivatedOnce)),               // the app's own checks
         Check(App(Activated(1))),
         Check(Resource(path: "Activations.0", is: Eq(1))),
@@ -657,8 +686,11 @@ named by the sturdiest target for the widget under it (a test id
 over 1.5 s is shortened
 to a 30 frame `Wait`, idle time over 1 s before the pointer goes to a widget
 (a target such as `Text(..)`) is shortened to a 10 frame `Wait`, as playback
-waits for that widget to be actionable anyway, and a modifier held around a
-key folds into a `Tap`. The thresholds are `StepOptions`. The app plugs in through its own reflected
+waits for that widget to be actionable anyway, a modifier held around a
+key folds into a `Tap`, and consecutive keys that typed text (as the keyboard
+reported it, so other layouts record right), each released quickly, merge into
+one `Type(text: "..")`; Enter, Tab, Backspace, Control, Alt and Super chords and
+held keys stay `Key`, `KeyUp` and `Tap` steps. The thresholds are `StepOptions`. The app plugs in through its own reflected
 types (see [The app's own setups, views and targets](#the-apps-own-setups-views-and-targets)):
 
 - `AppSetup::capture` runs on start and turns the state into one of the app's

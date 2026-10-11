@@ -1,0 +1,14 @@
+#![enable(implicit_some)]
+(
+    format_version: 3,
+    name: "type text",
+    window_size: (800, 600),
+    setup: App(PlainUi),
+    steps: [
+        Type(text: "Hi", into: Text("Pause")),
+        Type(text: "There!"),
+        Wait(1),
+        Check(App(ActivatedOnce)),
+    ],
+    expect: [App(ActivatedOnce)],
+)

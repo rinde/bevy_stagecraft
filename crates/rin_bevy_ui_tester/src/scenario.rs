@@ -51,6 +51,14 @@ impl Modifiers {
         self.bits & other.bits == other.bits
     }
 
+    /// The set without the modifiers in `other`.
+    #[must_use]
+    pub(crate) const fn without(self, other: Self) -> Self {
+        Self {
+            bits: self.bits & !other.bits,
+        }
+    }
+
     /// Whether no modifier is in the set.
     #[must_use]
     pub const fn is_empty(self) -> bool {
@@ -216,6 +224,21 @@ pub enum Step {
         #[serde(default, skip_serializing_if = "no_modifiers")]
         modifiers: Modifiers,
     },
+    /// Type the text into whatever has keyboard focus, one character a
+    /// frame: each character is a key press and release with its logical key
+    /// and its text, with Shift held around it where the US layout needs it
+    /// (see [`crate::keystroke`]). With `into`, the target is clicked first,
+    /// which focuses a text field; the click waits for the target as a
+    /// [`Step::Click`] on it would. Takes one frame per character, plus the
+    /// click's.
+    Type {
+        /// What to type.
+        text: String,
+        /// The widget to click before typing, if the focus is not already
+        /// where the text should go.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        into: Option<Target>,
+    },
     /// Do nothing for this many frames.
     Wait(u16),
     /// Run the check. Takes no frames: it sees the world as the previous step
@@ -225,8 +248,9 @@ pub enum Step {
     Caption(String),
     /// The step, waiting at most this many frames for its target to be
     /// actionable instead of the scenario's action timeout. Wraps a
-    /// [`Step::MoveTo`], [`Step::Glide`], [`Step::Drag`], [`Step::Click`] or
-    /// [`Step::Press`]: `Timeout(120, MoveTo(Text("Go")))`.
+    /// [`Step::MoveTo`], [`Step::Glide`], [`Step::Drag`], [`Step::Click`],
+    /// [`Step::Press`] or a [`Step::Type`] with an `into`:
+    /// `Timeout(120, MoveTo(Text("Go")))`.
     Timeout(u16, Box<Self>),
     /// The step at once, with no waiting and no check that its target can be
     /// acted on or ends up under the pointer: Playwright's `force`. Wraps the
@@ -293,6 +317,24 @@ impl Step {
         Self::Tap { key, modifiers }
     }
 
+    /// Type `text` into whatever has keyboard focus.
+    #[must_use]
+    pub fn type_text(text: impl Into<String>) -> Self {
+        Self::Type {
+            text: text.into(),
+            into: None,
+        }
+    }
+
+    /// Click `into`, then type `text` (see [`Step::Type`]).
+    #[must_use]
+    pub fn type_into(text: impl Into<String>, into: Target) -> Self {
+        Self::Type {
+            text: text.into(),
+            into: Some(into),
+        }
+    }
+
     /// Do nothing for `frames` frames.
     #[must_use]
     pub const fn wait(frames: u16) -> Self {
@@ -345,6 +387,7 @@ impl Step {
                 | Self::Drag { .. }
                 | Self::Click(_)
                 | Self::Press(_)
+                | Self::Type { into: Some(_), .. }
         )
     }
 }
