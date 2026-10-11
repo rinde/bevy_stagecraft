@@ -396,10 +396,7 @@ fn pick_mode_offers_selected_for_what_can_be_selected() {
     let filter = NoiseFilter::default();
     let (canada, target) = item("Canada");
     let checks = checks_that_hold(app.world(), canada, &target, &filter);
-    assert!(
-        checks.contains(&Check::selected(target.clone())),
-        "{checks:?}"
-    );
+    assert!(checks.contains(&Check::selected(target)), "{checks:?}");
     let (belgium, target) = item("Belgium");
     let checks = checks_that_hold(app.world(), belgium, &target, &filter);
     assert!(
