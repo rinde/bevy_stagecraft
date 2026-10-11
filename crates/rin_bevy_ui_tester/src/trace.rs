@@ -51,8 +51,8 @@ pub struct UiLine {
     pub label: String,
     /// The text the node shows itself, if any.
     pub text: Option<String>,
-    /// The widget states it is in (`Disabled`, `Checked`, `Pressed`,
-    /// `Focused`, `Visible`); empty for a node that is no widget.
+    /// The widget states it is in (`Disabled`, `Checked`, `Selected`,
+    /// `Pressed`, `Focused`, `Visible`); empty for a node that is no widget.
     pub states: Vec<String>,
 }
 

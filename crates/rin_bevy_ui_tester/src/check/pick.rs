@@ -26,7 +26,10 @@ use bevy::{
     math::Vec2,
     picking::Pickable,
     reflect::{TypeInfo, TypePath, TypeRegistration, TypeRegistry, std_traits::ReflectDefault},
-    ui::{CalculatedClip, Checkable, ComputedNode, UiGlobalTransform, UiStack, widget::Text},
+    ui::{
+        CalculatedClip, Checkable, ComputedNode, Selectable, UiGlobalTransform, UiStack,
+        widget::Text,
+    },
 };
 
 use super::{
@@ -242,7 +245,8 @@ fn role_target(world: &World, subject: Entity) -> Option<Target> {
 /// * its text: `Shows(..)` when the target is that very text, otherwise
 ///   `TextOf(target, Exact(..))`;
 /// * its states: `Visible`, `Disabled` or `Not(Disabled)`, `Checked` or
-///   `Not(Checked)` (for something that can be checked), `Focused`,
+///   `Not(Checked)` (for something that can be checked), `Selected` or
+///   `Not(Selected)` (for something that can be selected), `Focused`,
 ///   `Hovered`;
 /// * each field of each reflected component on the target's node and the
 ///   nodes above it up to the widget, as `Component(..)`, leaving out the
@@ -272,6 +276,7 @@ pub fn checks_that_hold(
         }
         let is_widget = widget::is_widget(world, subject);
         let checkable = world.get::<Checkable>(subject).is_some();
+        let selectable = world.get::<Selectable>(subject).is_some();
         candidates.push(widget_check(WidgetState::Visible, target.clone()));
         candidates.push(widget_check(WidgetState::Disabled, target.clone()));
         if is_widget {
@@ -280,6 +285,10 @@ pub fn checks_that_hold(
         candidates.push(widget_check(WidgetState::Checked, target.clone()));
         if checkable {
             candidates.push(!widget_check(WidgetState::Checked, target.clone()));
+        }
+        candidates.push(widget_check(WidgetState::Selected, target.clone()));
+        if selectable {
+            candidates.push(!widget_check(WidgetState::Selected, target.clone()));
         }
         candidates.push(widget_check(WidgetState::Focused, target.clone()));
         candidates.push(Check::hovered(target.clone()));

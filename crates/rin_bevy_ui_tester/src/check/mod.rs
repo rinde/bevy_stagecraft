@@ -142,6 +142,9 @@ pub enum Check {
     Disabled(Target),
     /// The target's widget carries `Checked`.
     Checked(Target),
+    /// The target's widget carries `Selected`, as a list item or a swatch
+    /// that is the chosen one.
+    Selected(Target),
     /// The target's widget carries `Pressed`, or its `Interaction` is
     /// `Pressed`.
     Pressed(Target),
@@ -232,6 +235,8 @@ enum Spelled {
     Disabled(Target),
     /// See [`Check::Checked`].
     Checked(Target),
+    /// See [`Check::Selected`].
+    Selected(Target),
     /// See [`Check::Pressed`].
     Pressed(Target),
     /// See [`Check::Focused`].
@@ -261,8 +266,8 @@ enum Spelled {
 
 /// The forms a check can take, for a check that does not parse.
 const FORMS: &str = "a check: App(..), Shows(..), Hovered(..), Count(..), Resource(..), \
-    Component(..), InState(..), Disabled(..), Checked(..), Pressed(..), Focused(..), \
-    Visible(..), Exists(..), TextOf(..), Tree(..), Not(..), All(..), Any(..) or Within(..)";
+    Component(..), InState(..), Disabled(..), Checked(..), Selected(..), Pressed(..), \
+    Focused(..), Visible(..), Exists(..), TextOf(..), Tree(..), Not(..), All(..), Any(..) or Within(..)";
 
 /// What a file that refers to a check by name, as format versions 1 and 2
 /// could, is told.
@@ -559,6 +564,12 @@ impl Check {
         Self::Checked(target)
     }
 
+    /// The target's widget is selected.
+    #[must_use]
+    pub const fn selected(target: Target) -> Self {
+        Self::Selected(target)
+    }
+
     /// The target's widget is pressed.
     #[must_use]
     pub const fn pressed(target: Target) -> Self {
@@ -639,6 +650,7 @@ impl Check {
             | Self::Component { target, .. }
             | Self::Disabled(target)
             | Self::Checked(target)
+            | Self::Selected(target)
             | Self::Pressed(target)
             | Self::Focused(target)
             | Self::Visible(target)
@@ -804,6 +816,7 @@ impl Check {
             }
             Self::Disabled(target) => widget_state(world, target, WidgetState::Disabled),
             Self::Checked(target) => widget_state(world, target, WidgetState::Checked),
+            Self::Selected(target) => widget_state(world, target, WidgetState::Selected),
             Self::Pressed(target) => widget_state(world, target, WidgetState::Pressed),
             Self::Focused(target) => widget_state(world, target, WidgetState::Focused),
             Self::Visible(target) => widget_state(world, target, WidgetState::Visible),
@@ -1216,6 +1229,7 @@ impl fmt::Display for Check {
             Self::InState { value, .. } => write!(f, "{} is {value}", self.subject()),
             Self::Disabled(target) => write!(f, "{target:?} {}", WidgetState::Disabled.words()),
             Self::Checked(target) => write!(f, "{target:?} {}", WidgetState::Checked.words()),
+            Self::Selected(target) => write!(f, "{target:?} {}", WidgetState::Selected.words()),
             Self::Pressed(target) => write!(f, "{target:?} {}", WidgetState::Pressed.words()),
             Self::Focused(target) => write!(f, "{target:?} {}", WidgetState::Focused.words()),
             Self::Visible(target) => write!(f, "{target:?} {}", WidgetState::Visible.words()),

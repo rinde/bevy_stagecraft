@@ -208,8 +208,9 @@ Check::count::<Ghost>().and::<Selected>().between(1, 3)
 Check::resource::<Editor>("tool").eq(Tool::Lay)      // a reflected resource field
 Check::component::<Gauge>(Target::text("Speed"), "value").gt(0.5_f32)
 Check::in_state(Mode::Editing)                       // a Bevy State<S>
-Check::disabled(Target::text("Save"))                // also checked, pressed,
-                                                     // focused, visible, exists
+Check::disabled(Target::text("Save"))                // also checked, selected,
+                                                     // pressed, focused, visible,
+                                                     // exists
 Check::text_of(Target::text("Score"), TextMatch::starts_with("Score: "))
 Check::all([a, b]), Check::any([a, b])
 Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
@@ -228,7 +229,8 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
 - `Component` reads the component on the target's node or, failing that, the
   nearest node above it that has one, so a label finds the widget it sits in.
 - The widget states read the components Bevy's widgets keep:
-  `InteractionDisabled`, `Checked`, `Pressed` (or `Interaction::Pressed`),
+  `InteractionDisabled`, `Checked`, `Selected`, `Pressed` (or
+  `Interaction::Pressed`),
   `InputFocus` (the widget or something below it), `InheritedVisibility` and a
   laid-out size. A text target names the nearest widget at or above the text.
 - `TextOf` reads every text node at or below the target's widget, spans
@@ -262,7 +264,8 @@ Check(Tree(of: Name("Toolbar"), matches: r#"
   `list-item`, read from the same components as `Role(..)` targets, not from
   AccessKit. A widget's label is its text, as `TextOf` reads it, and the text
   nodes inside a widget are not lines of their own. Widgets show states:
-  `disabled`, `checked`, `pressed`, `focused`, and `value=..` on a slider.
+  `disabled`, `checked`, `selected`, `pressed`, `focused`, and `value=..` on a
+  slider.
 - The expected tree is partial. A line matches an actual line of the same
   role, with the same label if it gives one, and at least its states (a
   value compares as a number, so `0.50` is `0.5`); the lines below it match
@@ -714,7 +717,7 @@ the widgets they label, every reflected Bevy `State`, and the app's own
 | a component count              | `Count(with: ["Ghost"], is: Eq(2))`          |
 | a state                        | `InState(state: "Mode", value: Editing)`     |
 | text now shown / no longer     | `Shows("1")` / `Not(Shows("0"))`             |
-| a labelled widget's state      | `Disabled(Text("Save"))`, `Not(Checked(..))`, also pressed, focused, visible |
+| a labelled widget's state      | `Disabled(Text("Save"))`, `Not(Checked(..))`, also selected, pressed, focused, visible |
 | an app fact now / no longer    | `App(CounterIs(1))` / `Not(App(CounterIs(0)))` |
 
 Every suggestion is run against the world at the end and kept only if it
@@ -806,8 +809,8 @@ The Scenarios window then shows, for the picked node:
   to another widget, is never offered. Clicking another one works the checks
   out again through it;
 - the checks that hold for it now: `Shows(..)` or `TextOf(..)`, `Visible`,
-  `Disabled` or `Not(Disabled)`, `Checked` or `Not(Checked)`, `Focused`,
-  `Hovered`, each field of its reflected components as
+  `Disabled` or `Not(Disabled)`, `Checked` or `Not(Checked)`, `Selected` or
+  `Not(Selected)`, `Focused`, `Hovered`, each field of its reflected components as
   `Component(target: .., path: "Level.0", is: Eq(3))`, and last
   `Tree(of: .., matches: "..")`, the snapshot of the node and what is below
   it, to take whole;

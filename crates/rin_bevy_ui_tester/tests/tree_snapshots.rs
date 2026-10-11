@@ -13,8 +13,8 @@ mod common;
 
 use bevy::{
     prelude::*,
-    ui::{Checked, InteractionDisabled, px},
-    ui_widgets::{Button, Checkbox, Slider, SliderValue},
+    ui::{Checked, InteractionDisabled, Selected, px},
+    ui_widgets::{Button, Checkbox, ListItem, Slider, SliderValue},
 };
 use common::{registry, spawn_ui};
 use rin_bevy_ui_tester::{
@@ -256,4 +256,155 @@ fn pick_mode_offers_the_snapshot_of_the_node_last() {
         "{:?}",
         picked.checks()
     );
+}
+
+/// Spawns a camera and a named list of three items, the second selected.
+fn spawn_countries(world: &mut World) {
+    world.spawn(Camera2d);
+    world
+        .spawn((Name::new(COUNTRIES), Node::default()))
+        .with_children(|list| {
+            list.spawn((ListItem, Node::default(), children![Text::new("Belgium")]));
+            list.spawn((
+                ListItem,
+                Selected,
+                Node::default(),
+                children![Text::new("Canada")],
+            ));
+            list.spawn((ListItem, Node::default(), children![Text::new("Denmark")]));
+        });
+}
+
+/// The name of the panel the list items sit in.
+const COUNTRIES: &str = "Countries";
+
+/// A headless app with the countries laid out.
+fn countries_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(HeadlessPlugins::default());
+    app.finish();
+    app.cleanup();
+    spawn_countries(app.world_mut());
+    for _ in 0..3 {
+        app.update();
+    }
+    app
+}
+
+/// The outcome of the one check step of a scenario over the countries.
+fn countries_outcome(check: Check) -> Outcome {
+    Scenario::new("countries")
+        .setup(spawn_countries)
+        .steps([Step::check(check)])
+        .run_headless()
+        .steps[0]
+        .outcome
+        .clone()
+}
+
+#[test]
+fn a_snapshot_shows_a_selected_list_item_as_selected() {
+    let app = countries_app();
+    let snapshot = tree_snapshot(app.world(), &Target::name(COUNTRIES)).unwrap();
+    assert_eq!(
+        snapshot,
+        "- panel \"Countries\":\n  \
+           - list-item \"Belgium\"\n  \
+           - list-item \"Canada\" [selected]\n  \
+           - list-item \"Denmark\""
+    );
+}
+
+#[test]
+fn an_expected_tree_can_demand_a_selected_state() {
+    let selected = "- panel:\n  - list-item \"Canada\" [selected]\n";
+    assert_eq!(
+        countries_outcome(Check::tree(Target::name(COUNTRIES), selected)),
+        Outcome::Pass
+    );
+    let wrong = "- panel:\n  - list-item \"Belgium\" [selected]\n";
+    let Outcome::Fail(message) = countries_outcome(Check::tree(Target::name(COUNTRIES), wrong))
+    else {
+        panic!("an item that is not selected must fail");
+    };
+    assert!(
+        message.contains("-   - list-item \"Belgium\" [selected]"),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("+   - list-item \"Belgium\""),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_state_with_a_wrong_name_is_refused_listing_selected() {
+    let ron = r#"(
+        format_version: 3,
+        name: "bad state",
+        steps: [Check(Tree(of: Name("Countries"), matches: "- list-item [chosen]"))],
+    )"#;
+    let message = Scenario::from_ron(ron).err().unwrap().to_string();
+    assert!(message.contains("selected"), "{message}");
+}
+
+#[test]
+fn the_selected_check_holds_only_for_the_selected_item() {
+    let canada = Target::text("Canada");
+    assert_eq!(
+        countries_outcome(Check::selected(canada.clone())),
+        Outcome::Pass
+    );
+    assert_eq!(
+        countries_outcome(!Check::selected(canada)),
+        Outcome::Fail("Text(\"Canada\") is selected holds, but should not".into())
+    );
+    assert_eq!(
+        countries_outcome(Check::selected(Target::text("Denmark"))),
+        Outcome::Fail("Text(\"Denmark\") is not selected".into())
+    );
+    assert_eq!(
+        Check::selected(Target::text("Canada")).to_string(),
+        "Text(\"Canada\") is selected"
+    );
+}
+
+#[test]
+fn a_selected_check_round_trips_through_ron() {
+    let scenario =
+        Scenario::new("selected").steps([Step::check(!Check::selected(Target::text("Belgium")))]);
+    let ron = scenario.to_ron().unwrap();
+    assert!(ron.contains("Selected(Text(\"Belgium\"))"), "{ron}");
+    let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
+    assert_eq!(loaded.to_script(), scenario.to_script());
+    assert_eq!(loaded.to_ron().unwrap(), ron, "export is stable");
+}
+
+#[test]
+fn pick_mode_offers_selected_for_what_can_be_selected() {
+    let app = countries_app();
+    let item = |label: &str| {
+        let text = app
+            .world()
+            .iter_entities()
+            .find(|entity| entity.get::<Text>().is_some_and(|text| text.0 == label))
+            .unwrap()
+            .id();
+        let parent = app.world().get::<ChildOf>(text).unwrap().parent();
+        (parent, Target::text(label))
+    };
+    let filter = NoiseFilter::default();
+    let (canada, target) = item("Canada");
+    let checks = checks_that_hold(app.world(), canada, &target, &filter);
+    assert!(
+        checks.contains(&Check::selected(target.clone())),
+        "{checks:?}"
+    );
+    let (belgium, target) = item("Belgium");
+    let checks = checks_that_hold(app.world(), belgium, &target, &filter);
+    assert!(
+        checks.contains(&!Check::selected(target.clone())),
+        "{checks:?}"
+    );
+    assert!(!checks.contains(&Check::selected(target)), "{checks:?}");
 }
