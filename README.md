@@ -197,6 +197,12 @@ per extension point, and a second one is a load error naming both.
   names a click that hit no label. They replace the session hooks of earlier
   versions.
 - `Registry::app_type(Extension::Setup)` and so on list the variants.
+- An app check or target that must reach an entity with no `Node` (a selection
+  shared between widgets, say) reads it with
+  `entity_of(world, &Target::component::<Selection>())`. It finds the entity a
+  `Component(..)`, `Name(..)`, `Role(..)`, `Within(..)` or `Nth(..)` target
+  names as strictly as a step does; `resolve` works a target out to a pixel and
+  refuses such an entity.
 - A world saved as a setup for other scenarios is the built-in
   `setup: Scene("start.scene.ron")` (see
   [Saving a checkpoint as a setup](#saving-a-checkpoint-as-a-setup)).

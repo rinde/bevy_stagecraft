@@ -427,6 +427,35 @@ pub fn resolve(world: &World, target: &Target) -> Result<ResolvedTarget, String>
     }
 }
 
+/// The one entity `target` names, which need not be a UI node.
+///
+/// A bare entity that only holds a component or a
+/// [`Name`](bevy::ecs::name::Name) (a selection shared between widgets, say)
+/// is found as well as a button.
+///
+/// This is how an app check or an [`AppTarget`] reads the entity a script
+/// names with `Component(..)`, `Name(..)`, `Role(..)`, `Within(..)` or
+/// `Nth(..)` without going through a pixel: [`resolve`] works a target out to
+/// a position and so refuses an entity without a `Node`. Lookup is as strict
+/// as for a step: the entity itself is returned (not the button around it),
+/// the tooling's entities are skipped, and a target that matches several is
+/// ambiguous. `Target::Text` names the node showing the text, and
+/// `Target::App(..)` the widget its own resolver reports.
+///
+/// # Errors
+///
+/// A message saying why the target names no one entity: nothing matches it
+/// (with close matches), several do (listing them), it is a position
+/// (`Screen`, `World`) or it names a type that is not a reflected component.
+pub fn entity_of(world: &World, target: &Target) -> Result<Entity, String> {
+    match locate(world, target) {
+        Lookup::Found(entity) => Ok(entity),
+        Lookup::Missing(message) | Lookup::Ambiguous(message) | Lookup::NotANode(message) => {
+            Err(message)
+        }
+    }
+}
+
 /// The middle of `node`, or of the button above it.
 fn resolve_node(world: &World, target: &Target, node: Entity) -> Result<ResolvedTarget, String> {
     // A label is usually a child of the button it names; the button is what
