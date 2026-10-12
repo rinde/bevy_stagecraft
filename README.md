@@ -923,9 +923,9 @@ see `tests/session.rs`, `tests/gallery.rs` and the example.
 ### Saving a checkpoint as a setup
 
 Another scenario often wants to start where a recording got to. While
-recording, paused, taken over or after a script has finished (the button is dimmed while a
-script plays, and a click then only says so: the world changes every frame),
-press the gallery's **Save as setup** (or call
+recording, paused, taken over or after a script has finished (the button is
+dimmed while a script plays, and a click then only says so: the world changes
+every frame), press the gallery's **Save as setup** (or call
 `save_setup(world, dir, stem, &noise)`): the world as it is goes to
 `{stem}.scene.ron` in the export directory, next to the scenarios (`stem` is
 the selected scenario's file name, else `recording`). A second save uses
