@@ -375,3 +375,71 @@ fn the_report_resource_is_readable_after_the_run() {
     assert!(report.finished);
     assert_eq!(report.name, "click pause");
 }
+
+#[test]
+fn a_failing_step_in_a_group_names_the_group_path() {
+    let report = Scenario::new("grouped")
+        .setup(spawn_ui)
+        .steps([
+            Step::wait(1),
+            Step::group(
+                "raise the bridge",
+                [
+                    Step::wait(1),
+                    Step::group("pull the lever", [Step::move_to(Target::text("Resume"))]),
+                ],
+            ),
+        ])
+        .run_headless();
+    let failures = report.failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].starts_with("raise the bridge > pull the lever > step 2"),
+        "the failure should lead with the group path and the step's flat number: {failures:?}"
+    );
+    assert_eq!(
+        report.steps[2].group,
+        ["raise the bridge", "pull the lever"],
+        "the report keeps each step's path"
+    );
+    assert!(report.steps[0].group.is_empty());
+}
+
+#[test]
+fn a_scenario_plays_frame_for_frame_the_same_with_and_without_groups() {
+    let flat = click_pause();
+    let grouped = Scenario::new("click pause").setup(spawn_ui).steps([
+        Step::group(
+            "press the button",
+            [
+                Step::move_to(Target::text("Pause")),
+                Step::group("click it", [Step::click()]),
+            ],
+        ),
+        Step::group(
+            "see the result",
+            [Step::wait(1), Step::check(activated_once())],
+        ),
+    ]);
+    let (flat, grouped) = (flat.run_headless(), grouped.run_headless());
+    assert!(grouped.passed(), "{:?}", grouped.failures());
+    assert_eq!(grouped.frames, flat.frames);
+    let outcomes = |report: &ScenarioReport| -> Vec<Outcome> {
+        report.steps.iter().map(|s| s.outcome.clone()).collect()
+    };
+    assert_eq!(outcomes(&grouped), outcomes(&flat));
+    let steps = |report: &ScenarioReport| -> Vec<Step> {
+        report.steps.iter().map(|s| s.step.clone()).collect()
+    };
+    assert_eq!(steps(&grouped), steps(&flat));
+}
+
+#[test]
+fn an_empty_group_plays_nothing() {
+    let report = Scenario::new("empty")
+        .setup(spawn_ui)
+        .steps([Step::group("nothing", []), Step::wait(1)])
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+    assert_eq!(report.steps.len(), 1, "a group is not a step of its own");
+}

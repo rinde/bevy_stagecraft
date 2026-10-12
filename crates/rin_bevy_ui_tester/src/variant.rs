@@ -27,7 +27,7 @@ use bevy::reflect::{GetTypeRegistration, Reflect, TypePath};
 
 use crate::{
     extension::{AppSetup, AppView, Setup, View},
-    scenario::{Scenario, Step},
+    scenario::{Scenario, Step, flatten, with_group_path},
     script::{LoadError, check_scale_factor},
     targets::Target,
 };
@@ -231,13 +231,14 @@ impl fmt::Display for Variant {
     }
 }
 
-/// The indices of the steps that aim the pointer at a screen position.
-fn screen_steps(steps: &[Step]) -> Vec<usize> {
-    steps
-        .iter()
+/// The steps that aim the pointer at a screen position, as the report
+/// counts them (from 0, groups not counted), with the groups around each.
+fn screen_steps(steps: &[Step]) -> Vec<(usize, Vec<String>)> {
+    flatten(steps)
+        .into_iter()
         .enumerate()
-        .filter(|(_, step)| step_targets(step).into_iter().any(has_screen))
-        .map(|(index, _)| index)
+        .filter(|(_, flat)| step_targets(flat.step).into_iter().any(has_screen))
+        .map(|(index, flat)| (index, flat.group.into_iter().map(str::to_owned).collect()))
         .collect()
 }
 
@@ -261,11 +262,15 @@ fn has_screen(target: &Target) -> bool {
     }
 }
 
-/// `step 3`, or `steps 3, 5` for several.
-fn steps_text(steps: &[usize]) -> String {
-    let list: Vec<String> = steps.iter().map(ToString::to_string).collect();
-    match steps {
-        [only] => format!("step {only}"),
-        _ => format!("steps {}", list.join(", ")),
+/// `step 3`, or `steps 3, 5` for several, each with the groups around it in
+/// front (`raise the bridge > step 3`).
+fn steps_text(steps: &[(usize, Vec<String>)]) -> String {
+    if let [(index, group)] = steps {
+        return with_group_path(group, &format!("step {index}"));
     }
+    let list: Vec<String> = steps
+        .iter()
+        .map(|(index, group)| with_group_path(group, &index.to_string()))
+        .collect();
+    format!("steps {}", list.join(", "))
 }

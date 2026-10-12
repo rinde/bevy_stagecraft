@@ -275,6 +275,7 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
             "app_checks",
             "app_target",
             "click_pause",
+            "grouped",
             "reflected_checks",
             "tree_snapshot",
             "type_text",
@@ -377,4 +378,78 @@ fn a_scale_factor_of_zero_in_a_file_is_a_load_error_naming_it() {
     let error = Scenario::from_ron_with(&ron, &registry()).unwrap_err();
     assert!(matches!(error, LoadError::Invalid { .. }), "{error}");
     assert!(error.to_string().contains("scale factor"), "{error}");
+}
+
+/// A scenario with groups inside groups.
+fn grouped() -> Scenario {
+    Scenario::new("grouped").app_setup(UiSetup::PlainUi).steps([
+        Step::wait(1),
+        Step::group(
+            "press the button",
+            [
+                Step::glide(Target::text("Pause"), 20),
+                Step::group("click it", [Step::click()]),
+            ],
+        ),
+        Step::group("nothing yet", []),
+        Step::group(
+            "see the result",
+            [Step::check(Check::app(UiCheck::ActivatedOnce))],
+        ),
+    ])
+}
+
+#[test]
+fn nested_groups_survive_a_round_trip_through_ron() {
+    let ron = grouped().to_ron().unwrap();
+    assert!(ron.contains("Group("), "{ron}");
+    let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
+    assert_eq!(loaded.to_script(), grouped().to_script());
+    assert_eq!(loaded.to_ron().unwrap(), ron, "export is stable");
+}
+
+#[test]
+fn a_group_in_a_file_reads_as_its_name_and_its_steps() {
+    let scenario = load(
+        r#"steps: [Group(name: "outer", steps: [Wait(1), Group(name: "inner", steps: [Wait(2)])])]"#,
+    )
+    .unwrap();
+    assert_eq!(
+        scenario.script(),
+        [Step::group(
+            "outer",
+            [Step::wait(1), Step::group("inner", [Step::wait(2)])]
+        )]
+    );
+}
+
+#[test]
+fn a_group_with_no_name_is_a_load_error_naming_where() {
+    let error = load(r#"steps: [Wait(1), Group(name: " ", steps: [Wait(1)])]"#).unwrap_err();
+    assert!(
+        matches!(&error, LoadError::Invalid { used_by, .. } if used_by == "step 1"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("needs a name"), "{error}");
+}
+
+#[test]
+fn a_bad_step_inside_groups_is_a_load_error_naming_the_group_path() {
+    let error = load(
+        r#"steps: [Wait(1), Group(name: "raise the bridge", steps: [Group(name: "lever", steps: [MoveTo(Component("NoSuchMarker"))])])]"#,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("raise the bridge > lever > step 1"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_group_does_not_change_the_format_version() {
+    let script = grouped().to_script();
+    assert_eq!(script.format_version, FORMAT_VERSION);
+    assert_eq!(FORMAT_VERSION, 3);
 }

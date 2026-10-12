@@ -1,0 +1,24 @@
+#![enable(implicit_some)]
+(
+    format_version: 3,
+    name: "grouped",
+    window_size: (800, 600),
+    setup: App(PlainUi),
+    steps: [
+        Group(
+            name: "press the button",
+            steps: [
+                Glide(target: Text("Pause"), frames: 20),
+                Group(name: "click it", steps: [Click(Left)]),
+            ],
+        ),
+        Group(
+            name: "see the result",
+            steps: [
+                Wait(1),
+                Check(App(ActivatedOnce)),
+            ],
+        ),
+    ],
+    expect: [App(ActivatedOnce)],
+)

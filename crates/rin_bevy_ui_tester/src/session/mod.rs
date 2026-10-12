@@ -35,7 +35,9 @@
 //! * [`SessionHooks::noise_filter`] says which types the world snapshots
 //!   leave out;
 //! * [`SessionHooks::checkpoint_key`] picks the checkpoint key (F8 unless
-//!   set).
+//!   set);
+//! * [`SessionHooks::checkpoint_names`] turns the prompt for a checkpoint's
+//!   name on or off (on unless set).
 //!
 //! # Suggested checks
 //!
@@ -67,6 +69,18 @@
 //! messages before `InputSystems` reads them, and are not logged as steps.
 //! Each checkpoint also writes a [`CheckpointTaken`] message, which the
 //! cursor overlay shows as a flash and a caption.
+//!
+//! # Naming a checkpoint
+//!
+//! Right after the key is pressed a prompt asks for a name, which the overlay
+//! shows. Type it (the app sees none of those keys), then Enter keeps it and
+//! Escape does without; a mouse click, the next checkpoint or the stop keeps
+//! what was typed. A named checkpoint turns the steps recorded since the last
+//! checkpoint, and its own `Check` steps, into one `Step::Group` called that
+//! name, so a failure in a played back script reads `raise the bridge > step 3:
+//! ...`. A checkpoint with no name leaves its steps where they are.
+//! [`checkpoint_named`] takes a named one directly, and
+//! [`SessionHooks::checkpoint_names`] turns the prompt off.
 //!
 //! # Checks chosen by hand
 //!
@@ -118,9 +132,13 @@ use crate::{
     check::suggest::{WorldSnapshot, suggest_checks},
     extension::{Setup, View, capture_setup, current_view},
     headless::FRAME_STEP,
-    scenario::Step,
+    scenario::{Step, flatten},
     script::{FORMAT_VERSION, Script},
 };
+
+/// The longest name typed for a checkpoint, in characters; more is not taken,
+/// so a stuck key cannot fill the caption.
+const MAX_NAME_CHARS: usize = 60;
 
 /// How many pixels one line of mouse wheel is worth in a script, which turns
 /// the wheel in pixels.
@@ -152,6 +170,12 @@ pub struct SessionConfig {
 }
 
 /// Records sessions into `dir`; see the [module documentation](self).
+///
+/// The checkpoint key asks for a name by default, and that prompt is drawn
+/// only by [`CursorOverlayPlugin`](crate::overlay::CursorOverlayPlugin). An
+/// app that adds this plugin without the overlay sets
+/// [`SessionHooks::checkpoint_names`] to `false`, or its keys are taken by a
+/// prompt nobody can see.
 #[derive(Debug, Clone)]
 pub struct SessionPlugin {
     /// The configuration to insert.
@@ -241,6 +265,9 @@ pub struct Checkpoint {
     /// How many of the recorded steps, not counting any checkpoint's checks,
     /// come before it.
     pub at: usize,
+    /// The name it was given, if any; the steps since the checkpoint before,
+    /// and its checks, are a [`Step::Group`] of this name.
+    pub name: Option<String>,
     /// The checks the world's changes since the checkpoint before (or the
     /// start) suggested, in order; each held when the checkpoint was taken.
     pub candidates: Vec<Check>,
@@ -292,42 +319,40 @@ impl SavedSession {
         at_checkpoints: &[Vec<Check>],
         expect: Vec<Check>,
     ) -> Result<(), SessionError> {
-        let at: Vec<usize> = self
-            .checkpoints
-            .iter()
-            .map(|checkpoint| checkpoint.at)
-            .collect();
-        self.script.steps = with_checks(&self.recorded, &at, at_checkpoints);
+        self.script.steps = with_checks(&self.recorded, &self.checkpoints, at_checkpoints);
         self.script.expect = expect;
         write_script(&self.path, &self.script)
     }
 }
 
 /// `steps` with each checkpoint's checks put in as `Check` steps: those of
-/// checkpoint `n` after the first `at[n]` steps.
-fn with_checks(steps: &[Step], at: &[usize], checks: &[Vec<Check>]) -> Vec<Step> {
+/// checkpoint `n` after the first `checkpoints[n].at` steps, with the
+/// candidates of checkpoint `n` replaced by `checks[n]`.
+///
+/// A named checkpoint wraps what led to it in a [`Step::Group`]: the steps
+/// since the checkpoint before it, and its own checks.
+fn with_checks(steps: &[Step], checkpoints: &[Checkpoint], checks: &[Vec<Check>]) -> Vec<Step> {
     let mut out = Vec::with_capacity(steps.len() + checks.iter().map(Vec::len).sum::<usize>());
-    let checks_before = |before: usize, out: &mut Vec<Step>| {
-        for (_, checks) in at
-            .iter()
-            .zip(checks)
-            .filter(|(position, _)| **position == before)
-        {
-            out.extend(checks.iter().cloned().map(Step::Check));
+    let mut start = 0;
+    for (n, checkpoint) in checkpoints.iter().enumerate() {
+        // A checkpoint counted past the end goes last.
+        let end = checkpoint.at.min(steps.len()).max(start);
+        let mut segment: Vec<Step> = steps.get(start..end).unwrap_or(&[]).to_vec();
+        segment.extend(
+            checks
+                .get(n)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .map(Step::Check),
+        );
+        match &checkpoint.name {
+            Some(name) if !segment.is_empty() => out.push(Step::group(name.clone(), segment)),
+            _ => out.extend(segment),
         }
-    };
-    for (index, step) in steps.iter().enumerate() {
-        checks_before(index, &mut out);
-        out.push(step.clone());
+        start = end;
     }
-    // A checkpoint past the last step, and one counted past the end, go last.
-    for (_, checks) in at
-        .iter()
-        .zip(checks)
-        .filter(|(position, _)| **position >= steps.len())
-    {
-        out.extend(checks.iter().cloned().map(Step::Check));
-    }
+    out.extend(steps.get(start..).unwrap_or(&[]).iter().cloned());
     out
 }
 
@@ -366,6 +391,14 @@ struct Active {
     before: WorldSnapshot,
     /// What each checkpoint so far suggested, in order.
     checkpoints: Vec<Vec<Check>>,
+    /// The name of each checkpoint so far, in order; `None` for one never
+    /// named.
+    names: Vec<Option<String>>,
+    /// The name being typed for the last checkpoint, while it is asked for.
+    naming: Option<String>,
+    /// Keys the name took the press of and whose release is still to come,
+    /// so the app sees neither.
+    swallowed: Vec<KeyCode>,
     /// Real time spent recording.
     elapsed: Duration,
     /// The log so far.
@@ -435,6 +468,60 @@ impl SessionRecorder {
         self.request = Some(Request::Stop);
     }
 
+    /// The name typed so far for the last checkpoint, while the prompt for it
+    /// is open (see [`SessionHooks::checkpoint_names`]).
+    #[must_use]
+    pub fn naming(&self) -> Option<&str> {
+        self.active.as_ref()?.naming.as_deref()
+    }
+
+    /// Whether every key of the primary window is taken for now: a name is
+    /// being typed, or the release of a key it took is still to come.
+    fn takes_keys(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.naming.is_some() || !active.swallowed.is_empty())
+    }
+
+    /// Acts on one key message that was taken out of the app's reach: the
+    /// checkpoint key takes a checkpoint and opens the prompt for its name,
+    /// and while the prompt is open the keys edit the name. Returns whether
+    /// the key stays taken; if not it goes back to the app.
+    fn handle_key(
+        &mut self,
+        world: &mut World,
+        config: &SessionConfig,
+        delta: Duration,
+        input: &KeyboardInput,
+    ) -> bool {
+        if input.key_code == config.hooks.checkpoint() {
+            if input.state == ButtonState::Pressed && !input.repeat {
+                match self.checkpoint(world, config, delta, None) {
+                    Ok(_) if config.hooks.asks_names() => {
+                        if let Some(active) = self.active.as_mut() {
+                            active.naming = Some(String::new());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => bevy::log::warn!("cannot take a checkpoint: {error}"),
+                }
+            }
+            return true;
+        }
+        self.active
+            .as_mut()
+            .is_some_and(|active| active.take_key(input))
+    }
+
+    /// How many checkpoints the session in progress has taken, or 0 when none
+    /// is on.
+    #[must_use]
+    pub fn checkpoints_taken(&self) -> usize {
+        self.active
+            .as_ref()
+            .map_or(0, |active| active.checkpoints.len())
+    }
+
     /// What the last stop, or a start that failed, came to.
     #[must_use]
     pub const fn last(&self) -> Option<&Result<SavedSession, SessionError>> {
@@ -468,7 +555,27 @@ pub fn start(world: &mut World, name: &str) -> Result<(), SessionError> {
 /// [`SessionError`] when no session is on or the plugin is not added.
 pub fn checkpoint(world: &mut World) -> Result<CheckpointTaken, SessionError> {
     with_recorder(world, |world, recorder, config| {
-        recorder.checkpoint(world, config, FRAME_STEP)
+        recorder.checkpoint(world, config, FRAME_STEP, None)
+    })
+}
+
+/// Takes a checkpoint now, as [`checkpoint`] does, and names it.
+///
+/// The steps recorded since the last checkpoint, and the `Check` steps of
+/// this one, become a `Group` called `name` in the saved script. A blank name
+/// is the same as none. No prompt opens, whatever
+/// [`SessionHooks::checkpoint_names`] says.
+///
+/// # Errors
+///
+/// [`SessionError`] when no session is on or the plugin is not added.
+pub fn checkpoint_named(
+    world: &mut World,
+    name: impl Into<String>,
+) -> Result<CheckpointTaken, SessionError> {
+    let name = name.into();
+    with_recorder(world, |world, recorder, config| {
+        recorder.checkpoint(world, config, FRAME_STEP, Some(name))
     })
 }
 
@@ -563,7 +670,8 @@ fn take_out<M: Message + Clone>(
 }
 
 /// The system: while recording, takes the checkpoint key out of the primary
-/// window's keyboard messages and takes a checkpoint for each press.
+/// window's keyboard messages and takes a checkpoint for each press; while a
+/// checkpoint's name is being typed, takes the typed keys too.
 fn take_checkpoints(
     world: &mut World,
     mut keys: Local<MessageCursor<KeyboardInput>>,
@@ -584,32 +692,44 @@ fn take_checkpoints(
         return;
     };
     let key = config.hooks.checkpoint();
-    let presses = take_out(world, &mut keys, |input| {
-        input.window == window && input.key_code == key
-    })
-    .into_iter()
-    .filter(|input| input.state == ButtonState::Pressed && !input.repeat)
-    .count();
+    // Whether keys are being taken is decided before the first message is
+    // read, so keys written with the checkpoint key in one update still reach
+    // the app.
+    let typing = world
+        .get_resource::<SessionRecorder>()
+        .is_some_and(SessionRecorder::takes_keys);
+    let taken = take_out(world, &mut keys, |input| {
+        input.window == window && (input.key_code == key || typing)
+    });
+    let mut consumed = Vec::new();
+    if !taken.is_empty() {
+        let delta = world
+            .get_resource::<Time<Real>>()
+            .map_or(FRAME_STEP, Time::delta);
+        let Some(mut recorder) = world.remove_resource::<SessionRecorder>() else {
+            return;
+        };
+        let mut passed = Vec::new();
+        for input in taken {
+            if recorder.handle_key(world, &config, delta, &input) {
+                consumed.push(input);
+            } else {
+                passed.push(input);
+            }
+        }
+        world.insert_resource(recorder);
+        if let Some(mut messages) = world.get_resource_mut::<Messages<KeyboardInput>>() {
+            for input in passed {
+                messages.write(input);
+            }
+            *keys = messages.get_cursor_current();
+        }
+    }
     // Apps can read the keyboard through the window events too.
     drop(take_out(world, &mut window_events, |event| {
         matches!(event, WindowEvent::KeyboardInput(input)
-            if input.window == window && input.key_code == key)
+            if input.window == window && consumed.contains(input))
     }));
-    if presses == 0 {
-        return;
-    }
-    let delta = world
-        .get_resource::<Time<Real>>()
-        .map_or(FRAME_STEP, Time::delta);
-    let Some(mut recorder) = world.remove_resource::<SessionRecorder>() else {
-        return;
-    };
-    for _ in 0..presses {
-        if let Err(error) = recorder.checkpoint(world, &config, delta) {
-            bevy::log::warn!("cannot take a checkpoint: {error}");
-        }
-    }
-    world.insert_resource(recorder);
 }
 
 /// The system: logs this update's real input and carries out requests.
@@ -702,6 +822,10 @@ impl SessionRecorder {
             });
         }
         for press in buttons.iter().filter(|press| press.window == window) {
+            if press.state == ButtonState::Pressed {
+                // Going back to the mouse is done with the name.
+                active.close_naming();
+            }
             let Some(position) = active.cursor else {
                 continue;
             };
@@ -799,6 +923,9 @@ impl SessionRecorder {
             view,
             before,
             checkpoints: Vec::new(),
+            names: Vec::new(),
+            naming: None,
+            swallowed: Vec::new(),
             elapsed: Duration::ZERO,
             events: Vec::new(),
             cursor: cursor.flatten(),
@@ -815,11 +942,14 @@ impl SessionRecorder {
         world: &mut World,
         config: &SessionConfig,
         ahead: Duration,
+        name: Option<String>,
     ) -> Result<CheckpointTaken, SessionError> {
         let active = self
             .active
             .as_mut()
             .ok_or_else(|| SessionError::new("no session is being recorded"))?;
+        // The name asked for the checkpoint before is final once another is taken.
+        active.close_naming();
         let now = config.hooks.snapshot(world);
         let candidates = suggest_checks(&active.before, &now, world);
         active.before = now;
@@ -832,6 +962,9 @@ impl SessionRecorder {
             candidates: candidates.len(),
         };
         active.checkpoints.push(candidates);
+        active
+            .names
+            .push(name.filter(|name| !name.trim().is_empty()));
         if world.write_message(taken).is_none() {
             bevy::log::warn!("checkpoint {} taken, but nothing can show it", taken.number);
         }
@@ -873,9 +1006,26 @@ impl SessionRecorder {
                 },
             });
         }
+        // A name still being typed when the person stops is kept.
+        active.close_naming();
         let logged = read_log(&active.events, end, &config.options);
         let after = config.hooks.snapshot(world);
         let candidates = suggest_checks(&active.before, &after, world);
+        let checkpoints: Vec<Checkpoint> = logged
+            .checkpoints
+            .iter()
+            .zip(active.checkpoints)
+            .zip(active.names)
+            .map(|((at, candidates), name)| Checkpoint {
+                at: *at,
+                name,
+                candidates,
+            })
+            .collect();
+        let kept: Vec<Vec<Check>> = checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.candidates.clone())
+            .collect();
         let script = Script {
             format_version: FORMAT_VERSION,
             name: active.name,
@@ -885,17 +1035,11 @@ impl SessionRecorder {
             scale_factor: None,
             setup: active.setup,
             view: active.view,
-            steps: with_checks(&logged.steps, &logged.checkpoints, &active.checkpoints),
+            steps: with_checks(&logged.steps, &checkpoints, &kept),
             expect: candidates.clone(),
         };
         let path = config.dir.join(format!("{}.ron", active.stem));
         write_script(&path, &script)?;
-        let checkpoints = logged
-            .checkpoints
-            .into_iter()
-            .zip(active.checkpoints)
-            .map(|(at, candidates)| Checkpoint { at, candidates })
-            .collect();
         let saved = SavedSession {
             path,
             script,
@@ -916,7 +1060,8 @@ const HEADER: &str = "\
 // shortened. `Check` steps among them were suggested at a checkpoint by what
 // changed since the one before; `expect` holds the checks suggested by what
 // changed since the last checkpoint (or the start). Keep the ones you want
-// checked and delete the rest.
+// checked and delete the rest. A `Group` is a run of steps a checkpoint was
+// named for; its name leads the report of every step in it.
 ";
 
 /// A file-name-safe version of `name` that no file in `dir` has yet.
@@ -945,6 +1090,61 @@ fn free_stem(dir: &std::path::Path, name: &str) -> String {
     candidate
 }
 
+impl Active {
+    /// Acts on one taken key message while a name is typed or a key it took is
+    /// held: edits the name, ends the prompt on Enter (keeping the name) or
+    /// Escape (keeping none). Returns whether the app must not see the key.
+    fn take_key(&mut self, input: &KeyboardInput) -> bool {
+        let key = input.key_code;
+        let swallowed = self.swallowed.iter().position(|taken| *taken == key);
+        if input.state == ButtonState::Released {
+            return swallowed.is_some_and(|index| {
+                self.swallowed.remove(index);
+                true
+            });
+        }
+        if self.naming.is_none() {
+            return swallowed.is_some();
+        }
+        if swallowed.is_none() {
+            self.swallowed.push(key);
+        }
+        match key {
+            KeyCode::Enter | KeyCode::NumpadEnter => self.close_naming(),
+            KeyCode::Escape => self.naming = None,
+            KeyCode::Backspace => {
+                if let Some(typed) = self.naming.as_mut() {
+                    typed.pop();
+                }
+            }
+            _ => {
+                if let (Some(typed), Some(text)) = (self.naming.as_mut(), input.text.as_ref()) {
+                    for letter in text.chars().filter(|letter| !letter.is_control()) {
+                        if typed.chars().count() < MAX_NAME_CHARS {
+                            typed.push(letter);
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Ends the asking for a name, keeping what was typed (a name of only
+    /// blanks is none).
+    fn close_naming(&mut self) {
+        let Some(typed) = self.naming.take() else {
+            return;
+        };
+        let typed = typed.trim();
+        if !typed.is_empty()
+            && let Some(slot) = self.names.last_mut()
+        {
+            *slot = Some(typed.to_owned());
+        }
+    }
+}
+
 /// Shared by the gallery: a path shown to the person.
 impl SavedSession {
     /// How the save reads in a status line.
@@ -953,7 +1153,7 @@ impl SavedSession {
         format!(
             "Saved {} ({} steps)",
             self.path.display(),
-            self.script.steps.len()
+            flatten(&self.script.steps).len()
         )
     }
 }

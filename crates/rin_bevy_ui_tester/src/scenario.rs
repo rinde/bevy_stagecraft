@@ -150,7 +150,7 @@ impl BitOr for Modifiers {
 /// One thing a scenario does. Time is counted in frames of 1/60 s.
 ///
 /// Every step that touches input takes one frame, except where it says
-/// otherwise; [`Step::Check`] and [`Step::Caption`] take none.
+/// otherwise; [`Step::Check`], [`Step::Caption`] and [`Step::Group`] take none.
 ///
 /// A step that acts on a target that names a widget first waits, a frame at
 /// a time, until the target can be acted on, as Playwright does: it exists
@@ -259,9 +259,80 @@ pub enum Step {
     /// same steps as [`Step::Timeout`]: `Force(Click(Left))` clicks a
     /// disabled button.
     Force(Box<Self>),
+    /// A named run of steps, such as `"raise the bridge"`. Groups nest. A
+    /// group is only a name for the reports: it plays frame for frame as its
+    /// steps would without it, and takes no frame of its own. A failure
+    /// inside names the group path (see [`GROUP_SEPARATOR`]), and the
+    /// steps are numbered across groups as if they were one flat list.
+    Group {
+        /// What the group is called; not empty. A blank name is refused when
+        /// a script is loaded; [`Step::group`] in Rust does not check it.
+        name: String,
+        /// The steps in it, which may be groups.
+        steps: Vec<Self>,
+    },
+}
+
+/// What separates the names of the groups around a step from each other and
+/// from the step in reports: `raise the bridge > lay the first run`. ASCII,
+/// as the bundled font draws nothing else.
+pub const GROUP_SEPARATOR: &str = " > ";
+
+/// A step that plays, with the names of the groups around it, outermost first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlatStep<'a> {
+    /// The groups it is in.
+    pub group: Vec<&'a str>,
+    /// The step itself, never a [`Step::Group`].
+    pub step: &'a Step,
+}
+
+/// The steps that play, in order, with their groups: `steps` with every
+/// [`Step::Group`] replaced by what is inside it. A report numbers its steps
+/// by this list.
+#[must_use]
+pub fn flatten(steps: &[Step]) -> Vec<FlatStep<'_>> {
+    let mut out = Vec::new();
+    flatten_into(steps, &mut Vec::new(), &mut out);
+    out
+}
+
+/// [`flatten`], adding to `out` the steps of `steps` inside the groups in `path`.
+fn flatten_into<'a>(steps: &'a [Step], path: &mut Vec<&'a str>, out: &mut Vec<FlatStep<'a>>) {
+    for step in steps {
+        if let Step::Group { name, steps } = step {
+            path.push(name);
+            flatten_into(steps, path, out);
+            path.pop();
+        } else {
+            out.push(FlatStep {
+                group: path.clone(),
+                step,
+            });
+        }
+    }
+}
+
+/// `text` with the group path in front, such as `raise the bridge > Click`;
+/// just `text` outside any group.
+#[must_use]
+pub fn with_group_path(group: &[String], text: &str) -> String {
+    if group.is_empty() {
+        return text.to_owned();
+    }
+    format!("{}{GROUP_SEPARATOR}{text}", group.join(GROUP_SEPARATOR))
 }
 
 impl Step {
+    /// A group called `name` of `steps`.
+    #[must_use]
+    pub fn group(name: impl Into<String>, steps: impl IntoIterator<Item = Self>) -> Self {
+        Self::Group {
+            name: name.into(),
+            steps: steps.into_iter().collect(),
+        }
+    }
+
     /// Jump the pointer to `target`.
     #[must_use]
     pub const fn move_to(target: Target) -> Self {

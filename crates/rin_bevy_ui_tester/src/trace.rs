@@ -34,7 +34,7 @@ use crate::{
     check::suggest::{NoiseFilter, SnapshotChange, WorldSnapshot, state_names},
     overlay::{TargetDescriptions, describe_step},
     player::{Outcome, StepRecord},
-    scenario::Step,
+    scenario::{Step, with_group_path},
     targets::is_tooling,
 };
 
@@ -241,10 +241,13 @@ pub fn step_title(
         .take(index)
         .map(|earlier| earlier.step.clone())
         .collect();
-    Some(format!(
-        "{}. {}",
-        index + 1,
-        describe_step(&record.step, &before, descriptions)
+    Some(with_group_path(
+        &record.group,
+        &format!(
+            "{}. {}",
+            index + 1,
+            describe_step(&record.step, &before, descriptions)
+        ),
     ))
 }
 
@@ -457,6 +460,7 @@ mod tests {
     fn records() -> Vec<StepRecord> {
         let record = |step: Step, outcome: Outcome| StepRecord {
             step,
+            group: Vec::new(),
             outcome,
             frame: 1,
         };
@@ -465,6 +469,18 @@ mod tests {
             record(Step::wait(4), Outcome::Fail("no such button".into())),
             record(Step::wait(5), Outcome::Skipped),
         ]
+    }
+
+    #[test]
+    fn a_step_in_a_group_is_titled_with_the_group_path_in_front() {
+        let mut records = records();
+        if let Some(record) = records.get_mut(1) {
+            record.group = vec!["raise the bridge".into(), "lever".into()];
+        }
+        assert_eq!(
+            step_title(1, &records, &TargetDescriptions::default()),
+            Some("raise the bridge > lever > 2. Wait 4 frames".to_owned())
+        );
     }
 
     #[test]

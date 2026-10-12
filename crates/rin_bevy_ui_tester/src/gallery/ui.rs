@@ -39,7 +39,7 @@ use crate::{
     check::{Check, pick::Picked, suggest::SnapshotChange},
     overlay::{OverlayTheme, TargetDescriptions, describe_step},
     player::{CheckKind, Outcome, ScenarioPlayer, ScenarioReport},
-    scenario::{Scenario, Step},
+    scenario::{Scenario, Step, flatten, with_group_path},
     targets::NotUnderTest,
     trace::{ScenarioTrace, StepView, TargetTrace, TraceCheck, step_title},
 };
@@ -1119,10 +1119,12 @@ fn check_lines(
 ) -> Vec<(String, Color)> {
     // Slots in the order the player records them: step checks as the script
     // reaches them, then the expectations.
-    let step_checks = scenario.script().iter().filter_map(|step| match step {
-        Step::Check(check) => Some((CheckKind::Step, check.to_string())),
-        _ => None,
-    });
+    let step_checks = flatten(scenario.script())
+        .into_iter()
+        .filter_map(|flat| match flat.step {
+            Step::Check(check) => Some((CheckKind::Step, check.to_string())),
+            _ => None,
+        });
     let expects = scenario
         .expects()
         .into_iter()
@@ -1162,22 +1164,22 @@ fn step_lines(
     theme: &OverlayTheme,
     descriptions: &TargetDescriptions,
 ) -> Vec<(String, String)> {
-    scenario
-        .script()
-        .iter()
+    let flat = flatten(scenario.script());
+    let steps: Vec<Step> = flat.iter().map(|flat| flat.step.clone()).collect();
+    flat.iter()
         .enumerate()
-        .map(|(index, step)| {
+        .map(|(index, flat)| {
             let outcome = report
                 .steps
                 .get(index)
                 .map_or(&Outcome::Skipped, |record| &record.outcome);
             let (mark, _) = outcome_mark(outcome, theme);
-            let words = describe_step(
-                step,
-                scenario.script().get(..index).unwrap_or(&[]),
-                descriptions,
-            );
-            (mark, format!("{}. {words}", index + 1))
+            let words = describe_step(flat.step, steps.get(..index).unwrap_or(&[]), descriptions);
+            let group: Vec<String> = flat.group.iter().map(|name| (*name).to_owned()).collect();
+            (
+                mark,
+                with_group_path(&group, &format!("{}. {words}", index + 1)),
+            )
         })
         .collect()
 }
