@@ -23,8 +23,10 @@ use super::{
 };
 use crate::{
     check::{Check, suggest::NoiseFilter},
+    extension::Setup,
     input::SyntheticInput,
     player::{ScenarioPlayer, ScenarioReport, advance_world},
+    save,
     scenario::Scenario,
     script::check_scale_factor,
     session::{self, DEFAULT_CHECKPOINT_KEY, SessionConfig, SessionRecorder},
@@ -252,6 +254,36 @@ fn export(world: &World, state: &mut GalleryState) {
     state.status = match written {
         Ok(()) => format!("Exported {}", path.display()),
         Err(error) => format!("Export failed: {error}"),
+    };
+}
+
+/// Saves the world as it is as a setup for other scenarios, next to the
+/// exported ones, and says where (see [`crate::save`]). Works while a
+/// recording is on, or paused, and changes nothing in the world.
+fn save_as_setup(world: &mut World, state: &mut GalleryState) {
+    let stem = state
+        .selected
+        .and_then(|index| world.get_resource::<Gallery>()?.get(index))
+        .map_or_else(
+            || file_stem(RECORDING_NAME),
+            |entry| file_stem(entry.scenario.name()),
+        );
+    let noise = world
+        .get_resource::<SessionConfig>()
+        .map_or_else(NoiseFilter::default, |config| config.hooks.noise().clone());
+    state.status = match save::save_setup(world, &state.export_dir, &stem, &noise) {
+        Ok(saved) => {
+            let wrote = saved.path.as_ref().map_or_else(
+                || "the app's own format".to_owned(),
+                |path| path.display().to_string(),
+            );
+            let setup = match &saved.setup {
+                Setup::Scene(name) => format!("setup: Scene({name:?})"),
+                Setup::App(value) => format!("setup: App({value})"),
+            };
+            format!("Saved setup {wrote}; use it in a scenario as {setup}")
+        }
+        Err(error) => format!("Save as setup failed: {error}"),
     };
 }
 
@@ -640,6 +672,7 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
             }
         }
         GalleryAction::Export => export(world, state),
+        GalleryAction::SaveAsSetup => save_as_setup(world, state),
     }
 }
 

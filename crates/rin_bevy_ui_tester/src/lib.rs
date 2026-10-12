@@ -24,6 +24,7 @@ pub mod player;
 pub mod probe;
 #[cfg(feature = "record")]
 pub mod recorder;
+pub mod save;
 pub mod scenario;
 pub mod script;
 pub mod session;
@@ -73,6 +74,7 @@ pub use recorder::{
     Capture, CaptureMeta, Captures, RecordError, Recorder, RecorderPlugins, RecorderSystems,
     RecorderTarget, Recording, ScenarioRecording,
 };
+pub use save::{SCENE_SUFFIX, SaveError, SavedSetup, save_setup};
 pub use scenario::{CheckResult, Modifiers, Scenario, Step};
 pub use script::{
     ExportError, FORMAT_VERSION, LoadError, OLDEST_FORMAT_VERSION, Registry, Script, export_ron,

@@ -39,7 +39,8 @@ use bevy::{
 };
 use rin_bevy_ui_tester::{
     AppCheck, AppSetup, Check, CheckResult, Gallery, GalleryEntry, GalleryPlugin, Probe,
-    ReflectAppCheck, ReflectAppSetup, Registry, Scenario, SessionRecorder, Step, Target, session,
+    ReflectAppCheck, ReflectAppSetup, Registry, Scenario, SessionRecorder, Step, Target,
+    load_ron_file, save, session,
 };
 
 /// Where recordings are written, and read from at startup.
@@ -316,6 +317,13 @@ fn recorded() -> Vec<GalleryEntry> {
     let mut paths: Vec<_> = files
         .filter_map(|file| file.ok().map(|file| file.path()))
         .filter(|path| path.extension().is_some_and(|e| e == "ron"))
+        // A world saved with **Save as setup** is a setup, not a scenario.
+        .filter(|path| {
+            !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(save::is_scene_file)
+        })
         .collect();
     paths.sort();
     paths
@@ -328,12 +336,8 @@ fn recorded() -> Vec<GalleryEntry> {
 /// One recording as a scenario, or `None` (with a warning) when it will not
 /// load. Its setup is the app's own, so nothing else is needed.
 fn load(path: &Path, registry: &Registry) -> Option<Scenario> {
-    let loaded = fs::read_to_string(path)
-        .map_err(|error| error.to_string())
-        .and_then(|text| {
-            Scenario::from_ron_with(&text, registry).map_err(|error| error.to_string())
-        });
-    match loaded {
+    // Next to its file, so a `Scene("..")` setup finds the world it names.
+    match load_ron_file(path, registry) {
         Ok(scenario) => Some(scenario),
         Err(error) => {
             warn!("skipping {}: {error}", path.display());

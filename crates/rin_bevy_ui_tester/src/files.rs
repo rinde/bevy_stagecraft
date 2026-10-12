@@ -31,6 +31,7 @@ use std::{
 
 use crate::{
     player::ScenarioReport,
+    save::is_scene_file,
     scenario::Scenario,
     script::{LoadError, Registry},
     variant::Variant,
@@ -76,7 +77,9 @@ impl FileResult {
     }
 }
 
-/// The `.ron` files directly in `dir`, sorted by name.
+/// The `.ron` files directly in `dir`, sorted by name, except the saved
+/// worlds (`*.scene.ron`, see [`crate::save`]), which are setups and not
+/// scenarios.
 ///
 /// # Errors
 ///
@@ -90,7 +93,10 @@ pub fn ron_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, LoadError> {
     let mut files = Vec::new();
     for entry in fs::read_dir(dir).map_err(io)? {
         let path = entry.map_err(io)?.path();
-        if path.extension().is_some_and(|extension| extension == "ron") {
+        let is_scene = path
+            .file_name()
+            .is_some_and(|name| is_scene_file(&name.to_string_lossy()));
+        if path.extension().is_some_and(|extension| extension == "ron") && !is_scene {
             files.push(path);
         }
     }
@@ -98,7 +104,8 @@ pub fn ron_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, LoadError> {
     Ok(files)
 }
 
-/// Loads one file as a scenario.
+/// Loads one file as a scenario. A setup in it that names a file (a saved
+/// world, `Scene("..")`) looks for it next to this one.
 ///
 /// # Errors
 ///
@@ -109,7 +116,11 @@ pub fn load_ron_file(path: impl AsRef<Path>, registry: &Registry) -> Result<Scen
         path: path.display().to_string(),
         message: error.to_string(),
     })?;
-    Scenario::from_ron_with(&text, registry)
+    let scenario = Scenario::from_ron_with(&text, registry)?;
+    Ok(match path.parent() {
+        Some(dir) => scenario.with_base_dir(dir),
+        None => scenario,
+    })
 }
 
 /// Loads and plays every `.ron` file in `dir` whose name contains `filter`

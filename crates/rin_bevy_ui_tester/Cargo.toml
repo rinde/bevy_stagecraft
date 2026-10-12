@@ -76,6 +76,9 @@ features = [
     "reflect_auto_register",
     # Serde for vectors, keys and mouse buttons, so scripts can be written out.
     "serialize",
+    # `DynamicWorld` (Bevy's dynamic scene), the format a checkpoint is saved
+    # in as a setup for other scenarios (`save` module).
+    "bevy_world_serialization",
     # Warnings from the synthetic input systems.
     "bevy_log",
 ]

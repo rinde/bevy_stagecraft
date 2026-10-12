@@ -197,6 +197,9 @@ per extension point, and a second one is a load error naming both.
   names a click that hit no label. They replace the session hooks of earlier
   versions.
 - `Registry::app_type(Extension::Setup)` and so on list the variants.
+- A world saved as a setup for other scenarios is the built-in
+  `setup: Scene("start.scene.ron")` (see
+  [Saving a checkpoint as a setup](#saving-a-checkpoint-as-a-setup)).
 
 Most questions about plain Bevy data are built in, typed in Rust and found
 through Bevy's type registry (`AppTypeRegistry`), so writing app code for a
@@ -615,7 +618,7 @@ plugins. The app under test runs untouched in the primary window; a second OS
 window, **Scenarios**, with its own UI camera, holds the catalogue (grouped,
 with descriptions and each entry's last result), play and pause, step one
 frame, step to the next step, restart, speed (1/4x, 1/2x, 1x, 2x), loop on and
-off, **Take over**, **Export RON**, **Record**, **New: empty world** / **New: current state**, **Pick**, the live list of
+off, **Take over**, **Export RON**, **Save as setup**, **Record**, **New: empty world** / **New: current state**, **Pick**, the live list of
 the selected scenario's checks, and its steps (see below). Space plays and pauses, Right steps a frame, Down steps to the next
 step and Left restarts, read from the Scenarios window only.
 
@@ -834,6 +837,46 @@ The file, and whatever the app's `AppSetup::capture` wrote, go to the
 gallery's export directory (or the `SessionPlugin`'s). Load it like any other
 script: its setup is the app's own value, so it plays with nothing else added;
 see `tests/session.rs`, `tests/gallery.rs` and the example.
+
+### Saving a checkpoint as a setup
+
+Another scenario often wants to start where a recording got to. While
+recording, or paused, press the gallery's **Save as setup** (or call
+`save_setup(world, dir, stem, &noise)`): the world as it is goes to
+`{stem}.scene.ron` in the export directory, next to the scenarios (`stem` is
+the selected scenario's file name, else `recording`; a second save is
+`{stem}-2.scene.ron`, and nothing is overwritten). Any scenario then starts
+from it:
+
+```ron
+setup: Scene("recording.scene.ron"),
+```
+
+or `Scenario::scene_setup("recording.scene.ron")` in Rust. A scenario loaded
+from a file (`load_ron_file`, `run_ron_tests`, the gallery example) looks for
+the name next to its own file; one built in Rust looks next to
+`Scenario::with_base_dir(..)`, else in the working directory.
+
+The file is Bevy's own world format (a `DynamicWorld`, the dynamic scene of
+earlier versions) holding the app's reflected resources and entities, and
+loading it is built in: resources are replaced, entities are added. What
+belongs to the tooling or the UI is left out: every type of Bevy's crates and
+of this one (the `NoiseFilter` of the session's hooks decides; by default, all
+of them), every UI node, camera and window and what sits below one, and what
+is marked `NotUnderTest`. So the scenario brings its own UI, with a setup
+closure or the app's own setup, and the data it needs comes from the file.
+Types need `#[derive(Reflect, Default)]` with `#[reflect(Resource)]` or
+`#[reflect(Component)]`; a component that refers to another entity is saved
+with that entity's id, so keep both in the file. The file is the same on every
+run: resources, components and entities are written in a fixed order.
+
+A file named `*.scene.ron` is a setup, not a scenario, so `ron_files`,
+`run_ron_tests` and the gallery example skip it.
+
+An app with a save format of its own does not use the file: its
+`AppSetup::capture` writes the save into `dir` (names starting with `stem`) and
+returns the `App(..)` setup that loads it, and **Save as setup** prefers that
+(the status line then shows the setup to write).
 
 ### Picking a check by clicking a node
 

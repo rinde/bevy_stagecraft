@@ -10,7 +10,7 @@ use bevy::{
 use serde::{Deserialize, Serialize, de::Error as _};
 
 use super::{AppSetupValue, AppValue, SetupPoint};
-use crate::check::Problem;
+use crate::{check::Problem, save::load_scene_file};
 
 /// A setup the app defines, on one reflected enum of its own: what builds
 /// the world a scenario starts from (spawning the UI, loading a save).
@@ -55,7 +55,10 @@ use crate::check::Problem;
 ///
 /// When a session recording starts (see [`crate::session`]), the crate calls
 /// [`AppSetup::capture`] to turn the app's current state into a setup, which
-/// the recorded script then starts from.
+/// the recorded script then starts from. The gallery's **Save as setup** calls
+/// it too, to save a checkpoint as a setup for other scenarios; where it
+/// returns `None`, the crate saves the world in Bevy's own format instead (a
+/// built-in `Scene(..)` setup, see [`crate::save`]).
 pub trait AppSetup {
     /// Builds the scenario's starting state in `world`.
     ///
@@ -149,12 +152,13 @@ impl fmt::Debug for ReflectAppSetup {
     }
 }
 
-/// What a file that refers to a setup by name or file, as format versions 1
-/// to 3 could, is told.
+/// What a file that refers to a setup by name, as format versions 1 to 3
+/// could, is told.
 const NO_NAMED_SETUP: &str = "setups are no longer looked up by name or file: \
     declare the app's setups as one enum with `#[derive(Reflect)]` and \
     `#[reflect(AppSetup)]`, and write one as `App(..)`, such as \
-    `setup: App(SavedWorld(\"start.ron\"))`";
+    `setup: App(SavedWorld(\"start.ron\"))`; a world saved from the gallery is \
+    `setup: Scene(\"start.scene.ron\")`";
 
 /// Where a scenario's starting state comes from, as a script holds it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -164,6 +168,13 @@ pub enum Setup {
     /// `#[reflect(AppSetup)]` (see [`AppSetup`]). Written as
     /// `App(SavedWorld("start.ron"))`.
     App(AppSetupValue),
+    /// A world saved with **Save as setup** in the gallery (or
+    /// [`save_setup`](crate::save::save_setup)): the name of its file, which is
+    /// next to the script's own when the script was loaded from a file (see
+    /// [`Scenario::base_dir`](crate::Scenario::base_dir)). Loading it puts the
+    /// saved resources and entities into the world (see [`crate::save`]).
+    /// Written as `Scene("start.scene.ron")`.
+    Scene(String),
 }
 
 /// [`Setup`] as serde's derive reads it, which [`Setup`]'s own impl adds the
@@ -173,10 +184,12 @@ pub enum Setup {
 enum Written {
     /// See [`Setup::App`].
     App(AppSetupValue),
+    /// See [`Setup::Scene`].
+    Scene(String),
 }
 
-/// Any form but `App(..)` is one of the old ones, so the error says what to
-/// write instead.
+/// Any form but `App(..)` and `Scene(..)` is one of the old ones, so the error
+/// says what to write instead.
 impl<'de> Deserialize<'de> for Setup {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Written::deserialize(deserializer)
@@ -192,10 +205,13 @@ impl Setup {
         Self::App(AppValue::of(setup))
     }
 
-    /// Builds the setup in `world`.
-    pub(crate) fn build(&self, world: &mut World) -> Result<(), String> {
+    /// Builds the setup in `world`; a saved world's file is looked for in
+    /// `base_dir`.
+    pub(crate) fn build(&self, world: &mut World, base_dir: Option<&Path>) -> Result<(), String> {
         match self {
             Self::App(value) => value.build(world),
+            Self::Scene(file) => load_scene_file(world, base_dir, file)
+                .map_err(|error| format!("the setup `Scene({file:?})` failed: {error}")),
         }
     }
 
@@ -203,6 +219,7 @@ impl Setup {
     pub(crate) fn type_against(&mut self, types: &TypeRegistry) -> Result<(), Problem> {
         match self {
             Self::App(value) => value.type_against(types),
+            Self::Scene(_) => Ok(()),
         }
     }
 }

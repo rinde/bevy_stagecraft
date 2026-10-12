@@ -142,6 +142,10 @@ pub enum GalleryAction {
     Resume,
     /// Write the selected entry as RON into the export directory.
     Export,
+    /// Write the world as it is as a setup file in the export directory, for
+    /// other scenarios to start from (see [`crate::save`]). Allowed while
+    /// recording.
+    SaveAsSetup,
     /// Start recording a scenario from a session: pause the script, take the
     /// primary window over and log what the real mouse and keyboard do there
     /// (see [`crate::session`]).
