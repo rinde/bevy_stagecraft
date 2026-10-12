@@ -397,6 +397,18 @@ and in every runner. A step waiting for its target is in the middle of its
 step, so the gallery's **Step** runs until it has acted. `Check` steps do not
 wait unless they say so with `Within(..)`.
 
+Condition 5 follows how Bevy delivers pointer events, so a node with
+`Pickable { should_block_lower: false, .. }` (a floating popup or list that
+lets the pointer through) never counts as covering what lies below it. To
+assert what the person sees instead, check `OnTop(target)`
+(`Check::on_top(Target::text("Go"))`): it holds when the widget is painted
+topmost at its middle, walking the UI stack in paint order and ignoring
+`Pickable`. Only nodes that paint something cover (a background that is not
+transparent, an image or text), so an empty full-window container does not,
+and the widget's own nodes always count. A failure says what covers it
+(`Text("Go") is not on top: it is covered by `Popup``). It is a check, not a
+condition of the wait, so `Within(..)` polls it like any other.
+
 After moving onto a widget target the player also checks that the widget, or a
 descendant, is under the pointer, and otherwise fails naming what covers it. A
 failed step skips the rest of the script.

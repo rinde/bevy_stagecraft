@@ -639,6 +639,7 @@ pub(super) const fn widget_check(state: WidgetState, target: Target) -> Check {
         WidgetState::Pressed => Check::Pressed(target),
         WidgetState::Focused => Check::Focused(target),
         WidgetState::Visible => Check::Visible(target),
+        WidgetState::OnTop => Check::OnTop(target),
         WidgetState::Exists => Check::Exists(target),
     }
 }
