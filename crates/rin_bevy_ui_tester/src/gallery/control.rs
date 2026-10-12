@@ -621,6 +621,12 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         GalleryAction::ToggleTraceFollow => toggle_trace_follow(world, state),
         GalleryAction::InspectStep(step) => state.trace_step = Some(step),
         GalleryAction::ShowTraceWorld(shown) => state.trace_world = shown,
+        GalleryAction::ToggleType(index) => state.toggle_noise_type(index),
+        GalleryAction::UseNoise(preset) => state.use_noise(preset),
+        GalleryAction::ToggleHiddenChanges => {
+            state.hidden_list = state.hidden_list.toggled();
+            state.revision = state.revision.wrapping_add(1);
+        }
         GalleryAction::Select(index) => select(world, state, index),
         GalleryAction::SelectVariant(variant) => select_variant(world, state, variant),
         GalleryAction::JumpTo(step) => jump_to(world, state, step),
@@ -748,7 +754,9 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
                 // Not for a run of everything, which keeps nothing but its
                 // outcomes.
                 if !state.is_running_all() {
-                    player.enable_trace(NoiseFilter::default());
+                    // Everything is taken; the Trace tab filters what it
+                    // draws, so its filter can change without a new run.
+                    player.enable_trace(NoiseFilter::nothing());
                 }
                 player.start_after_setup(scenario, state.setup.clone());
             }

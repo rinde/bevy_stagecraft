@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use bevy::ecs::resource::Resource;
 
 use crate::{
-    check::{Check, pick::Picked},
+    check::{Check, pick::Picked, suggest::NoiseFilter},
     session::{SavedSession, SessionError},
     trace::ScenarioTrace,
 };
@@ -100,6 +100,53 @@ impl TraceWorld {
         match self {
             Self::Before => "Before",
             Self::After => "After",
+        }
+    }
+}
+
+/// A filter the Trace tab's changes can be switched to in one go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum NoisePreset {
+    /// The filter the app set, [`SessionHooks::noise_filter`], which is
+    /// [`NoiseFilter::default`] unless it set another.
+    ///
+    /// [`SessionHooks::noise_filter`]: crate::SessionHooks::noise_filter
+    App,
+    /// [`NoiseFilter::nothing`]: every type's changes, the gallery's own
+    /// included.
+    Everything,
+}
+
+impl NoisePreset {
+    /// Both, in the order of their buttons.
+    pub const ALL: [Self; 2] = [Self::App, Self::Everything];
+
+    /// How the preset reads on its button.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::App => "App default",
+            Self::Everything => "Everything",
+        }
+    }
+}
+
+/// Whether the Trace tab lists the changes its filter hides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenList {
+    /// Only their count is shown.
+    Closed,
+    /// Each is listed, with a button to show its type.
+    Open,
+}
+
+impl HiddenList {
+    /// The other one.
+    #[must_use]
+    pub const fn toggled(self) -> Self {
+        match self {
+            Self::Closed => Self::Open,
+            Self::Open => Self::Closed,
         }
     }
 }
@@ -207,6 +254,18 @@ pub enum GalleryAction {
     InspectStep(usize),
     /// Show the UI before or after the step in the Trace tab.
     ShowTraceWorld(TraceWorld),
+    /// Hide or show the type of the change line with this index among those
+    /// the Trace tab lists (visible ones first, then the hidden ones where
+    /// that list is open): hide it if its changes are listed, show it if they
+    /// are hidden. Only the display changes, so it is accepted at any time,
+    /// while recording, jumping or picking included.
+    ToggleType(usize),
+    /// Switch the Trace tab's filter to the app's own or to everything, for
+    /// all scenarios until the gallery closes. Accepted at any time, as
+    /// [`Self::ToggleType`] is.
+    UseNoise(NoisePreset),
+    /// Open or close the Trace tab's list of the changes its filter hides.
+    ToggleHiddenChanges,
 }
 
 /// What the gallery is in the middle of.
@@ -561,12 +620,26 @@ pub struct GalleryState {
     pub(crate) trace_step: Option<usize>,
     /// Which world around the step the Trace tab shows.
     pub(crate) trace_world: TraceWorld,
+    /// What the Trace tab leaves out of the changes it lists: the app's
+    /// filter with what the person has hidden or shown on top. The trace
+    /// holds everything; this is applied when the tab is drawn.
+    pub(crate) noise: NoiseFilter,
+    /// The filter the app set (`SessionHooks`), which **App default** goes
+    /// back to.
+    pub(crate) base_noise: NoiseFilter,
+    /// The full type paths of the change lines the Trace tab lists now, the
+    /// visible ones and then the hidden ones, in order: what
+    /// [`GalleryAction::ToggleType`] indexes. Rewritten whenever the tab is
+    /// drawn.
+    pub(crate) noise_types: Vec<String>,
+    /// Whether the Trace tab lists the changes its filter hides.
+    pub(crate) hidden_list: HiddenList,
 }
 
 impl GalleryState {
-    /// A state with nothing selected.
+    /// A state with nothing selected, whose Trace tab starts with `noise`.
     #[must_use]
-    pub(crate) const fn new(export_dir: PathBuf, loop_pause: u16) -> Self {
+    pub(crate) fn new(export_dir: PathBuf, loop_pause: u16, noise: NoiseFilter) -> Self {
         Self {
             selected: None,
             phase: GalleryPhase::Idle,
@@ -595,6 +668,10 @@ impl GalleryState {
             trace: None,
             trace_step: None,
             trace_world: TraceWorld::After,
+            noise: noise.clone(),
+            base_noise: noise,
+            noise_types: Vec::new(),
+            hidden_list: HiddenList::Closed,
         }
     }
 
@@ -765,6 +842,80 @@ impl GalleryState {
     #[must_use]
     pub const fn trace_world(&self) -> TraceWorld {
         self.trace_world
+    }
+
+    /// What the Trace tab leaves out of the changes it lists, for the whole
+    /// gallery session: the app's filter, changed by hiding and showing types
+    /// or by a preset. Only the tab uses it; recordings, their suggestions and
+    /// pick mode keep the app's own.
+    #[must_use]
+    pub const fn noise(&self) -> &NoiseFilter {
+        &self.noise
+    }
+
+    /// The preset the Trace tab's filter is, if it is one: the app's own, or
+    /// everything. `None` once the person has hidden or shown a type on top.
+    #[must_use]
+    pub fn noise_preset(&self) -> Option<NoisePreset> {
+        if self.noise == self.base_noise {
+            Some(NoisePreset::App)
+        } else if self.noise == NoiseFilter::nothing() {
+            Some(NoisePreset::Everything)
+        } else {
+            None
+        }
+    }
+
+    /// How many patterns the person has added to the filter's ignore patterns
+    /// (types hidden) and to its keep patterns (types shown) on top of the
+    /// app's.
+    #[must_use]
+    pub fn noise_edits(&self) -> (usize, usize) {
+        let added = |now: &[String], base: &[String]| {
+            now.iter().filter(|pattern| !base.contains(pattern)).count()
+        };
+        (
+            added(self.noise.ignored(), self.base_noise.ignored()),
+            added(self.noise.kept(), self.base_noise.kept()),
+        )
+    }
+
+    /// Whether the Trace tab lists the changes its filter hides.
+    #[must_use]
+    pub const fn shows_hidden_changes(&self) -> bool {
+        matches!(self.hidden_list, HiddenList::Open)
+    }
+
+    /// Hides the type of change line `index` of the Trace tab if its changes
+    /// are listed, shows it if they are hidden, and says so in the status.
+    pub(crate) fn toggle_noise_type(&mut self, index: usize) {
+        let Some(type_path) = self.noise_types.get(index).cloned() else {
+            return;
+        };
+        let name = type_path.rsplit("::").next().unwrap_or(&type_path);
+        if self.noise.ignores_path(&type_path) {
+            self.noise.reveal(&type_path);
+            self.status = format!("Showing the changes of {name}");
+        } else {
+            let before = self.noise.clone();
+            if self.noise.hide(&type_path) {
+                self.status = format!("Hiding the changes of {name}");
+            } else {
+                // The pattern would do nothing, so it is not kept either.
+                self.noise = before;
+                "Kept by a keep pattern of the app".clone_into(&mut self.status);
+            }
+        }
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Switches the Trace tab's filter to a preset.
+    pub(crate) fn use_noise(&mut self, preset: NoisePreset) {
+        self.noise = match preset {
+            NoisePreset::App => self.base_noise.clone(),
+            NoisePreset::Everything => NoiseFilter::nothing(),
+        };
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Whether the script, not the real mouse and keyboard, has the primary

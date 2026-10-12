@@ -272,28 +272,44 @@ pub struct StepView<'a> {
     pub before: Option<&'a TracePoint>,
     /// The world once the step was done; `None` while it is still going.
     pub after: Option<&'a TracePoint>,
-    /// What the step changed in the snapshot; empty where either world is
-    /// missing.
+    /// What the step changed in the snapshot, less what the filter given to
+    /// [`StepView::new`] leaves out; empty where either world is missing.
     pub changes: Vec<SnapshotChange>,
+    /// The changes that filter left out, in the same order: the ones about a
+    /// type it ignores.
+    pub hidden: Vec<SnapshotChange>,
 }
 
 impl<'a> StepView<'a> {
     /// The view of step `index` of `steps` in `trace`; `None` if the report
     /// has no such step.
+    ///
+    /// `filter` decides which of the step's changes are listed: a change
+    /// about a type it ignores goes to [`Self::hidden`] instead. A trace
+    /// already filtered by the same filter (the recorder's) loses nothing
+    /// more; the gallery's holds everything and filters here, so that its
+    /// filter can change without playing the scenario again.
     #[must_use]
     pub fn new(
         index: usize,
         steps: &[StepRecord],
         trace: &'a ScenarioTrace,
         descriptions: &TargetDescriptions,
+        filter: &NoiseFilter,
     ) -> Option<Self> {
         let record = steps.get(index)?;
         let recorded = trace.step(index);
         let (before, after) = (trace.before(index), trace.after(index));
-        let changes = match (before, after) {
+        let all = match (before, after) {
             (Some(before), Some(after)) => after.snapshot.changes_from(&before.snapshot),
             _ => Vec::new(),
         };
+        let (hidden, changes): (Vec<_>, Vec<_>) = all.into_iter().partition(|change| {
+            change
+                .type_path
+                .as_deref()
+                .is_some_and(|path| filter.ignores_path(path))
+        });
         Some(Self {
             index,
             title: step_title(index, steps, descriptions)?,
@@ -303,6 +319,7 @@ impl<'a> StepView<'a> {
             before,
             after,
             changes,
+            hidden,
         })
     }
 
@@ -510,8 +527,7 @@ mod tests {
             },
         );
         let steps = records();
-        let view = StepView::new(1, &steps, &trace, &TargetDescriptions::default())
-            .expect("the report has the step");
+        let view = step_view(1, &steps, &trace).expect("the report has the step");
         assert_eq!(view.title, "2. Wait 4 frames");
         assert_eq!(view.failure(), Some("no such button"));
         assert!(view.ran());
@@ -525,8 +541,7 @@ mod tests {
     fn a_step_that_never_ran_has_no_failure_and_says_so() {
         let trace = trace();
         let steps = records();
-        let view = StepView::new(2, &steps, &trace, &TargetDescriptions::default())
-            .expect("the report has the step");
+        let view = step_view(2, &steps, &trace).expect("the report has the step");
         assert!(!view.ran());
         assert_eq!(view.failure(), None);
         assert!(view.targets.is_empty() && view.checks.is_empty());
@@ -536,7 +551,71 @@ mod tests {
     fn a_step_the_report_does_not_have_has_no_view() {
         let trace = trace();
         let steps = records();
-        assert!(StepView::new(3, &steps, &trace, &TargetDescriptions::default()).is_none());
+        assert!(step_view(3, &steps, &trace).is_none());
+    }
+
+    /// A trace point whose snapshot holds `score` and `time` resources.
+    fn point_with(started: usize, finished: bool, score: &str, time: &str) -> TracePoint {
+        let mut snapshot = WorldSnapshot::default();
+        snapshot.set_resource("Score", "game::Score", "Score.0", score);
+        snapshot.set_resource(
+            "Time<Virtual>",
+            "bevy_time::time::Time<bevy_time::virt::Virtual>",
+            "Time<Virtual>.elapsed",
+            time,
+        );
+        TracePoint {
+            snapshot,
+            ..point(0, started, finished)
+        }
+    }
+
+    #[test]
+    fn a_step_view_lists_the_changes_the_filter_lets_through_and_keeps_the_rest_apart() {
+        let mut trace = ScenarioTrace::new(NoiseFilter::nothing());
+        trace.push(point_with(0, false, "1", "0.0"));
+        trace.push(point_with(3, true, "2", "0.1"));
+        let steps = records();
+        let describe = |view: &StepView<'_>| -> (Vec<String>, Vec<String>) {
+            let keys = |changes: &[SnapshotChange]| {
+                changes.iter().map(|change| change.key.clone()).collect()
+            };
+            (keys(&view.changes), keys(&view.hidden))
+        };
+        let view = step_view(0, &steps, &trace).expect("the report has the step");
+        assert_eq!(
+            describe(&view),
+            (
+                vec!["resource Score.0".to_owned()],
+                vec!["resource Time<Virtual>.elapsed".to_owned()]
+            ),
+            "the default filter leaves out Bevy's time"
+        );
+        let everything = StepView::new(
+            0,
+            &steps,
+            &trace,
+            &TargetDescriptions::default(),
+            &NoiseFilter::nothing(),
+        )
+        .expect("the report has the step");
+        assert_eq!(everything.changes.len(), 2);
+        assert!(everything.hidden.is_empty());
+    }
+
+    /// The view of step `index` as the recorder's default filter lists it.
+    fn step_view<'a>(
+        index: usize,
+        steps: &[StepRecord],
+        trace: &'a ScenarioTrace,
+    ) -> Option<StepView<'a>> {
+        StepView::new(
+            index,
+            steps,
+            trace,
+            &TargetDescriptions::default(),
+            &NoiseFilter::default(),
+        )
     }
 
     #[test]

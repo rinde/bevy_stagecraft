@@ -33,7 +33,7 @@ use super::{
     Gallery, GalleryAction, GalleryState, Speed,
     input::{ScenariosScroll, scenarios_pointer},
     pick::spelled,
-    state::{GalleryPhase, GalleryTab, Suggestions, TraceWorld},
+    state::{GalleryPhase, GalleryTab, NoisePreset, Suggestions, TraceWorld},
 };
 use crate::{
     check::{Check, pick::Picked, suggest::SnapshotChange},
@@ -143,6 +143,13 @@ pub(super) enum Control {
     TraceWorld(TraceWorld),
     /// A step to show in the Trace tab.
     InspectStep(usize),
+    /// Hides or shows the type of a change line in the Trace tab: the line's
+    /// index among those listed.
+    NoiseType(usize),
+    /// A filter the Trace tab's changes can be switched to.
+    NoisePreset(NoisePreset),
+    /// Opens or closes the list of changes the Trace tab's filter hides.
+    HiddenChanges,
 }
 
 /// Marks a button whose shade is decided where it is spawned, not by
@@ -236,7 +243,15 @@ fn control_text(control: Control, state: &GalleryState) -> String {
             }
         ),
         Control::TraceWorld(world) => world.label().into(),
+        Control::NoisePreset(preset) => preset.label().into(),
+        Control::HiddenChanges => if state.shows_hidden_changes() {
+            "Close"
+        } else {
+            "List"
+        }
+        .into(),
         Control::Entry(_)
+        | Control::NoiseType(_)
         | Control::Variant(_)
         | Control::InspectStep(_)
         | Control::JumpTo(_)
@@ -292,6 +307,9 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
         Control::TraceFollow => GalleryAction::ToggleTraceFollow,
         Control::TraceWorld(world) => GalleryAction::ShowTraceWorld(world),
         Control::InspectStep(step) => GalleryAction::InspectStep(step),
+        Control::NoiseType(index) => GalleryAction::ToggleType(index),
+        Control::NoisePreset(preset) => GalleryAction::UseNoise(preset),
+        Control::HiddenChanges => GalleryAction::ToggleHiddenChanges,
     }
 }
 
@@ -618,6 +636,8 @@ pub(super) fn style_controls(
             Control::Tab(tab) => state.tab() == *tab,
             Control::TraceFollow => state.is_following_trace(),
             Control::TraceWorld(world) => state.trace_world() == *world,
+            Control::NoisePreset(preset) => state.noise_preset() == Some(*preset),
+            Control::HiddenChanges => state.shows_hidden_changes(),
             Control::PickTarget(index) => state
                 .picked()
                 .is_some_and(|picked| picked.chosen() == *index),
@@ -635,6 +655,7 @@ pub(super) fn style_controls(
                     .is_some_and(|check| picked.is_added(check))
             }),
             Control::InspectStep(_)
+            | Control::NoiseType(_)
             | Control::JumpTo(_)
             | Control::StepFrame
             | Control::StepStep
@@ -972,7 +993,7 @@ fn step_titles(
 /// trace of the run instead.
 pub(super) fn update_details(
     mut commands: Commands,
-    state: Res<GalleryState>,
+    mut state: ResMut<GalleryState>,
     report: Res<ScenarioReport>,
     gallery: Res<Gallery>,
     theme: Res<OverlayTheme>,
@@ -1023,13 +1044,18 @@ pub(super) fn update_details(
     }
     let descriptions = descriptions.as_deref().cloned().unwrap_or_default();
     if tracing_tab {
-        let view = step
-            .zip(trace)
-            .and_then(|(step, trace)| StepView::new(step, &report.steps, trace, &descriptions));
+        let view = step.zip(trace).and_then(|(step, trace)| {
+            StepView::new(step, &report.steps, trace, &descriptions, state.noise())
+        });
         let titles = step_titles(&report, &descriptions);
+        let types = noise_types(view.as_ref(), state.shows_hidden_changes());
         redraw(&mut commands, &details, |panel| {
             spawn_trace_panel(panel, &titles, view.as_ref(), &state, &theme);
         });
+        // The buttons just drawn name their type by index in this list.
+        if state.noise_types != types {
+            state.noise_types = types;
+        }
         return;
     }
     let Some(entry) = state.selected().and_then(|index| gallery.get(index)) else {
@@ -1155,22 +1181,7 @@ fn spawn_trace_panel(
         };
         label(panel, format!("{mark} {}{why}", check.name), tint);
     }
-    if view.changes.is_empty() {
-        label(panel, "Changed nothing in the world's state", DIM);
-    } else {
-        label(panel, "Changed", DIM);
-    }
-    for change in view.changes.iter().take(MAX_CHANGES) {
-        label(panel, change_text(change), TEXT);
-    }
-    if let Some(more) = view
-        .changes
-        .len()
-        .checked_sub(MAX_CHANGES)
-        .filter(|more| *more > 0)
-    {
-        label(panel, format!("... and {more} more"), DIM);
-    }
+    spawn_trace_changes(panel, view, state);
     label(panel, "Steps (click to look at one)", DIM);
     for (index, (title, outcome)) in titles.iter().enumerate() {
         let (mark, _) = outcome_mark(outcome, theme);
@@ -1184,6 +1195,122 @@ fn spawn_trace_panel(
         panel.commands().entity(button).insert(StaticShade);
     }
     spawn_trace_tree(panel, view, state.trace_world());
+}
+
+/// The type paths of the change lines the Trace tab lists with a hide or show
+/// button, in order: the visible ones, then the hidden ones where that list is
+/// open. A button's [`Control::NoiseType`] index is its place in this list.
+fn noise_types(view: Option<&StepView<'_>>, show_hidden: bool) -> Vec<String> {
+    let Some(view) = view else {
+        return Vec::new();
+    };
+    let hidden = if show_hidden {
+        view.hidden.as_slice()
+    } else {
+        &[]
+    };
+    view.changes
+        .iter()
+        .take(MAX_CHANGES)
+        .chain(hidden.iter().take(MAX_CHANGES))
+        .filter_map(|change| change.type_path.clone())
+        .collect()
+}
+
+/// What the step changed in the world's state, under the filter the Trace tab
+/// has: the filter itself, each change with a button to hide its type, and the
+/// list of what the filter hides, with a button to show each type again.
+fn spawn_trace_changes(
+    panel: &mut ChildSpawnerCommands<'_>,
+    view: &StepView<'_>,
+    state: &GalleryState,
+) {
+    row(panel, |row| {
+        label(row, "Changes under the filter:", DIM);
+        for preset in NoisePreset::ALL {
+            panel_button(
+                row,
+                Control::NoisePreset(preset),
+                control_text(Control::NoisePreset(preset), state),
+                state.noise_preset() == Some(preset),
+            );
+        }
+        if state.noise_preset().is_none() {
+            let (hidden, shown) = state.noise_edits();
+            label(
+                row,
+                format!("(edited: {hidden} hidden, {shown} shown)"),
+                DIM,
+            );
+        }
+    });
+    if view.changes.is_empty() {
+        label(panel, "Changed nothing in the world's state", DIM);
+    } else {
+        label(panel, "Changed", DIM);
+    }
+    let mut next = 0;
+    for change in view.changes.iter().take(MAX_CHANGES) {
+        spawn_change(panel, change, "Hide", &mut next);
+    }
+    if let Some(more) = view
+        .changes
+        .len()
+        .checked_sub(MAX_CHANGES)
+        .filter(|more| *more > 0)
+    {
+        label(panel, format!("... and {more} more"), DIM);
+    }
+    if !view.hidden.is_empty() || state.shows_hidden_changes() {
+        row(panel, |row| {
+            label(
+                row,
+                format!("Hidden by the filter ({})", view.hidden.len()),
+                DIM,
+            );
+            panel_button(
+                row,
+                Control::HiddenChanges,
+                control_text(Control::HiddenChanges, state),
+                state.shows_hidden_changes(),
+            );
+        });
+    }
+    if state.shows_hidden_changes() {
+        for change in view.hidden.iter().take(MAX_CHANGES) {
+            spawn_change(panel, change, "Show", &mut next);
+        }
+        if let Some(more) = view
+            .hidden
+            .len()
+            .checked_sub(MAX_CHANGES)
+            .filter(|more| *more > 0)
+        {
+            label(panel, format!("... and {more} more"), DIM);
+        }
+    }
+    label(panel, format!("As code: {}", state.noise().to_code()), DIM);
+}
+
+/// One change line, with a button before it that hides or shows its type
+/// where it has one. `next` counts those buttons, as [`noise_types`] does.
+fn spawn_change(
+    panel: &mut ChildSpawnerCommands<'_>,
+    change: &SnapshotChange,
+    action: &str,
+    next: &mut usize,
+) {
+    let text = change_text(change);
+    if change.type_path.is_none() {
+        label(panel, text, TEXT);
+        return;
+    }
+    let index = *next;
+    *next += 1;
+    row(panel, |row| {
+        panel_button(row, Control::NoiseType(index), action, false);
+        label(row, text, TEXT);
+    });
 }
 
 /// The UI tree before or after the step, one indented line per node.

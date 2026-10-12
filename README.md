@@ -744,6 +744,18 @@ over; clicking a step in its list looks at that one instead, and **Jump to the
 start of it** is the jump above. The trace of a finished run is kept across
 jumps until another scenario is picked or the scenario restarts.
 
+The trace holds every type, and the Trace tab leaves out of its *changes* what
+a `NoiseFilter` does, applied when it draws them. It starts with the filter set
+in `SessionHooks::noise_filter` (`GalleryPlugin::with_session_hooks`), by
+default `NoiseFilter::default()`. A **Hide** button on a change line leaves out
+that type (its full type path), the **Hidden by the filter** count says how
+much is left out and **List** shows it, each with a **Show** button;
+**App default** and **Everything** switch the whole filter. The line at the end,
+**As code**, is the filter in force as Rust (`NoiseFilter::to_code`) to paste
+into `SessionHooks::noise_filter`. The override lasts for the gallery session
+and every scenario, and changes the Trace tab only, not `trace.html`, the checks
+a recording suggests, or pick mode.
+
 Picking a scenario calls the app's reset hook, then the scenario's setup and
 view (a setup that fails is shown in the status line, and the run fails with
 every step skipped), resizes the primary window to the scenario's window size and plays it
