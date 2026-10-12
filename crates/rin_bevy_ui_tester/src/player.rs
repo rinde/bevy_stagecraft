@@ -6,6 +6,7 @@ use bevy::{
     app::{App, Last, Plugin, PreUpdate},
     ecs::{
         entity::Entity,
+        query::With,
         resource::Resource,
         schedule::common_conditions::{not, resource_exists},
         schedule::{IntoScheduleConfigs, SystemSet},
@@ -16,7 +17,7 @@ use bevy::{
         keyboard::KeyCode,
         mouse::{MouseButton, MouseScrollUnit},
     },
-    math::Vec2,
+    math::{UVec2, Vec2},
     window::{PrimaryWindow, Window},
 };
 
@@ -26,6 +27,7 @@ use crate::{
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems, character_events},
     probe::check_hover,
     scenario::{ORIGIN, Scenario, Step, flatten, with_group_path},
+    script::check_scale_factor,
     targets::{Action, NotActionable, ResolvedTarget, Target, actionable, pressable, resolve},
     trace::{ScenarioTrace, TargetTrace, TraceCheck, TracePoint},
 };
@@ -512,7 +514,7 @@ impl ScenarioPlayer {
             .and_then(SyntheticInput::cursor)
             .or_else(|| {
                 world
-                    .query_filtered::<&Window, bevy::ecs::query::With<PrimaryWindow>>()
+                    .query_filtered::<&Window, With<PrimaryWindow>>()
                     .iter(world)
                     .next()
                     .and_then(Window::cursor_position)
@@ -1094,6 +1096,9 @@ impl Scenario {
     /// Plays the scenario in `app`, which needs [`HeadlessPlugins`] (or the
     /// equivalent) and, if [`ScenarioPlayerPlugin`] is not there yet, gets it
     /// even after the app is finished.
+    /// The scenario's window size and scale factor, where it sets them, are
+    /// applied to the app's primary window first and stay on it afterwards;
+    /// where it sets none the window is left as the app has it.
     /// Builds the world with the scenario's setup and settles the UI first,
     /// then returns the report; a setup that fails fails the report, with
     /// every step skipped.
@@ -1133,6 +1138,7 @@ impl Scenario {
             // allowed to gain systems and resources, so build it by hand.
             Plugin::build(&ScenarioPlayerPlugin, app);
         }
+        self.fit_primary_window(app.world_mut());
         let setup = self.run_setup(app.world_mut());
         for _ in 0..SETTLE_FRAMES {
             app.update();
@@ -1160,6 +1166,42 @@ impl Scenario {
             .cloned()
             .unwrap_or_default();
         (report, trace)
+    }
+
+    /// Gives the primary window the size and scale factor the scenario asks
+    /// for, before its setup runs, so a file's `window_size` and
+    /// `scale_factor` hold in an app [`Scenario::run_in`] was handed as they
+    /// do in [`Scenario::headless_app`]. What the scenario does not say stays
+    /// as the app has it. The scale factor goes first because the logical size
+    /// is derived from the physical one.
+    fn fit_primary_window(&self, world: &mut World) {
+        let scale = self
+            .scale()
+            .filter(|scale| check_scale_factor(*scale).is_ok());
+        let size = self
+            .window()
+            .map(|(width, height)| UVec2::new(width, height).as_vec2());
+        if scale.is_none() && size.is_none() {
+            return;
+        }
+        for mut window in world
+            .query_filtered::<&mut Window, With<PrimaryWindow>>()
+            .iter_mut(world)
+        {
+            let resolution = &mut window.resolution;
+            let (width, height) = size.map_or_else(
+                || (resolution.width(), resolution.height()),
+                |size| (size.x, size.y),
+            );
+            if let Some(scale) = scale
+                && resolution.scale_factor_override() != Some(scale)
+            {
+                resolution.set_scale_factor_override(Some(scale));
+            }
+            if (resolution.width(), resolution.height()) != (width, height) {
+                resolution.set(width, height);
+            }
+        }
     }
 
     /// Plays the scenario in a fresh [`HeadlessPlugins`] app and returns the
