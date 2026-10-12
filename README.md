@@ -964,8 +964,9 @@ A file named `*.scene.ron` is a setup, not a scenario, so `ron_files`,
 An app with a save format of its own does not use the file: its
 `AppSetup::capture` writes the save into `dir` (files named
 `{stem}.<extension>`, so a second save gets another `stem` and does not
-overwrite the first) and returns the `App(..)` setup that loads it, and **Save as setup** prefers that
-(the status line then shows the setup to write).
+overwrite the first) and returns the `App(..)` setup that loads it, and
+**Save as setup** prefers that (the status line then shows the setup to
+write).
 
 ### Picking a check by clicking a node
 
