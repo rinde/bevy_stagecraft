@@ -277,6 +277,7 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
             "click_pause",
             "reflected_checks",
             "tree_snapshot",
+            "type_text",
             "typed_checks"
         ]
     );
@@ -295,10 +296,13 @@ fn a_type_step_round_trips_through_ron_with_and_without_a_target() {
         Step::type_into("Delta", Target::name("Field")).forced(),
     ]);
     let ron = scenario.to_ron().unwrap();
-    assert!(ron.contains("Type(text: \"Alpha\")"), "{ron}");
-    assert!(
-        ron.contains("Type(\n            text: \"Beta 2!\",\n            into: Text(\"Name\"),"),
-        "{ron}"
+    assert!(ron.contains("text: \"Alpha\","), "{ron}");
+    assert!(ron.contains("text: \"Beta 2!\","), "{ron}");
+    assert!(ron.contains("into: Text(\"Name\"),"), "{ron}");
+    assert_eq!(
+        ron.matches("into:").count(),
+        3,
+        "no `into` for the first: {ron}"
     );
     let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
     assert_eq!(loaded.to_script(), scenario.to_script());

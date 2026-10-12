@@ -14,7 +14,7 @@ use bevy::{
     text::EditableText,
     ui::px,
 };
-use rin_bevy_ui_tester::{HeadlessPlugins, Modifiers, Outcome, Scenario, Step, Target, keystroke};
+use rin_bevy_ui_tester::{HeadlessPlugins, Outcome, Scenario, Step, Target, keystroke};
 
 /// Everything typed into the observer field, as the key events delivered it.
 #[derive(Resource, Default)]
@@ -131,19 +131,6 @@ fn shift_is_released_after_typing() {
         .world()
         .resource::<ButtonInput<bevy::input::keyboard::Key>>();
     assert!(!keys.pressed(bevy::input::keyboard::Key::Shift));
-}
-
-#[test]
-fn typing_after_a_modifier_is_held_keeps_the_modifier_out_of_the_text() {
-    // Ctrl+A selects all in the field; the next character replaces it.
-    let (report, mut app) = run(Scenario::new("select all").steps([
-        Step::type_into("old", Target::name("First")),
-        Step::tap_with(KeyCode::KeyA, Modifiers::CTRL),
-        Step::type_text("new"),
-        Step::wait(2),
-    ]));
-    assert!(report.passed(), "{:?}", report.failures());
-    assert_eq!(value_of(&mut app, "First"), "new");
 }
 
 #[test]

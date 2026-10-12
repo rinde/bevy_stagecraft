@@ -644,5 +644,5 @@ fn a_recorded_typing_session_exports_a_single_type_step() {
         saved.script.steps
     );
     let text = fs::read_to_string(&saved.path).expect("written");
-    assert!(text.contains("Type(text: \"Hi5\")"), "{text}");
+    assert!(text.contains("text: \"Hi5\","), "{text}");
 }
