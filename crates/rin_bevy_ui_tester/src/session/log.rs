@@ -48,6 +48,11 @@ pub enum RecordedKind {
         key: KeyCode,
         /// Pressed or released.
         state: ButtonState,
+        /// The text the press produced, as the operating system reports it
+        /// (`None` for a release, and for a key that types nothing). It is
+        /// what lets keys typed one after the other read as one `Type` step
+        /// whatever the keyboard layout.
+        text: Option<String>,
     },
     /// The person took a checkpoint: the checks it suggests go here, before
     /// anything else that happened in the same frame.
@@ -191,7 +196,9 @@ pub fn read_log(events: &[RecordedEvent], end: u32, options: &StepOptions) -> Lo
                 }
                 out.wheel(event.frame, *position, x, y);
             }
-            RecordedKind::Key { key, state } => next = out.key(events, next - 1, *key, *state),
+            RecordedKind::Key { key, state, .. } => {
+                next = out.key(events, next - 1, *key, *state);
+            }
             RecordedKind::Checkpoint => out.checkpoint(event.frame),
             RecordedKind::Check(check) => out.check(event.frame, check),
         }
@@ -220,6 +227,8 @@ struct Emitter {
     run: Vec<(u32, Vec2)>,
     /// How many steps came before each checkpoint so far.
     checkpoints: Vec<usize>,
+    /// The modifier keys held down, as far as the log has said.
+    held: Modifiers,
 }
 
 impl Emitter {
@@ -233,6 +242,7 @@ impl Emitter {
             pointer: None,
             run: Vec::new(),
             checkpoints: Vec::new(),
+            held: Modifiers::NONE,
         }
     }
 
@@ -515,7 +525,22 @@ impl Emitter {
             return at + 1;
         };
         self.flush(None);
+        if let Some(typing) = self.typing_at(events, at) {
+            self.wait_until(event.frame);
+            self.emit(Step::type_text(typing.text), typing.frames);
+            // Playback types a character a frame, however slowly the person
+            // did; the rest of the log is measured from where they stopped.
+            let wanted = typing.end_frame.saturating_sub(self.cut);
+            self.cut = self.cut.saturating_add(wanted.saturating_sub(self.clock));
+            return typing.next;
+        }
         self.wait_until(event.frame);
+        if let Some(modifier) = modifier_of(key) {
+            self.held = match state {
+                ButtonState::Pressed => self.held | modifier,
+                ButtonState::Released => self.held.without(modifier),
+            };
+        }
         if state == ButtonState::Released {
             self.emit(
                 Step::KeyUp {
@@ -529,7 +554,7 @@ impl Emitter {
         let release = events.iter().enumerate().skip(at + 1).find(|(_, other)| {
             matches!(
                 &other.kind,
-                RecordedKind::Key { key: other_key, state: ButtonState::Released }
+                RecordedKind::Key { key: other_key, state: ButtonState::Released, .. }
                     if *other_key == key
             )
         });
@@ -549,6 +574,102 @@ impl Emitter {
         );
         at + 1
     }
+
+    /// The longest stretch of typing that starts at the key event `at`: keys
+    /// that produced text, each released within [`StepOptions::hold_frames`]
+    /// of its press, with Shift pressed and released around them, and no
+    /// pause longer than [`StepOptions::idle_frames`]. Ends where every key
+    /// and Shift is up again, and is `None` unless it typed something.
+    ///
+    /// A control character (Enter, Tab, Backspace) is not typing, nor is text
+    /// typed with Control, Alt or Super held: those stay `Tap`s, which say
+    /// what the person pressed.
+    fn typing_at(&self, events: &[RecordedEvent], at: usize) -> Option<Typing> {
+        let held_back = self.held.contains(Modifiers::CTRL)
+            || self.held.contains(Modifiers::ALT)
+            || self.held.contains(Modifiers::SUPER);
+        let mut last_frame = events.get(at)?.frame;
+        let mut text = String::new();
+        let mut typed = 0_u32;
+        let mut pending: Vec<(KeyCode, u32)> = Vec::new();
+        let mut shifts = 0_u32;
+        let mut found = None;
+        for (index, event) in events.iter().enumerate().skip(at) {
+            if event.frame.saturating_sub(last_frame) > self.options.idle_frames {
+                break;
+            }
+            last_frame = event.frame;
+            let RecordedKind::Key {
+                key,
+                state,
+                text: produced,
+            } = &event.kind
+            else {
+                break;
+            };
+            let is_shift = modifier_of(*key) == Some(Modifiers::SHIFT);
+            match state {
+                ButtonState::Pressed if is_shift => shifts = shifts.saturating_add(1),
+                ButtonState::Pressed => {
+                    let Some(produced) = produced.as_deref().filter(|produced| is_typed(produced))
+                    else {
+                        break;
+                    };
+                    if held_back || pending.iter().any(|(pressed, _)| pressed == key) {
+                        break;
+                    }
+                    pending.push((*key, event.frame));
+                    text.push_str(produced);
+                    typed = typed.saturating_add(
+                        u32::try_from(produced.chars().count()).unwrap_or(u32::MAX),
+                    );
+                }
+                ButtonState::Released if is_shift => {
+                    let Some(left) = shifts.checked_sub(1) else {
+                        break;
+                    };
+                    shifts = left;
+                }
+                ButtonState::Released => {
+                    let Some(position) = pending.iter().position(|(pressed, _)| pressed == key)
+                    else {
+                        break;
+                    };
+                    let (_, pressed_at) = pending.remove(position);
+                    if event.frame.saturating_sub(pressed_at) > self.options.hold_frames {
+                        break;
+                    }
+                }
+            }
+            if pending.is_empty() && shifts == 0 && typed > 0 {
+                found = Some(Typing {
+                    text: text.clone(),
+                    frames: typed,
+                    next: index + 1,
+                    end_frame: event.frame,
+                });
+            }
+        }
+        found
+    }
+}
+
+/// A run of keys read as one `Type` step.
+struct Typing {
+    /// What was typed.
+    text: String,
+    /// How many frames playback takes to type it: one per character.
+    frames: u32,
+    /// The index of the first event after the run.
+    next: usize,
+    /// The recorded frame of the run's last event.
+    end_frame: u32,
+}
+
+/// Whether the text a key press produced is something typed into a field:
+/// not empty and no control character.
+fn is_typed(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|character| !character.is_control())
 }
 
 /// Whether `target` names a widget that playback waits for: a locator, not

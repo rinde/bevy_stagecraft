@@ -284,8 +284,12 @@ const fn button_name(button: MouseButton) -> &'static str {
 /// a click or a press then acts on.
 fn last_target(steps: &[Step]) -> Option<&Target> {
     steps.iter().rev().find_map(|step| match step.inner() {
-        Step::MoveTo(target) | Step::Glide { target, .. } => Some(target),
-        Step::Drag { to, .. } => Some(to),
+        Step::MoveTo(target)
+        | Step::Glide { target, .. }
+        | Step::Type {
+            into: Some(target), ..
+        }
+        | Step::Drag { to: target, .. } => Some(target),
         _ => None,
     })
 }
@@ -316,6 +320,11 @@ pub fn describe_step(step: &Step, before: &[Step], descriptions: &TargetDescript
         Step::Key { key, modifiers } => format!("Hold {}", chord(*key, *modifiers)),
         Step::KeyUp { key, modifiers } => format!("Release {}", chord(*key, *modifiers)),
         Step::Tap { key, modifiers } => format!("Tap {}", chord(*key, *modifiers)),
+        Step::Type { text, into: None } => format!("Type {text:?}"),
+        Step::Type {
+            text,
+            into: Some(target),
+        } => format!("Type {text:?} into {}", descriptions.describe(target)),
         Step::Wait(frames) => format!("Wait {frames} frames"),
         Step::Check(check) => format!("Check: {check}"),
         Step::Caption(text) => text.clone(),

@@ -57,10 +57,10 @@ use crate::{
 /// (`Component(..)`, `Name(..)`, `Role(..)`, `Within(..)` and `Nth(..)`)
 /// came later still in version 3, and so did the script's `action_timeout`
 /// and the `Timeout(..)` and `Force(..)` steps that go with steps waiting
-/// for their targets to be actionable, the `scale_factor`, and the
-/// `Group(name: .., steps: [..])` step that names a run of steps: they only
-/// add forms, so every file that loaded before still does. Any other older
-/// file still loads.
+/// for their targets to be actionable, the `scale_factor`, the `Type(..)` step
+/// that types text and the `Group(name: .., steps: [..])` step that names a run
+/// of steps: they only add forms, so every file that loaded before still does.
+/// Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.
@@ -627,7 +627,11 @@ fn load_error(problem: Problem, used_by: &str, in_check: bool) -> LoadError {
 /// The targets a step acts on, inside any `Timeout(..)` or `Force(..)`.
 fn step_targets(step: &mut Step) -> Vec<&mut Target> {
     match step {
-        Step::MoveTo(target) | Step::Glide { target, .. } => vec![target],
+        Step::MoveTo(target)
+        | Step::Glide { target, .. }
+        | Step::Type {
+            into: Some(target), ..
+        } => vec![target],
         Step::Drag { from, to, .. } => vec![from, to],
         Step::Timeout(_, inner) | Step::Force(inner) => step_targets(inner),
         _ => Vec::new(),
@@ -646,7 +650,7 @@ fn check_wrapper(step: &Step, used_by: &str) -> Result<(), LoadError> {
     Err(LoadError::Invalid {
         used_by: used_by.to_owned(),
         message: format!(
-            "`Timeout(..)` and `Force(..)` wrap one MoveTo, Glide, Drag, Click or Press, not {inner:?}; \
+            "`Timeout(..)` and `Force(..)` wrap one MoveTo, Glide, Drag, Click, Press or Type with an `into`, not {inner:?}; \
              a check waits with `Check(Within(frames, ..))`"
         ),
     })

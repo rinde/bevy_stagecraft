@@ -23,7 +23,7 @@ use bevy::{
 use crate::{
     check::{Check, suggest::NoiseFilter},
     headless::HeadlessPlugins,
-    input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems},
+    input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems, character_events},
     probe::check_hover,
     scenario::{ORIGIN, Scenario, Step, flatten, with_group_path},
     targets::{Action, NotActionable, ResolvedTarget, Target, actionable, pressable, resolve},
@@ -769,6 +769,7 @@ impl Running {
             | Step::Drag { .. }
             | Step::Click(_)
             | Step::Press(_)
+            | Step::Type { into: Some(_), .. }
                 if !forced =>
             {
                 self.ops.push_back(Op::Act {
@@ -782,7 +783,8 @@ impl Running {
             | Step::Glide { .. }
             | Step::Drag { .. }
             | Step::Click(_)
-            | Step::Press(_) => {
+            | Step::Press(_)
+            | Step::Type { into: Some(_), .. } => {
                 if let Err(NotActionable::Yet(message) | NotActionable::Never(message)) =
                     self.act(world, index, &step, true)
                 {
@@ -801,6 +803,7 @@ impl Running {
                     y,
                 }],
             ),
+            Step::Type { text, into: None } => self.type_frames(index, &text),
             Step::Wait(frames) => {
                 for _ in 0..frames {
                     self.frame(index, Vec::new());
@@ -887,9 +890,35 @@ impl Running {
                 }
                 self.frame(index, events);
             }
+            Step::Type {
+                text,
+                into: Some(target),
+            } => {
+                // The click lands on the frame after the move, as a `MoveTo`
+                // and a `Click` do, so a text field is focused before the
+                // first character arrives.
+                let to = self.reach_traced(world, index, target, Action::Press, forced)?;
+                self.move_ops(index, core::iter::once(to.position), to, target, !forced);
+                self.aim = None;
+                self.frame(
+                    index,
+                    vec![
+                        SyntheticEvent::Button(MouseButton::Left, ButtonState::Pressed),
+                        SyntheticEvent::Button(MouseButton::Left, ButtonState::Released),
+                    ],
+                );
+                self.type_frames(index, text);
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    /// Queues one frame per character of `text`.
+    fn type_frames(&mut self, step: usize, text: &str) {
+        for character in text.chars() {
+            self.frame(step, character_events(character));
+        }
     }
 
     /// Remembers the widget a move sent the pointer to, for a press right

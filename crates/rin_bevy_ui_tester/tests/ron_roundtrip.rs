@@ -278,6 +278,7 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
             "grouped",
             "reflected_checks",
             "tree_snapshot",
+            "type_text",
             "typed_checks"
         ]
     );
@@ -285,6 +286,70 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
         results.iter().all(rin_bevy_ui_tester::FileResult::passed),
         "{results:?}"
     );
+}
+
+#[test]
+fn a_type_step_round_trips_through_ron_with_and_without_a_target() {
+    let scenario = Scenario::new("typing").steps([
+        Step::type_text("Alpha"),
+        Step::type_into("Beta 2!", Target::text("Name")),
+        Step::type_into("Gamma", Target::name("Field")).with_timeout(30),
+        Step::type_into("Delta", Target::name("Field")).forced(),
+    ]);
+    let ron = scenario.to_ron().unwrap();
+    assert!(ron.contains("text: \"Alpha\","), "{ron}");
+    assert!(ron.contains("text: \"Beta 2!\","), "{ron}");
+    assert!(ron.contains("into: Text(\"Name\"),"), "{ron}");
+    assert_eq!(
+        ron.matches("into:").count(),
+        3,
+        "no `into` for the first: {ron}"
+    );
+    let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
+    assert_eq!(loaded.to_script(), scenario.to_script());
+    assert_eq!(loaded.to_ron().unwrap(), ron, "export is stable");
+}
+
+#[test]
+fn a_type_step_is_read_from_a_file_with_or_without_into() {
+    let scenario = load(
+        "steps: [Type(text: \"a\"), Type(text: \"b\", into: Name(\"Field\")), \
+         Type(text: \"c\", into: None)]",
+    )
+    .unwrap();
+    assert_eq!(
+        scenario.to_script().steps,
+        [
+            Step::type_text("a"),
+            Step::type_into("b", Target::name("Field")),
+            Step::type_text("c"),
+        ]
+    );
+}
+
+#[test]
+fn a_timeout_or_force_around_a_type_without_a_target_is_refused() {
+    for body in [
+        "steps: [Timeout(5, Type(text: \"x\"))]",
+        "steps: [Force(Type(text: \"x\"))]",
+    ] {
+        assert!(
+            matches!(load(body), Err(LoadError::Invalid { .. })),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_timeout_around_a_type_with_a_target_is_accepted() {
+    let scenario = load("steps: [Timeout(5, Type(text: \"x\", into: Name(\"Field\")))]").unwrap();
+    assert_eq!(scenario.to_script().steps.len(), 1);
+}
+
+#[test]
+fn a_type_into_a_target_the_app_does_not_have_is_a_load_error() {
+    let error = load("steps: [Type(text: \"x\", into: Component(\"NoSuchMarker\"))]").unwrap_err();
+    assert!(error.to_string().contains("NoSuchMarker"), "{error}");
 }
 
 #[test]

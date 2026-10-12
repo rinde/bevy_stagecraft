@@ -868,6 +868,7 @@ impl SessionRecorder {
                 kind: RecordedKind::Key {
                     key: key.key_code,
                     state: key.state,
+                    text: key.text.as_ref().map(ToString::to_string),
                 },
             });
         }
@@ -995,6 +996,7 @@ impl SessionRecorder {
                 kind: RecordedKind::Key {
                     key,
                     state: ButtonState::Released,
+                    text: None,
                 },
             });
         }
