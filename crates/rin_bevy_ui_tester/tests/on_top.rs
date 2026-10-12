@@ -1,0 +1,144 @@
+//! `OnTop` asks what the person sees: is the widget painted topmost at its
+//! middle, whatever a covering node lets the pointer through.
+
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "tests may panic on a broken setup"
+)]
+
+use bevy::{
+    picking::Pickable,
+    prelude::*,
+    ui::{px, widget::Text},
+    ui_widgets::Button,
+};
+use rin_bevy_ui_tester::{Check, Outcome, Scenario, Step, Target, WidgetRole};
+
+/// How many frames the UI gets to be laid out and stacked before a check.
+const SETTLE_FRAMES: u16 = 3;
+
+/// A camera and the "Go" button, at (100, 25) with a size of 100 by 50.
+fn spawn_go(world: &mut World) {
+    world.spawn(Camera2d);
+    world.spawn((
+        Button,
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(100),
+            top: px(25),
+            width: px(100),
+            height: px(50),
+            ..Node::default()
+        },
+        BackgroundColor(Color::WHITE),
+        children![Text::new("Go")],
+    ));
+}
+
+/// A node over the middle of the "Go" button, at `z`, with `colour` as its
+/// background, that lets the pointer through like a floating popup does.
+fn spawn_popup(world: &mut World, z: i32, colour: Color) {
+    world.spawn((
+        Name::new("Popup"),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(80),
+            top: px(10),
+            width: px(200),
+            height: px(100),
+            ..Node::default()
+        },
+        BackgroundColor(colour),
+        GlobalZIndex(z),
+        Pickable {
+            should_block_lower: false,
+            is_hoverable: false,
+        },
+    ));
+}
+
+/// The "Go" button, and a popup at `z` painted `colour` over it.
+fn with_popup(name: &str, z: i32, colour: Color) -> Scenario {
+    Scenario::new(name)
+        .setup(move |world| {
+            spawn_go(world);
+            spawn_popup(world, z, colour);
+        })
+        .step(Step::wait(SETTLE_FRAMES))
+}
+
+#[test]
+fn a_popup_that_lets_the_pointer_through_still_covers_the_widget_under_it() {
+    let report = with_popup("covered", 10, Color::BLACK)
+        .step(Step::check(Check::on_top(Target::text("Go"))))
+        .run_headless();
+    let Outcome::Fail(message) = &report.steps[1].outcome else {
+        panic!("OnTop should fail: {:?}", report.steps);
+    };
+    assert!(
+        message.contains("is not on top: it is covered by `Popup`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_pointer_reaches_a_widget_that_a_popup_covers_without_blocking() {
+    let report = with_popup("click through", 10, Color::BLACK)
+        .steps([
+            Step::check(Check::visible(Target::text("Go"))),
+            Step::move_to(Target::text("Go")),
+            Step::check(Check::hovered(Target::text("Go"))),
+            Step::check(!Check::on_top(Target::text("Go"))),
+        ])
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+#[test]
+fn a_widget_is_on_top_of_a_popup_that_is_painted_behind_it() {
+    let report = with_popup("behind", -10, Color::BLACK)
+        .step(Step::check(Check::on_top(Target::text("Go"))))
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+#[test]
+fn a_node_that_paints_nothing_covers_nothing() {
+    let report = with_popup("transparent", 10, Color::NONE)
+        .step(Step::check(Check::on_top(Target::text("Go"))))
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+#[test]
+fn a_widget_that_nothing_covers_is_on_top_when_named_by_its_label() {
+    let report = Scenario::new("plain")
+        .setup(spawn_go)
+        .steps([
+            Step::wait(SETTLE_FRAMES),
+            Step::check(Check::on_top(Target::text("Go"))),
+        ])
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+#[test]
+fn on_top_reads_and_writes_as_ron() {
+    let text = r#"(
+        format_version: 3,
+        name: "ron",
+        steps: [Check(OnTop(Text("Go"))), Check(Not(OnTop(Role(role: Button, label: "Go"))))],
+    )"#;
+    let scenario = Scenario::from_ron(text).expect("the script loads");
+    assert_eq!(
+        scenario.script(),
+        [
+            Step::check(Check::on_top(Target::text("Go"))),
+            Step::check(!Check::on_top(Target::role(WidgetRole::Button, "Go"))),
+        ]
+    );
+    let written = scenario.to_ron().expect("written");
+    assert!(written.contains("OnTop(Text(\"Go\"))"), "{written}");
+}

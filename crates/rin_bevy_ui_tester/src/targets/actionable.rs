@@ -21,12 +21,14 @@
 
 use bevy::{
     camera::visibility::InheritedVisibility,
+    color::Alpha,
     ecs::{entity::Entity, hierarchy::ChildOf, query::With, world::World},
     math::Vec2,
     picking::Pickable,
     ui::{
-        CalculatedClip, ComputedNode, ComputedUiTargetCamera, InteractionDisabled, Node,
-        UiGlobalTransform, UiStack,
+        BackgroundColor, CalculatedClip, ComputedNode, ComputedUiTargetCamera, InteractionDisabled,
+        Node, UiGlobalTransform, UiStack,
+        widget::{ImageNode, Text},
     },
     window::{PrimaryWindow, Window},
 };
@@ -243,6 +245,59 @@ fn receives_pointer(
     Err(NotActionable::Yet(format!(
         "{label} does not receive the pointer: nothing at its middle takes it"
     )))
+}
+
+/// Whether the middle of `widget` is painted topmost: walking the UI stack
+/// from the front, the first node that holds the point and is the widget or
+/// lies below it, or paints something, must be the widget's.
+///
+/// This is condition 5 without `Pickable`: it asks what the person sees,
+/// not what the pointer reaches. A popup that lets the pointer through
+/// (`should_block_lower: false`) still covers what is below it here. Nodes
+/// that paint nothing (no background colour that shows, no image, no text)
+/// cover nothing, or an empty full-window container would cover the whole
+/// UI; the widget's own nodes count whether they paint or not. Only nodes on
+/// the widget's camera count, and never the tooling's.
+///
+/// # Errors
+///
+/// A message saying what covers the widget, or why nothing is painted at its
+/// middle.
+pub(super) fn painted_topmost(world: &World, widget: Entity) -> Result<(), String> {
+    let (Some(computed), Some(transform)) = (
+        world.get::<ComputedNode>(widget),
+        world.get::<UiGlobalTransform>(widget),
+    ) else {
+        return Err("it has not been laid out yet".into());
+    };
+    let Some(stack) = world.get_resource::<UiStack>() else {
+        return Err("the UI has not been stacked yet".into());
+    };
+    // The transform is in physical pixels; the hit tests take logical ones.
+    let at = transform.affine().translation * computed.inverse_scale_factor;
+    let camera = camera_of(world, widget);
+    for node in stack.uinodes.iter().rev().copied() {
+        if !is_hit(world, node, at) || camera_of(world, node) != camera {
+            continue;
+        }
+        if is_within(world, node, widget) {
+            return Ok(());
+        }
+        if paints(world, node) {
+            return Err(format!("it is covered by {}", describe_entity(world, node)));
+        }
+    }
+    Err("nothing is drawn at its middle (it is hidden, clipped or outside the window)".into())
+}
+
+/// Whether `node` draws something of its own: a background that shows, an
+/// image or text.
+fn paints(world: &World, node: Entity) -> bool {
+    world
+        .get::<BackgroundColor>(node)
+        .is_some_and(|background| background.0.alpha() > 0.0)
+        || world.get::<ImageNode>(node).is_some()
+        || world.get::<Text>(node).is_some()
 }
 
 /// The camera `node` is drawn by, if layout has said.
