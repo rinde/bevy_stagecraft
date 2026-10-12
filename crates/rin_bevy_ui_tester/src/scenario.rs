@@ -382,6 +382,9 @@ pub struct Scenario {
     view: Option<Arc<HookFn>>,
     /// The size of the window the scenario wants, in logical pixels.
     window: Option<(u32, u32)>,
+    /// The scale factor of the window the scenario wants: physical pixels per
+    /// logical pixel.
+    scale_factor: Option<f32>,
     /// How many frames a step waits for its target to be actionable, when
     /// the scenario says.
     action_timeout: Option<u16>,
@@ -402,6 +405,7 @@ impl fmt::Debug for Scenario {
             .field("setup", &self.setup.is_some())
             .field("view", &self.view.is_some())
             .field("window", &self.window)
+            .field("scale_factor", &self.scale_factor)
             .field("action_timeout", &self.action_timeout)
             .field("app_setup", &self.app_setup)
             .field("app_view", &self.app_view)
@@ -420,6 +424,7 @@ impl Scenario {
             setup: None,
             view: None,
             window: None,
+            scale_factor: None,
             action_timeout: None,
             app_setup: None,
             app_view: None,
@@ -475,6 +480,17 @@ impl Scenario {
         self
     }
 
+    /// Sets the scale factor of the window the scenario wants: how many
+    /// physical pixels make one logical pixel. The window keeps its logical
+    /// size, so the layout stays the same and everything renders at that many
+    /// times the pixels. A value that is not finite and above zero is refused
+    /// when a script holding it loads, and ignored by the headless app.
+    #[must_use]
+    pub const fn scale_factor(mut self, scale_factor: f32) -> Self {
+        self.scale_factor = Some(scale_factor);
+        self
+    }
+
     /// Sets how many frames a step waits for its target to be actionable
     /// before it fails, instead of [`DEFAULT_ACTION_TIMEOUT`]. A step can
     /// still set its own with [`Step::Timeout`].
@@ -520,6 +536,30 @@ impl Scenario {
         self.expects.push(check);
     }
 
+    /// A copy called `name` that runs in another environment: whichever of
+    /// the window size, the scale factor, the app's setup and the app's view
+    /// is given replaces the scenario's own. The steps and checks stay.
+    pub(crate) fn in_environment(
+        &self,
+        name: String,
+        window: Option<(u32, u32)>,
+        scale_factor: Option<f32>,
+        setup: Option<&Setup>,
+        view: Option<&View>,
+    ) -> Self {
+        let mut varied = self.clone();
+        varied.name = name;
+        varied.window = window.or(varied.window);
+        varied.scale_factor = scale_factor.or(varied.scale_factor);
+        if let Some(setup) = setup {
+            varied.app_setup = Some(setup.clone());
+        }
+        if let Some(view) = view {
+            varied.app_view = Some(view.clone());
+        }
+        varied
+    }
+
     /// The scenario's name.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -530,6 +570,12 @@ impl Scenario {
     #[must_use]
     pub const fn window(&self) -> Option<(u32, u32)> {
         self.window
+    }
+
+    /// The scale factor the scenario wants, if it says.
+    #[must_use]
+    pub const fn scale(&self) -> Option<f32> {
+        self.scale_factor
     }
 
     /// The app's setup, which the script carries, if any.
@@ -601,6 +647,7 @@ impl Scenario {
             format_version: FORMAT_VERSION,
             name: self.name.clone(),
             window_size: self.window,
+            scale_factor: self.scale_factor,
             action_timeout: self.action_timeout,
             setup: self.app_setup.clone(),
             view: self.app_view.clone(),
@@ -660,6 +707,7 @@ impl Scenario {
             setup: None,
             view: None,
             window: script.window_size,
+            scale_factor: script.scale_factor,
             action_timeout: script.action_timeout,
             app_setup: script.setup,
             app_view: script.view,

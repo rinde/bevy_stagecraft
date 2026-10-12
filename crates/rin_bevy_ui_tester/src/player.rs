@@ -1118,13 +1118,16 @@ impl Scenario {
         self.run_in(&mut self.headless_app())
     }
 
-    /// A finished [`HeadlessPlugins`] app with the scenario's window size, or
-    /// the default one. Use it to add what the scenario needs (for example
+    /// A finished [`HeadlessPlugins`] app with the scenario's window size and
+    /// scale factor, or the default ones. Use it to add what the scenario needs (for example
     /// [`crate::script::Registry::install`]) before [`Scenario::run_in`].
     pub fn headless_app(&self) -> App {
         let mut plugins = HeadlessPlugins::default();
         if let Some((width, height)) = self.window() {
             plugins = plugins.with_window_size(width, height);
+        }
+        if let Some(scale_factor) = self.scale() {
+            plugins = plugins.with_scale_factor(scale_factor);
         }
         let mut app = App::new();
         app.add_plugins(plugins);

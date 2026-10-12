@@ -285,3 +285,31 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
         "{results:?}"
     );
 }
+
+#[test]
+fn a_scale_factor_survives_a_round_trip_through_ron() {
+    let scenario = Scenario::new("dense").scale_factor(2.0);
+    let ron = scenario.to_ron().unwrap();
+    assert!(ron.contains("scale_factor"), "{ron}");
+    let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
+    assert_eq!(loaded.scale(), Some(2.0));
+    assert_eq!(loaded.to_script(), scenario.to_script());
+}
+
+#[test]
+fn a_scenario_without_a_scale_factor_does_not_write_one() {
+    let ron = Scenario::new("plain").to_ron().unwrap();
+    assert!(!ron.contains("scale_factor"), "{ron}");
+}
+
+#[test]
+fn a_scale_factor_of_zero_in_a_file_is_a_load_error_naming_it() {
+    let ron = Scenario::new("dense")
+        .scale_factor(2.0)
+        .to_ron()
+        .unwrap()
+        .replace("2.0", "0.0");
+    let error = Scenario::from_ron_with(&ron, &registry()).unwrap_err();
+    assert!(matches!(error, LoadError::Invalid { .. }), "{error}");
+    assert!(error.to_string().contains("scale factor"), "{error}");
+}
