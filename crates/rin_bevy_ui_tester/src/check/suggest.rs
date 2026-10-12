@@ -30,6 +30,7 @@
 //! counts, through its texts and widget states.
 
 use alloc::collections::BTreeMap;
+use core::fmt::Write as _;
 
 use bevy::{
     ecs::{entity::Entity, reflect::AppTypeRegistry, world::World},
@@ -146,6 +147,67 @@ impl NoiseFilter {
         &self.keep
     }
 
+    /// Leaves out the type with this full type path, as a person hiding it
+    /// would want: drops the `keep` patterns that name it exactly, then adds
+    /// an `ignore` pattern for it unless it is left out already (by
+    /// `bevy_*`, say). Returns whether the type is left out afterwards, which
+    /// it is not where a broader `keep` pattern still matches it.
+    pub fn hide(&mut self, type_path: &str) -> bool {
+        self.keep.retain(|pattern| pattern != type_path);
+        if !self.ignores_path(type_path) {
+            self.ignore.push(type_path.to_owned());
+        }
+        self.ignores_path(type_path)
+    }
+
+    /// Stops leaving out the type with this full type path: drops the
+    /// `ignore` patterns that name it exactly, then adds a `keep` pattern for
+    /// it if a broader `ignore` pattern (such as `bevy_*`) still matches it.
+    pub fn reveal(&mut self, type_path: &str) {
+        self.ignore.retain(|pattern| pattern != type_path);
+        if self.ignores_path(type_path) {
+            self.keep.push(type_path.to_owned());
+        }
+    }
+
+    /// The filter as the Rust expression that builds it, for pasting into
+    /// [`SessionHooks::noise_filter`](crate::SessionHooks::noise_filter).
+    ///
+    /// A filter that begins with [`DEFAULT_IGNORED`] is
+    /// `NoiseFilter::default()` followed by the other patterns; any other is
+    /// `NoiseFilter::nothing()` followed by all of them. Ignore patterns come
+    /// before keep patterns, each in its order.
+    ///
+    /// ```
+    /// use rin_bevy_ui_tester::NoiseFilter;
+    ///
+    /// let filter = NoiseFilter::default().keep("Time<Virtual>");
+    /// assert_eq!(
+    ///     filter.to_code(),
+    ///     r#"NoiseFilter::default().keep("Time<Virtual>")"#
+    /// );
+    /// ```
+    #[must_use]
+    pub fn to_code(&self) -> String {
+        let defaults = self.ignore.len() >= DEFAULT_IGNORED.len()
+            && self.ignore.iter().zip(DEFAULT_IGNORED).all(|(a, b)| a == b);
+        let (mut code, ignored) = if defaults {
+            (
+                "NoiseFilter::default()".to_owned(),
+                self.ignore.get(DEFAULT_IGNORED.len()..).unwrap_or_default(),
+            )
+        } else {
+            ("NoiseFilter::nothing()".to_owned(), self.ignore.as_slice())
+        };
+        for pattern in ignored {
+            let _ = write!(code, ".ignore({pattern:?})");
+        }
+        for pattern in &self.keep {
+            let _ = write!(code, ".keep({pattern:?})");
+        }
+        code
+    }
+
     /// Whether the type with this full type path is left out. Patterns
     /// without `*` are compared with the full path and with its last
     /// segment, with and without generics.
@@ -211,6 +273,9 @@ pub struct WorldSnapshot {
     states: BTreeMap<String, String>,
     /// The app's facts, in the order it lists them.
     facts: Vec<AppCheckValue>,
+    /// The full type path of each reflected type the maps above are keyed by
+    /// name for (resources, counted components, states), by that name.
+    type_paths: BTreeMap<String, String>,
 }
 
 impl WorldSnapshot {
@@ -237,25 +302,39 @@ impl WorldSnapshot {
         snapshot
     }
 
+    /// Records one field of a resource as `take` would, for tests of what
+    /// is built from snapshots.
+    #[cfg(test)]
+    pub(crate) fn set_resource(&mut self, name: &str, type_path: &str, field: &str, ron: &str) {
+        self.resources
+            .insert(name.to_owned(), vec![(field.to_owned(), ron.to_owned())]);
+        self.type_paths
+            .insert(name.to_owned(), type_path.to_owned());
+    }
+
     /// Reads what the world holds of the type `registration` describes.
     fn read_type(&mut self, world: &World, types: &TypeRegistry, registration: &TypeRegistration) {
         let name = name_of(types, registration);
+        let type_path = registration.type_info().type_path_table().path();
         if Role::Resource.fits(registration) {
             if let Some(resource) = reflect::resource(world, registration) {
                 let mut fields = Vec::new();
                 flatten(types, &name, resource.as_partial_reflect(), 0, &mut fields);
                 self.resources.insert(name.clone(), fields);
+                self.type_paths.insert(name.clone(), type_path.to_owned());
             }
         } else if Role::Component.fits(registration)
             && world.components().get_id(registration.type_id()).is_some()
         {
             self.counts
                 .insert(name.clone(), reflect::count(world, &[registration]));
+            self.type_paths.insert(name.clone(), type_path.to_owned());
         }
         if Role::State.fits(registration)
             && let Some(state) = reflect::state(world, registration)
             && let Some(ron) = ron_of(types, state.as_partial_reflect())
         {
+            self.type_paths.insert(name.clone(), type_path.to_owned());
             self.states.insert(name, ron);
         }
     }
@@ -308,6 +387,11 @@ pub struct SnapshotChange {
     pub before: Option<String>,
     /// Its value in the later one.
     pub after: Option<String>,
+    /// The full type path of the reflected type the line is about (a
+    /// resource, a counted component or a state); `None` for texts, widgets
+    /// and the app's facts, which belong to the UI or the app and not to a
+    /// type.
+    pub type_path: Option<String>,
 }
 
 impl WorldSnapshot {
@@ -315,27 +399,43 @@ impl WorldSnapshot {
     /// order, for showing it to a person and for [`WorldSnapshot::changes_from`].
     #[must_use]
     pub fn entries(&self) -> BTreeMap<String, String> {
+        self.lines()
+            .into_iter()
+            .map(|(key, (value, _))| (key, value))
+            .collect()
+    }
+
+    /// [`Self::entries`] with, for the lines about a reflected type, the
+    /// type's full path.
+    fn lines(&self) -> BTreeMap<String, (String, Option<String>)> {
         let mut out = BTreeMap::new();
-        for fields in self.resources.values() {
+        let type_path = |name: &String| self.type_paths.get(name).cloned();
+        for (name, fields) in &self.resources {
             for (path, ron) in fields {
-                out.insert(format!("resource {path}"), ron.clone());
+                out.insert(format!("resource {path}"), (ron.clone(), type_path(name)));
             }
         }
         for (name, count) in &self.counts {
-            out.insert(format!("count {name}"), count.to_string());
+            out.insert(
+                format!("count {name}"),
+                (count.to_string(), type_path(name)),
+            );
         }
         for (name, ron) in &self.states {
-            out.insert(format!("state {name}"), ron.clone());
+            out.insert(format!("state {name}"), (ron.clone(), type_path(name)));
         }
         for (text, count) in &self.texts {
-            out.insert(format!("text {text:?}"), format!("shown {count}\u{d7}"));
+            out.insert(
+                format!("text {text:?}"),
+                (format!("shown {count}\u{d7}"), None),
+            );
         }
         for (label, states) in &self.widgets {
             let states: Vec<String> = states.iter().map(|state| format!("{state:?}")).collect();
-            out.insert(format!("widget {label:?}"), states.join(", "));
+            out.insert(format!("widget {label:?}"), (states.join(", "), None));
         }
         for (index, fact) in self.facts.iter().enumerate() {
-            out.insert(format!("fact {index:03}"), fact.to_string());
+            out.insert(format!("fact {index:03}"), (fact.to_string(), None));
         }
         out
     }
@@ -344,18 +444,21 @@ impl WorldSnapshot {
     /// order of [`WorldSnapshot::entries`].
     #[must_use]
     pub fn changes_from(&self, before: &Self) -> Vec<SnapshotChange> {
-        let was = before.entries();
-        let now = self.entries();
+        let was = before.lines();
+        let now = self.lines();
         let mut keys: Vec<&String> = was.keys().chain(now.keys()).collect();
         keys.sort();
         keys.dedup();
         keys.into_iter()
             .filter_map(|key| {
                 let (old, new) = (was.get(key), now.get(key));
-                (old != new).then(|| SnapshotChange {
-                    key: key.clone(),
-                    before: old.cloned(),
-                    after: new.cloned(),
+                (old.map(|(value, _)| value) != new.map(|(value, _)| value)).then(|| {
+                    SnapshotChange {
+                        key: key.clone(),
+                        before: old.map(|(value, _)| value.clone()),
+                        after: new.map(|(value, _)| value.clone()),
+                        type_path: new.or(old).and_then(|(_, path)| path.clone()),
+                    }
                 })
             })
             .collect()
@@ -596,6 +699,197 @@ mod tests {
         assert!(filter.ignores_path("game::Score"));
         assert!(filter.ignores_path("bevy_time::time::Time<bevy_time::real::Real>"));
         assert!(!filter.ignores_path("game::Scores"));
+    }
+
+    const GAME_SCORE: &str = "game::Score";
+    const BEVY_TIME: &str = "bevy_time::time::Time<bevy_time::virt::Virtual>";
+
+    #[test]
+    fn hiding_a_type_adds_an_ignore_pattern_for_its_full_path() {
+        let mut filter = NoiseFilter::default();
+        assert!(filter.hide(GAME_SCORE));
+        assert!(filter.ignores_path(GAME_SCORE));
+        assert_eq!(
+            filter.ignored().last().map(String::as_str),
+            Some(GAME_SCORE)
+        );
+    }
+
+    #[test]
+    fn hiding_a_type_that_is_already_left_out_adds_nothing() {
+        let mut filter = NoiseFilter::default();
+        assert!(filter.hide(BEVY_TIME));
+        assert_eq!(filter, NoiseFilter::default());
+    }
+
+    #[test]
+    fn hiding_a_type_drops_the_keep_patterns_that_name_it_exactly() {
+        let mut filter = NoiseFilter::default().keep(BEVY_TIME);
+        assert!(!filter.ignores_path(BEVY_TIME));
+        assert!(filter.hide(BEVY_TIME));
+        assert!(filter.kept().is_empty());
+        assert_eq!(filter, NoiseFilter::default());
+    }
+
+    #[test]
+    fn hiding_a_type_a_broader_keep_pattern_matches_says_it_is_still_shown() {
+        let mut filter = NoiseFilter::default().keep("game::*");
+        assert!(!filter.hide(GAME_SCORE));
+        assert!(!filter.ignores_path(GAME_SCORE));
+        assert_eq!(
+            filter.kept(),
+            ["game::*"],
+            "the app's pattern is left alone"
+        );
+    }
+
+    #[test]
+    fn revealing_a_type_drops_the_ignore_patterns_that_name_it_exactly() {
+        let mut filter = NoiseFilter::nothing()
+            .ignore(GAME_SCORE)
+            .ignore("game::Lives");
+        filter.reveal(GAME_SCORE);
+        assert!(!filter.ignores_path(GAME_SCORE));
+        assert_eq!(filter.ignored(), ["game::Lives"]);
+        assert!(filter.kept().is_empty());
+    }
+
+    #[test]
+    fn revealing_a_type_a_broader_ignore_pattern_matches_adds_a_keep_pattern() {
+        let mut filter = NoiseFilter::default();
+        filter.reveal(BEVY_TIME);
+        assert!(!filter.ignores_path(BEVY_TIME));
+        assert!(filter.ignores_path("bevy_time::time::Time<bevy_time::real::Real>"));
+        assert_eq!(filter.kept(), [BEVY_TIME]);
+        assert_eq!(filter.ignored(), DEFAULT_IGNORED);
+    }
+
+    #[test]
+    fn revealing_a_type_nothing_leaves_out_changes_nothing() {
+        let mut filter = NoiseFilter::default();
+        filter.reveal(GAME_SCORE);
+        assert_eq!(filter, NoiseFilter::default());
+    }
+
+    #[test]
+    fn the_default_filter_is_written_as_default() {
+        assert_eq!(NoiseFilter::default().to_code(), "NoiseFilter::default()");
+    }
+
+    #[test]
+    fn the_default_filter_with_more_patterns_is_written_as_default_and_the_rest() {
+        let filter = NoiseFilter::default()
+            .ignore("game::debug::*")
+            .keep("Time<Virtual>")
+            .keep("Sprite");
+        assert_eq!(
+            filter.to_code(),
+            r#"NoiseFilter::default().ignore("game::debug::*").keep("Time<Virtual>").keep("Sprite")"#
+        );
+    }
+
+    #[test]
+    fn a_filter_that_does_not_start_with_the_defaults_is_written_from_nothing() {
+        assert_eq!(NoiseFilter::nothing().to_code(), "NoiseFilter::nothing()");
+        let filter = NoiseFilter::nothing().ignore("bevy_*").keep("Sprite");
+        assert_eq!(
+            filter.to_code(),
+            r#"NoiseFilter::nothing().ignore("bevy_*").keep("Sprite")"#
+        );
+        let reordered = NoiseFilter::nothing()
+            .ignore("rin_bevy_ui_tester::*")
+            .ignore("bevy_*");
+        assert_eq!(
+            reordered.to_code(),
+            r#"NoiseFilter::nothing().ignore("rin_bevy_ui_tester::*").ignore("bevy_*")"#
+        );
+    }
+
+    #[test]
+    fn code_escapes_quotes_and_backslashes_as_a_rust_string_literal() {
+        let filter = NoiseFilter::nothing().ignore("a\"b\\c");
+        assert_eq!(
+            filter.to_code(),
+            r#"NoiseFilter::nothing().ignore("a\"b\\c")"#
+        );
+    }
+
+    /// A snapshot holding a game resource and a Bevy one, a count, a text and
+    /// a widget, as `take` would key them.
+    fn snapshot(score: &str, time: &str, ghosts: usize, text: Option<&str>) -> WorldSnapshot {
+        let mut snapshot = WorldSnapshot::default();
+        snapshot
+            .resources
+            .insert("Score".into(), vec![("Score.0".into(), score.into())]);
+        snapshot.resources.insert(
+            "Time<Virtual>".into(),
+            vec![("Time<Virtual>.elapsed".into(), time.into())],
+        );
+        snapshot.counts.insert("Ghost".into(), ghosts);
+        snapshot.states.insert("Mode".into(), "Play".into());
+        for (name, path) in [
+            ("Score", GAME_SCORE),
+            ("Time<Virtual>", BEVY_TIME),
+            ("Ghost", "game::Ghost"),
+            ("Mode", "bevy_state::state::State<game::Mode>"),
+        ] {
+            snapshot.type_paths.insert(name.into(), path.into());
+        }
+        if let Some(text) = text {
+            snapshot.texts.insert(text.into(), 1);
+            snapshot
+                .widgets
+                .insert(text.into(), vec![WidgetState::Visible]);
+        }
+        snapshot
+    }
+
+    #[test]
+    fn a_change_names_the_full_type_path_of_the_type_it_is_about() {
+        let before = snapshot("1", "0.0", 1, None);
+        let after = snapshot("2", "0.1", 0, Some("Saved"));
+        let changes = after.changes_from(&before);
+        let paths: Vec<(&str, Option<&str>)> = changes
+            .iter()
+            .map(|change| (change.key.as_str(), change.type_path.as_deref()))
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                ("count Ghost", Some("game::Ghost")),
+                ("resource Score.0", Some(GAME_SCORE)),
+                ("resource Time<Virtual>.elapsed", Some(BEVY_TIME)),
+                ("text \"Saved\"", None),
+                ("widget \"Saved\"", None),
+            ],
+            "the order is that of the keys, as before"
+        );
+    }
+
+    #[test]
+    fn a_change_to_a_line_that_went_away_still_names_its_type() {
+        let before = snapshot("1", "0.0", 1, None);
+        let mut after = snapshot("1", "0.0", 1, None);
+        after.counts.clear();
+        after.type_paths.remove("Ghost");
+        let changes = after.changes_from(&before);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes
+                .first()
+                .and_then(|change| change.type_path.as_deref()),
+            Some("game::Ghost")
+        );
+    }
+
+    #[test]
+    fn a_change_to_a_text_names_no_type() {
+        let before = WorldSnapshot::default();
+        let mut after = WorldSnapshot::default();
+        after.texts.insert("Hello".into(), 1);
+        let changes = after.changes_from(&before);
+        assert_eq!(changes.len(), 1);
+        assert!(changes.iter().all(|change| change.type_path.is_none()));
     }
 
     #[test]

@@ -32,9 +32,9 @@ use bevy::{
 use rin_bevy_ui_tester::gallery::GalleryPhase;
 use rin_bevy_ui_tester::{
     AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryRunReport,
-    GalleryState, GalleryTab, HeadlessPlugins, NoiseFilter, Outcome, Probe, ReflectAppSetup,
-    Registry, Scenario, ScenarioPlayer, ScenariosCamera, ScenariosWindow, Script, Speed, Step,
-    Target, TraceWorld, Variant, WidgetRole,
+    GalleryState, GalleryTab, HeadlessPlugins, NoiseFilter, NoisePreset, Outcome, Probe,
+    ReflectAppSetup, Registry, Scenario, ScenarioPlayer, ScenariosCamera, ScenariosWindow, Script,
+    SessionHooks, Speed, Step, Target, TraceWorld, Variant, WidgetRole,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
@@ -2077,6 +2077,140 @@ fn running_everything_traces_nothing() {
     let (app, _) = run_all([adds(2)]);
     assert!(app.world().resource::<GalleryState>().trace().is_none());
     assert!(app.world().resource::<ScenarioPlayer>().trace().is_none());
+}
+
+/// Whether some text on screen starts with `prefix`, as a change line does.
+fn lists_change(app: &mut App, prefix: &str) -> bool {
+    texts(app).iter().any(|text| text.starts_with(prefix))
+}
+
+/// How many changes the Trace tab says its filter hides.
+fn hidden_count(app: &mut App) -> Option<usize> {
+    texts(app).iter().find_map(|text| {
+        text.strip_prefix("Hidden by the filter (")?
+            .strip_suffix(')')?
+            .parse()
+            .ok()
+    })
+}
+
+/// Plays the first scenario to its end and looks in the Trace tab at the
+/// first step that changed the app's `Count`; returns that step.
+fn at_the_step_that_counted(app: &mut App) -> usize {
+    on_the_trace_tab(app);
+    ask(app, GalleryAction::ToggleLoop);
+    run_until(app, 500, finished);
+    app.update();
+    let step = (0..8)
+        .find(|step| {
+            ask(app, GalleryAction::InspectStep(*step));
+            lists_change(app, "resource Count.0")
+        })
+        .expect("a step changed the count");
+    ask(app, GalleryAction::InspectStep(step));
+    step
+}
+
+#[test]
+fn the_trace_tab_lists_the_apps_changes_under_the_apps_filter_and_everything_on_request() {
+    let mut app = gallery_app();
+    let step = at_the_step_that_counted(&mut app);
+    assert!(
+        !lists_change(&mut app, "resource Time<Virtual>."),
+        "the app's filter leaves Bevy's time out: {:?}",
+        texts(&mut app)
+    );
+    assert!(hidden_count(&mut app).is_some_and(|hidden| hidden > 0));
+    ask(&mut app, GalleryAction::UseNoise(NoisePreset::Everything));
+    assert!(lists_change(&mut app, "resource Count.0"));
+    assert!(
+        lists_change(&mut app, "resource Time<Virtual>."),
+        "everything lists Bevy's time: {:?}",
+        texts(&mut app)
+    );
+    assert_eq!(hidden_count(&mut app), None);
+    // Nothing was played again to change what is listed.
+    assert!(finished(app.world()));
+    ask(&mut app, GalleryAction::UseNoise(NoisePreset::App));
+    ask(&mut app, GalleryAction::InspectStep(step));
+    assert!(!lists_change(&mut app, "resource Time<Virtual>."));
+}
+
+#[test]
+fn hiding_a_type_in_the_trace_tab_moves_its_changes_to_the_hidden_list_and_showing_brings_them_back()
+ {
+    let mut app = gallery_app();
+    at_the_step_that_counted(&mut app);
+    let hidden = hidden_count(&mut app).unwrap_or(0);
+    // The only type the app's filter lets through in this step is the app's.
+    ask(&mut app, GalleryAction::ToggleType(0));
+    assert!(!lists_change(&mut app, "resource Count.0"));
+    assert_eq!(hidden_count(&mut app), Some(hidden + 1));
+    assert_eq!(
+        app.world().resource::<GalleryState>().noise_preset(),
+        None,
+        "the filter is the app's with an edit"
+    );
+    assert!(
+        lists_change(&mut app, "As code: NoiseFilter::default().ignore("),
+        "{:?}",
+        texts(&mut app)
+    );
+    ask(&mut app, GalleryAction::ToggleHiddenChanges);
+    assert!(lists_change(&mut app, "resource Count.0"));
+    assert!(shows(&mut app, "Show"));
+    ask(&mut app, GalleryAction::ToggleType(0));
+    ask(&mut app, GalleryAction::ToggleHiddenChanges);
+    assert!(lists_change(&mut app, "resource Count.0"));
+    assert_eq!(hidden_count(&mut app), Some(hidden));
+}
+
+#[test]
+fn the_trace_tabs_filter_survives_selecting_another_scenario() {
+    let mut app = gallery_app();
+    on_the_trace_tab(&mut app);
+    ask(&mut app, GalleryAction::UseNoise(NoisePreset::Everything));
+    ask(&mut app, GalleryAction::Select(1));
+    let state = app.world().resource::<GalleryState>();
+    assert_eq!(state.noise_preset(), Some(NoisePreset::Everything));
+    assert_eq!(state.noise(), &NoiseFilter::nothing());
+}
+
+#[test]
+fn the_trace_tab_shows_the_filter_in_force_as_code() {
+    let mut app = gallery_app();
+    at_the_step_that_counted(&mut app);
+    assert!(lists_change(&mut app, "As code: NoiseFilter::default()"));
+    ask(&mut app, GalleryAction::UseNoise(NoisePreset::Everything));
+    assert!(lists_change(&mut app, "As code: NoiseFilter::nothing()"));
+}
+
+#[test]
+fn a_filter_change_is_accepted_while_recording() {
+    let dir = fresh_dir("gallery-noise-recording");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Select(0));
+    ask(&mut app, GalleryAction::Record);
+    ask(&mut app, GalleryAction::UseNoise(NoisePreset::Everything));
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_recording());
+    assert_eq!(state.noise_preset(), Some(NoisePreset::Everything));
+}
+
+#[test]
+fn a_type_a_keep_pattern_of_the_app_matches_cannot_be_hidden() {
+    let hooks = SessionHooks::default().noise_filter(NoiseFilter::default().keep("Count"));
+    let mut app = app_with(
+        GalleryPlugin::new(gallery())
+            .with_reset(reset_app)
+            .with_session_hooks(hooks)
+            .with_loop_pause(2),
+    );
+    at_the_step_that_counted(&mut app);
+    ask(&mut app, GalleryAction::ToggleType(0));
+    let state = app.world().resource::<GalleryState>();
+    assert_eq!(state.status(), "Kept by a keep pattern of the app");
+    assert_eq!(state.noise_preset(), Some(NoisePreset::App));
 }
 
 /// The default variant and a larger window.
