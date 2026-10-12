@@ -152,6 +152,11 @@ enum GallerySetup {
 #[derive(Resource)]
 struct CaptureFails;
 
+/// Makes the app's setup capture nothing, so the gallery saves a world in the
+/// crate's own format.
+#[derive(Resource)]
+struct CaptureNothing;
+
 impl AppSetup for GallerySetup {
     fn build(&self, world: &mut World) -> Result<(), String> {
         let Self::Counted { count, form } = self else {
@@ -174,6 +179,9 @@ impl AppSetup for GallerySetup {
     ) -> Result<Option<Self>, String> {
         if world.contains_resource::<CaptureFails>() {
             return Err("no way to save this app".into());
+        }
+        if world.contains_resource::<CaptureNothing>() {
+            return Ok(None);
         }
         Ok(Some(Self::Counted {
             count: world.get_resource::<Count>().map_or(0, |count| count.0),
@@ -2186,4 +2194,69 @@ fn a_screen_step_in_a_variant_fails_the_run_naming_the_step() {
         "{:?}",
         outcome.failures
     );
+}
+
+#[test]
+fn save_as_setup_while_recording_writes_the_apps_own_setup() {
+    let dir = fresh_dir("gallery-save-own");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Record);
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_recording(), "saving does not stop the recording");
+    assert!(state.status().contains("Saved setup"), "{}", state.status());
+    assert!(state.status().contains("Counted"), "{}", state.status());
+    let scenes = std::fs::read_dir(&dir).map_or(0, |files| {
+        files
+            .filter_map(Result::ok)
+            .filter(|file| file.file_name().to_string_lossy().ends_with(".scene.ron"))
+            .count()
+    });
+    assert_eq!(scenes, 0, "the app's capture wrote its own format");
+}
+
+#[test]
+fn save_as_setup_writes_the_world_for_an_app_without_a_save_format() {
+    let dir = fresh_dir("gallery-save-scene");
+    let mut app = recording_app(&dir);
+    app.world_mut().insert_resource(CaptureNothing);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    // Paused, with the script's two clicks done or not: whatever the count is.
+    ask(&mut app, GalleryAction::TakeOver);
+    let count = app.world().resource::<Count>().0;
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    let path = dir.join("add_2.scene.ron");
+    let text = std::fs::read_to_string(&path).expect("the world was written");
+    assert!(text.contains("Count"), "{text}");
+    assert!(
+        !text.contains("Button") && !text.contains("Node"),
+        "the app's UI is not saved: {text}"
+    );
+    let status = app.world().resource::<GalleryState>().status().to_owned();
+    assert!(status.contains("add_2.scene.ron"), "{status}");
+    assert!(status.contains("Scene("), "{status}");
+
+    // A second save does not overwrite the first.
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    assert!(dir.join("add_2-2.scene.ron").exists());
+
+    // And the saved world is a setup that brings the count back.
+    app.world_mut().resource_mut::<Count>().0 = 99;
+    let scenario = Scenario::new("from the save")
+        .scene_setup("add_2.scene.ron")
+        .with_base_dir(&dir);
+    scenario.run_setup(app.world_mut()).expect("loads");
+    assert_eq!(app.world().resource::<Count>().0, count);
+}
+
+#[test]
+fn save_as_setup_says_why_it_failed() {
+    let dir = fresh_dir("gallery-save-fails");
+    let mut app = recording_app(&dir);
+    app.world_mut().insert_resource(CaptureFails);
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    let status = app.world().resource::<GalleryState>().status().to_owned();
+    assert!(status.contains("Save as setup failed"), "{status}");
+    assert!(status.contains("no way to save this app"), "{status}");
 }

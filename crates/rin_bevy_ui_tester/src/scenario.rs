@@ -7,6 +7,7 @@
 
 use alloc::sync::Arc;
 use core::{fmt, ops::BitOr};
+use std::path::{Path, PathBuf};
 
 use bevy::{
     ecs::world::World,
@@ -390,6 +391,9 @@ pub struct Scenario {
     action_timeout: Option<u16>,
     /// The app's setup, which the script holds.
     app_setup: Option<Setup>,
+    /// The directory the scenario's file is in, where a setup that names a
+    /// file looks for it. `None` for a scenario built in code.
+    base_dir: Option<PathBuf>,
     /// The app's view, which the script holds.
     app_view: Option<View>,
     /// The script.
@@ -408,6 +412,7 @@ impl fmt::Debug for Scenario {
             .field("scale_factor", &self.scale_factor)
             .field("action_timeout", &self.action_timeout)
             .field("app_setup", &self.app_setup)
+            .field("base_dir", &self.base_dir)
             .field("app_view", &self.app_view)
             .field("steps", &self.steps)
             .field("expects", &self.expects)
@@ -427,6 +432,7 @@ impl Scenario {
             scale_factor: None,
             action_timeout: None,
             app_setup: None,
+            base_dir: None,
             app_view: None,
             steps: Vec::new(),
             expects: Vec::new(),
@@ -460,6 +466,33 @@ impl Scenario {
     ) -> Self {
         self.app_setup = Some(Setup::app(setup));
         self
+    }
+
+    /// Starts from a world saved with **Save as setup** in the gallery (see
+    /// [`crate::save`]): `file` is its name, looked for in
+    /// [`Scenario::base_dir`] when there is one. An exported script holds it
+    /// as `setup: Scene("file")`.
+    #[must_use]
+    pub fn scene_setup(mut self, file: impl Into<String>) -> Self {
+        self.app_setup = Some(Setup::Scene(file.into()));
+        self
+    }
+
+    /// Sets the directory a setup that names a file (see
+    /// [`Scenario::scene_setup`]) looks for it in: the scenario's file's
+    /// directory, as [`crate::load_ron_file`] sets it. Without one, a relative
+    /// name is relative to the working directory.
+    #[must_use]
+    pub fn with_base_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.base_dir = Some(dir.into());
+        self
+    }
+
+    /// The directory the scenario's setup looks for the file it names in, if
+    /// the scenario was loaded from a file or given one.
+    #[must_use]
+    pub fn base_dir(&self) -> Option<&Path> {
+        self.base_dir.as_deref()
     }
 
     /// Sets the app's view: a value of its `#[reflect(AppView)]` enum (see
@@ -610,7 +643,7 @@ impl Scenario {
     /// Why the app's setup failed; the closure does not run then.
     pub fn run_setup(&self, world: &mut World) -> Result<bool, String> {
         if let Some(setup) = &self.app_setup {
-            setup.build(world)?;
+            setup.build(world, self.base_dir.as_deref())?;
         }
         if let Some(hook) = &self.setup {
             hook(world);
@@ -710,6 +743,7 @@ impl Scenario {
             scale_factor: script.scale_factor,
             action_timeout: script.action_timeout,
             app_setup: script.setup,
+            base_dir: None,
             app_view: script.view,
             steps: script.steps,
             expects: script.expect,

@@ -1,0 +1,323 @@
+//! A checkpoint saved as a setup for other scenarios.
+//!
+//! While recording, or paused, in the gallery, **Save as setup** writes the
+//! world as it is to a file next to the scenarios, and any scenario can start
+//! from it with `setup: Scene("name.scene.ron")` (see [`Setup::Scene`]).
+//!
+//! The file is Bevy's own world format (a `DynamicWorld`, the dynamic scene of
+//! earlier versions) holding the app's reflected resources and entities. What
+//! belongs to the test tooling or to the UI is left out, because the scenario
+//! brings its own UI (its setup closure, or the app's setup after this one):
+//!
+//! * every type of Bevy's crates and of this one, as a [`NoiseFilter`]
+//!   decides (the default leaves them all out), so no layout, transform or
+//!   picking state, and no gallery or overlay state;
+//! * every entity that is a UI node, a camera or a window, or that sits below
+//!   one, and everything marked [`NotUnderTest`](crate::NotUnderTest);
+//! * entities left with no component after that.
+//!
+//! What is saved needs `#[derive(Reflect)]` and `#[reflect(Component)]` or
+//! `#[reflect(Resource)]` (and `Default`, as Bevy's world format needs to
+//! read it back), as for checks on resources. A component that refers to
+//! another entity is saved with that entity's id: keep both in the file, or
+//! the reference dangles when it is loaded.
+//!
+//! The file is the same on every run of the same app: the resources and the
+//! components of each entity are written sorted by type path, the entities by
+//! id, and nothing is hashed.
+//!
+//! An app with its own save format does not use this: its
+//! [`AppSetup::capture`](crate::AppSetup::capture) writes the file and names
+//! it in the setup it returns, and [`save_setup`] prefers that.
+
+use core::{any::TypeId, fmt};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use bevy::{
+    asset::{AssetPath, AssetServer, LoadFromPath, UntypedHandle},
+    camera::Camera,
+    ecs::{
+        entity::{Entity, EntityHashMap},
+        hierarchy::ChildOf,
+        reflect::AppTypeRegistry,
+        world::World,
+    },
+    ui::Node,
+    window::Window,
+    world_serialization::{
+        DynamicWorld, DynamicWorldBuilder, WorldFilter, serde::WorldDeserializer,
+    },
+};
+use serde::de::DeserializeSeed as _;
+
+use crate::{
+    check::suggest::NoiseFilter,
+    extension::{Setup, capture_setup},
+    targets::is_tooling,
+};
+
+/// The end of a saved world's file name, which makes a `.ron` file a setup
+/// and not a scenario: [`crate::ron_files`] skips such files.
+pub const SCENE_SUFFIX: &str = ".scene.ron";
+
+/// Saving or loading a world failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveError(String);
+
+impl SaveError {
+    /// An error with this message.
+    fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl fmt::Display for SaveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl core::error::Error for SaveError {}
+
+/// What a saved world's file is called for `stem`: `"{stem}.scene.ron"`.
+#[must_use]
+pub fn scene_file_name(stem: &str) -> String {
+    format!("{stem}{SCENE_SUFFIX}")
+}
+
+/// Whether `name` is the name of a saved world (see [`SCENE_SUFFIX`]).
+#[must_use]
+pub fn is_scene_file(name: &str) -> bool {
+    name.ends_with(SCENE_SUFFIX)
+}
+
+/// Whether `entity` belongs to the app's data and not to its UI or to the
+/// tooling: it and nothing above it is a UI node, a camera, a window or
+/// marked [`NotUnderTest`](crate::NotUnderTest).
+fn is_app_data(world: &World, entity: Entity) -> bool {
+    if is_tooling(world, entity) {
+        return false;
+    }
+    let mut current = entity;
+    loop {
+        let Ok(here) = world.get_entity(current) else {
+            return false;
+        };
+        if here.contains::<Node>() || here.contains::<Camera>() || here.contains::<Window>() {
+            return false;
+        }
+        match here.get::<ChildOf>() {
+            Some(parent) => current = parent.parent(),
+            None => return true,
+        }
+    }
+}
+
+/// The types in `world`'s registry that `noise` leaves out.
+fn ignored_types(world: &World, noise: &NoiseFilter) -> Vec<TypeId> {
+    let Some(registry) = world.get_resource::<AppTypeRegistry>() else {
+        return Vec::new();
+    };
+    registry
+        .read()
+        .iter()
+        .filter(|registration| noise.ignores_path(registration.type_info().type_path()))
+        .map(bevy::reflect::TypeRegistration::type_id)
+        .collect()
+}
+
+/// The world's reflected resources and app entities as a [`DynamicWorld`],
+/// everything in it in a fixed order.
+///
+/// # Errors
+///
+/// [`SaveError`] when the world has no type registry.
+fn extract(world: &World, noise: &NoiseFilter) -> Result<DynamicWorld, SaveError> {
+    let registry = world
+        .get_resource::<AppTypeRegistry>()
+        .ok_or_else(|| SaveError::new("the world has no type registry"))?;
+    let mut filter = WorldFilter::allow_all();
+    for type_id in ignored_types(world, noise) {
+        filter = filter.deny_by_id(type_id);
+    }
+    let entities: Vec<Entity> = world
+        .iter_entities()
+        .map(|entity| entity.id())
+        .filter(|&entity| is_app_data(world, entity))
+        .collect();
+    let mut saved = DynamicWorldBuilder::from_world(world, &registry.read())
+        .with_component_filter(filter.clone())
+        .with_resource_filter(filter)
+        .extract_entities(entities.into_iter())
+        .extract_resources()
+        .remove_empty_entities()
+        .build();
+    let path_of = |value: &dyn bevy::reflect::PartialReflect| {
+        value
+            .get_represented_type_info()
+            .map_or_else(String::new, |info| info.type_path().to_owned())
+    };
+    saved.resources.sort_by_key(|value| path_of(value.as_ref()));
+    for entity in &mut saved.entities {
+        entity
+            .components
+            .sort_by_key(|value| path_of(value.as_ref()));
+    }
+    saved.entities.sort_by_key(|entity| entity.entity);
+    Ok(saved)
+}
+
+/// The world's app data as the text of a saved world; see the
+/// [module documentation](self) for what that is.
+///
+/// # Errors
+///
+/// [`SaveError`] when the world has no type registry or something in it
+/// cannot be written (a value whose type does not derive `Reflect` fully).
+pub fn scene_ron(world: &World, noise: &NoiseFilter) -> Result<String, SaveError> {
+    let saved = extract(world, noise)?;
+    let registry = world
+        .get_resource::<AppTypeRegistry>()
+        .ok_or_else(|| SaveError::new("the world has no type registry"))?;
+    saved
+        .serialize(&registry.read())
+        .map_err(|error| SaveError::new(format!("the world cannot be written: {error}")))
+}
+
+/// Puts a saved world's resources and entities into `world`: resources are
+/// replaced, entities are spawned anew.
+///
+/// # Errors
+///
+/// [`SaveError`] when the text is not a saved world, names a type `world`
+/// does not know, or the world has no type registry.
+pub fn load_scene_ron(world: &mut World, text: &str) -> Result<(), SaveError> {
+    let registry = world
+        .get_resource::<AppTypeRegistry>()
+        .ok_or_else(|| SaveError::new("the world has no type registry"))?
+        .clone();
+    let mut loader = Loader(world.get_resource::<AssetServer>().cloned());
+    let mut deserializer = ron::de::Deserializer::from_str(text)
+        .map_err(|error| SaveError::new(format!("not a saved world: {error}")))?;
+    let saved = WorldDeserializer {
+        type_registry: &registry.read(),
+        load_from_path: &mut loader,
+    }
+    .deserialize(&mut deserializer)
+    .map_err(|error| SaveError::new(format!("not a saved world: {error}")))?;
+    saved
+        .write_to_world_with(world, &mut EntityHashMap::default(), &registry.read())
+        .map_err(|error| SaveError::new(format!("the saved world cannot be loaded: {error}")))
+}
+
+/// How a saved world's handles are loaded: by the world's asset server, or,
+/// where it has none, as the default handle of their type.
+struct Loader(Option<AssetServer>);
+
+impl LoadFromPath for Loader {
+    fn load_from_path_erased(
+        &mut self,
+        type_id: TypeId,
+        path: AssetPath<'static>,
+    ) -> UntypedHandle {
+        self.0.as_mut().map_or_else(
+            || UntypedHandle::default_for_type(type_id),
+            |server| server.load_from_path_erased(type_id, path),
+        )
+    }
+}
+
+/// Reads the file `file` and loads it as a saved world into `world`: resolved
+/// against `base_dir` when it is relative and there is one.
+///
+/// # Errors
+///
+/// [`SaveError`] when the file cannot be read (naming the path tried) or does
+/// not load; see [`load_scene_ron`].
+pub fn load_scene_file(
+    world: &mut World,
+    base_dir: Option<&Path>,
+    file: &str,
+) -> Result<(), SaveError> {
+    let path = resolve(base_dir, file);
+    let text = fs::read_to_string(&path)
+        .map_err(|error| SaveError::new(format!("cannot read {}: {error}", path.display())))?;
+    load_scene_ron(world, &text)
+        .map_err(|error| SaveError::new(format!("{}: {error}", path.display())))
+}
+
+/// Where the file `file` of a scenario is: next to the scenario's file when
+/// it is relative and the scenario came from a file, else as given.
+fn resolve(base_dir: Option<&Path>, file: &str) -> PathBuf {
+    let path = Path::new(file);
+    match base_dir {
+        Some(dir) if path.is_relative() => dir.join(path),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// The first stem from `name` that has no saved world in `dir` yet, as
+/// `name`, `name-2`, `name-3`.
+fn free_scene_stem(dir: &Path, name: &str) -> String {
+    let mut candidate = name.to_owned();
+    let mut number = 1_u32;
+    while dir.join(scene_file_name(&candidate)).exists() {
+        number += 1;
+        candidate = format!("{name}-{number}");
+    }
+    candidate
+}
+
+/// A saved setup: the setup that gets back to the state saved, and the files
+/// it wrote.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedSetup {
+    /// The setup to put in a script: [`Setup::Scene`] for a saved world, or
+    /// what the app's own [`AppSetup::capture`](crate::AppSetup::capture)
+    /// made.
+    pub setup: Setup,
+    /// The saved world's file, when the setup is [`Setup::Scene`].
+    pub path: Option<PathBuf>,
+}
+
+/// Saves the state of `world` as a setup in `dir`, for scenarios that sit in
+/// the same directory.
+///
+/// The app's own [`AppSetup::capture`](crate::AppSetup::capture) goes first:
+/// when it returns a setup, that is the result and the crate writes nothing
+/// (the app wrote what it needs under names starting with `stem`). Otherwise
+/// the world is written as `"{stem}.scene.ron"` (numbered if that exists, so
+/// nothing is overwritten) and the setup is `Scene` of that name.
+///
+/// # Errors
+///
+/// [`SaveError`] when the directory or file cannot be written, the world
+/// cannot be saved, or the app's capture fails.
+pub fn save_setup(
+    world: &mut World,
+    dir: &Path,
+    stem: &str,
+    noise: &NoiseFilter,
+) -> Result<SavedSetup, SaveError> {
+    fs::create_dir_all(dir)
+        .map_err(|error| SaveError::new(format!("cannot create {}: {error}", dir.display())))?;
+    let stem = free_scene_stem(dir, stem);
+    let captured = capture_setup(world, dir, &stem).map_err(|error| {
+        SaveError::new(format!("the app's setup could not be captured: {error}"))
+    })?;
+    if let Some(setup) = captured {
+        return Ok(SavedSetup { setup, path: None });
+    }
+    let text = scene_ron(world, noise)?;
+    let name = scene_file_name(&stem);
+    let path = dir.join(&name);
+    fs::write(&path, text)
+        .map_err(|error| SaveError::new(format!("cannot write {}: {error}", path.display())))?;
+    Ok(SavedSetup {
+        setup: Setup::Scene(name),
+        path: Some(path),
+    })
+}

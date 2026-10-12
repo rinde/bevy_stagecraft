@@ -102,6 +102,8 @@ pub(super) enum Control {
     TakeOver,
     /// Export.
     Export,
+    /// Save the world as a setup.
+    SaveAsSetup,
     /// Start or stop recording a session.
     Record,
     /// Start recording a new scenario from an empty world.
@@ -195,6 +197,7 @@ fn control_text(control: Control, state: &GalleryState) -> String {
         }
         .into(),
         Control::Export => "Export RON".into(),
+        Control::SaveAsSetup => "Save as setup".into(),
         Control::Record => if state.is_recording() {
             "Stop recording"
         } else {
@@ -249,6 +252,7 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
             }
         }
         Control::Export => GalleryAction::Export,
+        Control::SaveAsSetup => GalleryAction::SaveAsSetup,
         Control::Record => {
             if state.is_recording() {
                 GalleryAction::StopRecording
@@ -407,6 +411,7 @@ fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState, gal
     .with_children(|row| {
         button(row, Control::TakeOver, state);
         button(row, Control::Export, state);
+        button(row, Control::SaveAsSetup, state);
         button(row, Control::Record, state);
         button(row, Control::NewEmpty, state);
         button(row, Control::NewFromCurrent, state);
@@ -593,6 +598,7 @@ pub(super) fn style_controls(
             | Control::StepStep
             | Control::Restart
             | Control::Export
+            | Control::SaveAsSetup
             | Control::NewEmpty
             | Control::NewFromCurrent
             | Control::FormField(..) => false,

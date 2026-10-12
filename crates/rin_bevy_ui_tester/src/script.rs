@@ -108,7 +108,8 @@ pub struct Script {
     /// its own with `Timeout(frames, ..)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_timeout: Option<u16>,
-    /// Where the starting state comes from: one of the app's setups.
+    /// Where the starting state comes from: one of the app's setups, or a saved
+    /// world (`Scene("..")`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<Setup>,
     /// How the world is shown: one of the app's views.
