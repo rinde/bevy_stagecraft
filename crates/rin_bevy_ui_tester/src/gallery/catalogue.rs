@@ -86,6 +86,9 @@ impl Gallery {
     /// theme), with a picker to choose one; a run of the whole catalogue plays
     /// every entry in each. The first is chosen to begin with. List
     /// [`Variant::default`] to keep the entries as written among them.
+    ///
+    /// Name the variants differently ([`Variant::new`]): two with one name
+    /// give rows that cannot be told apart.
     #[must_use]
     pub fn variants(mut self, variants: impl IntoIterator<Item = Variant>) -> Self {
         self.variants = variants.into_iter().collect();

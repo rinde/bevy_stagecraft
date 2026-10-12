@@ -171,12 +171,18 @@ pub fn run_ron_variants(
         else {
             continue;
         };
+        let wanted: Vec<(&Variant, String)> = variants
+            .iter()
+            .map(|variant| (variant, variant.label(&stem)))
+            .filter(|(_, name)| name.contains(filter))
+            .collect();
+        // A file the filter leaves nothing of is not even read: it may be
+        // broken, and parsing it costs time for nothing.
+        if wanted.is_empty() {
+            continue;
+        }
         let loaded = load_ron_file(&path, registry);
-        for variant in variants {
-            let name = variant.label(&stem);
-            if !name.contains(filter) {
-                continue;
-            }
+        for (variant, name) in wanted {
             let outcome = loaded
                 .as_ref()
                 .map_err(Clone::clone)
@@ -191,13 +197,6 @@ pub fn run_ron_variants(
         }
     }
     Ok(results)
-}
-
-/// Write a line to standard output; a closed pipe is not worth failing over.
-macro_rules! say {
-    ($($arg:tt)*) => {
-        writeln!(std::io::stdout().lock(), $($arg)*).ok()
-    };
 }
 
 /// The `main` of a `harness = false` test target.
@@ -234,37 +233,253 @@ pub fn run_ron_tests_with_variants(
         .skip(1)
         .find(|argument| !argument.starts_with('-'))
         .unwrap_or_default();
-    let results = match run_ron_variants(dir, registry, &filter, variants, run) {
-        Ok(results) => results,
+    let all_passed = run_and_print(
+        dir.as_ref(),
+        registry,
+        &filter,
+        variants,
+        run,
+        &mut std::io::stdout().lock(),
+        &mut std::io::stderr().lock(),
+    );
+    if all_passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Plays the files as [`run_ron_variants`] does and prints the standard
+/// harness's lines to `out` (a directory that cannot be read to `err`).
+/// Whether every test passed: the exit code of
+/// [`run_ron_tests_with_variants`], split from it so the lines and the verdict
+/// can be tested.
+fn run_and_print(
+    dir: &Path,
+    registry: &Registry,
+    filter: &str,
+    variants: &[Variant],
+    run: impl FnMut(&Scenario) -> ScenarioReport,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> bool {
+    match run_ron_variants(dir, registry, filter, variants, run) {
+        Ok(results) => print_results(out, &results),
         Err(error) => {
-            writeln!(std::io::stderr().lock(), "{error}").ok();
-            return ExitCode::FAILURE;
+            // A closed pipe is not worth failing over.
+            writeln!(err, "{error}").ok();
+            false
         }
-    };
-    say!("\nrunning {} tests", results.len());
-    for result in &results {
-        say!(
+    }
+}
+
+/// Writes one line per result in the style of the standard harness, then the
+/// failures and the summary. Whether all of them passed.
+fn print_results(out: &mut impl Write, results: &[FileResult]) -> bool {
+    // A closed pipe is not worth failing over.
+    let mut say = |line: String| writeln!(out, "{line}").ok();
+    say(format!("\nrunning {} tests", results.len()));
+    for result in results {
+        say(format!(
             "test {} ... {}",
             result.name,
             if result.passed() { "ok" } else { "FAILED" }
-        );
+        ));
     }
     let failed: Vec<_> = results.iter().filter(|result| !result.passed()).collect();
     for result in &failed {
-        say!("\n---- {} ({}) ----", result.name, result.path.display());
+        say(format!(
+            "\n---- {} ({}) ----",
+            result.name,
+            result.path.display()
+        ));
         for line in result.failures() {
-            say!("{line}");
+            say(line);
         }
     }
-    say!(
+    say(format!(
         "\ntest result: {}. {} passed; {} failed\n",
         if failed.is_empty() { "ok" } else { "FAILED" },
         results.len() - failed.len(),
         failed.len()
-    );
-    if failed.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+    ));
+    failed.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, reason = "tests may panic")]
+
+    use bevy::prelude::*;
+
+    use super::*;
+    use crate::{scenario::Step, targets::Target};
+
+    /// A fresh directory for one test, under the system's temporary one.
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rin_bevy_ui_tester_files_{}_{name}",
+            std::process::id()
+        ));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).expect("a directory");
+        dir
+    }
+
+    /// Writes `scenario` to `dir/name.ron`.
+    fn write_scenario(dir: &Path, name: &str, scenario: &Scenario) {
+        fs::write(
+            dir.join(format!("{name}.ron")),
+            scenario.to_ron().expect("exports"),
+        )
+        .expect("writes");
+    }
+
+    /// What `run_and_print` printed and decided.
+    fn print_for(dir: &Path, filter: &str, variants: &[Variant]) -> (bool, String, String) {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let passed = run_and_print(
+            dir,
+            &Registry::default(),
+            filter,
+            variants,
+            Scenario::run_headless,
+            &mut out,
+            &mut err,
+        );
+        (
+            passed,
+            String::from_utf8(out).expect("text"),
+            String::from_utf8(err).expect("text"),
+        )
+    }
+
+    /// A file that waits one frame, and one that also aims at a screen
+    /// position, which no variant but the default may do.
+    fn write_pair(dir: &Path) {
+        write_scenario(dir, "fine", &Scenario::new("fine").step(Step::wait(1)));
+        write_scenario(
+            dir,
+            "fixed",
+            &Scenario::new("fixed")
+                .step(Step::move_to(Target::screen(Vec2::new(10.0, 10.0))))
+                .step(Step::wait(1)),
+        );
+    }
+
+    #[test]
+    fn a_file_the_filter_excludes_is_not_even_read() {
+        let dir = scratch_dir("filter_first");
+        write_scenario(&dir, "good", &Scenario::new("good").step(Step::wait(1)));
+        fs::write(dir.join("broken.ron"), "this is not a scenario").expect("writes");
+        let results = run_ron_variants(
+            &dir,
+            &Registry::default(),
+            "good",
+            &[Variant::default()],
+            Scenario::run_headless,
+        )
+        .expect("reads the directory");
+        let names: Vec<&str> = results.iter().map(|result| result.name.as_str()).collect();
+        assert_eq!(names, ["good"]);
+        assert!(results.iter().all(FileResult::passed));
+        let everything = run_ron_variants(
+            &dir,
+            &Registry::default(),
+            "",
+            &[Variant::default()],
+            Scenario::run_headless,
+        )
+        .expect("reads the directory");
+        assert_eq!(everything.len(), 2, "the broken file is a failed result");
+    }
+
+    #[test]
+    fn a_screen_position_in_a_non_default_variant_is_a_failed_file_result() {
+        let dir = scratch_dir("refused_pair");
+        write_pair(&dir);
+        let variants = [
+            Variant::default(),
+            Variant::new("narrow").window_size(640, 480),
+        ];
+        let results = run_ron_variants(
+            &dir,
+            &Registry::default(),
+            "",
+            &variants,
+            Scenario::run_headless,
+        )
+        .expect("reads the directory");
+        let outcome: Vec<(&str, bool)> = results
+            .iter()
+            .map(|result| (result.name.as_str(), result.passed()))
+            .collect();
+        assert_eq!(
+            outcome,
+            [
+                ("fine", true),
+                ("fine [narrow]", true),
+                ("fixed", true),
+                ("fixed [narrow]", false),
+            ]
+        );
+        let refused = results.last().expect("a result");
+        assert!(matches!(refused.outcome, Err(LoadError::Invalid { .. })));
+        assert!(
+            refused
+                .failures()
+                .iter()
+                .any(|line| line.contains("Screen")),
+            "{:?}",
+            refused.failures()
+        );
+    }
+
+    #[test]
+    fn the_runner_prints_one_line_per_file_and_variant_and_fails_when_one_failed() {
+        let dir = scratch_dir("printed");
+        write_pair(&dir);
+        let variants = [
+            Variant::default(),
+            Variant::new("narrow").window_size(640, 480),
+        ];
+        let (passed, out, err) = print_for(&dir, "", &variants);
+        assert!(!passed);
+        assert!(err.is_empty(), "{err}");
+        for line in [
+            "running 4 tests",
+            "test fine ... ok",
+            "test fine [narrow] ... ok",
+            "test fixed ... ok",
+            "test fixed [narrow] ... FAILED",
+            "---- fixed [narrow] (",
+            "test result: FAILED. 3 passed; 1 failed",
+        ] {
+            assert!(out.contains(line), "missing {line:?} in\n{out}");
+        }
+    }
+
+    #[test]
+    fn the_runner_succeeds_when_every_test_passed_and_the_filter_selects_by_name() {
+        let dir = scratch_dir("passing");
+        write_pair(&dir);
+        let variants = [
+            Variant::default(),
+            Variant::new("narrow").window_size(640, 480),
+        ];
+        let (passed, out, _) = print_for(&dir, "fine", &variants);
+        assert!(passed, "{out}");
+        assert!(out.contains("running 2 tests"), "{out}");
+        assert!(out.contains("test result: ok. 2 passed; 0 failed"), "{out}");
+        assert!(!out.contains("fixed"), "{out}");
+    }
+
+    #[test]
+    fn the_runner_fails_naming_a_directory_it_cannot_read() {
+        let dir = scratch_dir("missing").join("nothing_here");
+        let (passed, out, err) = print_for(&dir, "", &[Variant::default()]);
+        assert!(!passed);
+        assert!(out.is_empty(), "{out}");
+        assert!(err.contains("nothing_here"), "{err}");
     }
 }

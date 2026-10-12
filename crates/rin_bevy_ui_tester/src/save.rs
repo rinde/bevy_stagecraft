@@ -1,8 +1,8 @@
 //! A checkpoint saved as a setup for other scenarios.
 //!
-//! While recording, or paused, in the gallery, **Save as setup** writes the
-//! world as it is to a file next to the scenarios, and any scenario can start
-//! from it with `setup: Scene("name.scene.ron")` (see [`Setup::Scene`]).
+//! In the gallery, **Save as setup** (at any time: while recording, paused or
+//! playing) writes the world as it is to a file next to the scenarios, and any
+//! scenario can start from it with `setup: Scene("name.scene.ron")` (see [`Setup::Scene`]).
 //!
 //! The file is Bevy's own world format (a `DynamicWorld`, the dynamic scene of
 //! earlier versions) holding the app's reflected resources and entities. What
@@ -24,11 +24,16 @@
 //!
 //! The file is the same on every run of the same app: the resources and the
 //! components of each entity are written sorted by type path, the entities by
-//! id, and nothing is hashed.
+//! id. Inside one component or resource the order is the value's own: a
+//! `HashMap` or `HashSet` field is written in hash order, which can differ
+//! between runs, so use an ordered collection (`BTreeMap`, `Vec`) for what is
+//! saved if the file must be the same every time.
 //!
 //! An app with its own save format does not use this: its
 //! [`AppSetup::capture`](crate::AppSetup::capture) writes the file and names
-//! it in the setup it returns, and [`save_setup`] prefers that.
+//! it in the setup it returns, and [`save_setup`] prefers that. Name what it
+//! writes `"{stem}.{extension}"` so that a second save gets another `stem`
+//! rather than overwriting the first.
 
 use core::{any::TypeId, fmt};
 use std::{
@@ -259,12 +264,29 @@ fn resolve(base_dir: Option<&Path>, file: &str) -> PathBuf {
     }
 }
 
-/// The first stem from `name` that has no saved world in `dir` yet, as
-/// `name`, `name-2`, `name-3`.
+/// Whether `dir` holds a file a save with this `stem` would write or has
+/// written: `"{stem}.{extension}"`, which covers the saved world and what an
+/// app's own [`AppSetup::capture`](crate::AppSetup::capture) writes. Not
+/// `"{stem}.ron"`: that is the scenario the save is named for, and sits there
+/// to begin with. A directory that cannot be read has none.
+fn stem_is_taken(dir: &Path, stem: &str) -> bool {
+    let prefix = format!("{stem}.");
+    let scenario = format!("{stem}.ron");
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        name.starts_with(&prefix) && name != scenario
+    })
+}
+
+/// The first stem from `name` that nothing saved in `dir` uses yet (see
+/// [`stem_is_taken`]), as `name`, `name-2`, `name-3`.
 fn free_scene_stem(dir: &Path, name: &str) -> String {
     let mut candidate = name.to_owned();
     let mut number = 1_u32;
-    while dir.join(scene_file_name(&candidate)).exists() {
+    while stem_is_taken(dir, &candidate) {
         number += 1;
         candidate = format!("{name}-{number}");
     }
@@ -288,9 +310,11 @@ pub struct SavedSetup {
 ///
 /// The app's own [`AppSetup::capture`](crate::AppSetup::capture) goes first:
 /// when it returns a setup, that is the result and the crate writes nothing
-/// (the app wrote what it needs under names starting with `stem`). Otherwise
-/// the world is written as `"{stem}.scene.ron"` (numbered if that exists, so
-/// nothing is overwritten) and the setup is `Scene` of that name.
+/// (the app wrote what it needs in files named `"{stem}.{extension}"`).
+/// Otherwise the world is written as `"{stem}.scene.ron"` and the setup is
+/// `Scene` of that name. Either way `stem` is numbered (`stem-2`, `stem-3`)
+/// when `dir` already holds any file named `"{stem}.{extension}"` (other than
+/// the scenario's own `"{stem}.ron"`), so an earlier save is not overwritten.
 ///
 /// # Errors
 ///

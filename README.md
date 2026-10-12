@@ -923,11 +923,14 @@ see `tests/session.rs`, `tests/gallery.rs` and the example.
 ### Saving a checkpoint as a setup
 
 Another scenario often wants to start where a recording got to. While
-recording, or paused, press the gallery's **Save as setup** (or call
+recording, paused or playing (the button always works; it only reads the
+world), press the gallery's **Save as setup** (or call
 `save_setup(world, dir, stem, &noise)`): the world as it is goes to
 `{stem}.scene.ron` in the export directory, next to the scenarios (`stem` is
-the selected scenario's file name, else `recording`; a second save is
-`{stem}-2.scene.ron`, and nothing is overwritten). Any scenario then starts
+the selected scenario's file name, else `recording`). A second save uses
+`{stem}-2` instead, and so does any save when the directory already holds a
+file named `{stem}.<extension>` other than the scenario's own `{stem}.ron`, so
+nothing written by a save is overwritten. Any scenario then starts
 from it:
 
 ```ron
@@ -950,14 +953,18 @@ closure or the app's own setup, and the data it needs comes from the file.
 Types need `#[derive(Reflect, Default)]` with `#[reflect(Resource)]` or
 `#[reflect(Component)]`; a component that refers to another entity is saved
 with that entity's id, so keep both in the file. The file is the same on every
-run: resources, components and entities are written in a fixed order.
+run: resources, components and entities are written in a fixed order. Inside
+one value the order is the value's own, so a `HashMap` or `HashSet` field is
+written in hash order; use a `BTreeMap` or a `Vec` for what is saved if the
+file must not change between runs.
 
 A file named `*.scene.ron` is a setup, not a scenario, so `ron_files`,
 `run_ron_tests` and the gallery example skip it.
 
 An app with a save format of its own does not use the file: its
-`AppSetup::capture` writes the save into `dir` (names starting with `stem`) and
-returns the `App(..)` setup that loads it, and **Save as setup** prefers that
+`AppSetup::capture` writes the save into `dir` (files named
+`{stem}.<extension>`, so a second save gets another `stem` and does not
+overwrite the first) and returns the `App(..)` setup that loads it, and **Save as setup** prefers that
 (the status line then shows the setup to write).
 
 ### Picking a check by clicking a node

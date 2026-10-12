@@ -64,6 +64,12 @@ impl Variant {
     /// A variant called `name` that changes nothing yet; add what it changes
     /// with [`Variant::window_size`], [`Variant::scale_factor`],
     /// [`Variant::app_setup`] and [`Variant::app_view`].
+    ///
+    /// Give every variant in a list its own name. The name is part of the
+    /// test name, the index title and the gallery row (`scenario [name]`), and
+    /// nothing checks that two variants differ: with the same name, their
+    /// tests, titles and rows cannot be told apart. Only the recorder keeps
+    /// their folders apart.
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self {

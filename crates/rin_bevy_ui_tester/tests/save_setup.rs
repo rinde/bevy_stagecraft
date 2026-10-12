@@ -282,6 +282,34 @@ fn saving_never_overwrites_an_earlier_save() {
 }
 
 #[test]
+fn a_second_save_of_an_app_with_its_own_format_does_not_overwrite_the_first() {
+    let dir = dir("save-setup-own-twice");
+    let mut app = app_at(1);
+    app.world_mut().insert_resource(OwnFormat);
+    save_setup(app.world_mut(), &dir, "mine", &NoiseFilter::default()).expect("saves");
+    app.world_mut().insert_resource(Counter(9));
+    save_setup(app.world_mut(), &dir, "mine", &NoiseFilter::default()).expect("saves");
+    assert_eq!(
+        fs::read_to_string(dir.join("mine.own")).expect("reads"),
+        "1"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("mine-2.own")).expect("reads"),
+        "9"
+    );
+}
+
+#[test]
+fn saving_next_to_the_scenario_it_is_named_for_keeps_that_name() {
+    let dir = dir("save-setup-beside-scenario");
+    fs::create_dir_all(&dir).expect("a directory");
+    fs::write(dir.join("again.ron"), "(scenario)").expect("writes");
+    let mut app = app_at(2);
+    let saved = save_setup(app.world_mut(), &dir, "again", &NoiseFilter::default()).expect("saves");
+    assert_eq!(saved.setup, Setup::Scene("again.scene.ron".into()));
+}
+
+#[test]
 fn an_app_with_its_own_save_format_saves_through_its_setup() {
     let dir = dir("save-setup-own");
     let mut app = app_at(6);

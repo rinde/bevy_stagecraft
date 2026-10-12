@@ -258,8 +258,9 @@ fn export(world: &World, state: &mut GalleryState) {
 }
 
 /// Saves the world as it is as a setup for other scenarios, next to the
-/// exported ones, and says where (see [`crate::save`]). Works while a
-/// recording is on, or paused, and changes nothing in the world.
+/// exported ones, and says where (see [`crate::save`]). Works at any time,
+/// while a recording is on, a script plays or it is paused, and changes
+/// nothing in the world.
 fn save_as_setup(world: &mut World, state: &mut GalleryState) {
     let stem = state
         .selected

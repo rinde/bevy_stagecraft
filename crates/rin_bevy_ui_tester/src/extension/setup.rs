@@ -70,9 +70,13 @@ pub trait AppSetup {
 
     /// The setup that gets back to the state `world` is in now, for a session
     /// recording that starts here. It may write what it needs into `dir`, in
-    /// files whose names start with `stem` (the recorded script's file name
-    /// without its extension), so `"{stem}.save.ron"` sits next to the
-    /// script. `None`, the default, records no setup.
+    /// files named `"{stem}.{extension}"` (`stem` is the recorded script's
+    /// file name without its extension), so `"{stem}.save.ron"` sits next to
+    /// the script. **Save as setup** in the gallery picks a `stem` that no
+    /// such file in `dir` has yet (other than the script's own
+    /// `"{stem}.ron"`), so a second save does not overwrite the first; a file
+    /// named any other way is not looked for. `None`, the default, records no
+    /// setup.
     ///
     /// `Self: Sized` keeps the trait usable as `dyn AppSetup`; the recorder
     /// reaches this function through [`ReflectAppSetup`].
