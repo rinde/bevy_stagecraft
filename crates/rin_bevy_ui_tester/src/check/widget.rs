@@ -7,7 +7,7 @@
 
 use crate::{
     probe::{describe_entity, is_within},
-    targets::{Lookup, Target, locate},
+    targets::{Lookup, Target, locate, painted_topmost},
 };
 use bevy::{
     camera::visibility::InheritedVisibility,
@@ -36,6 +36,8 @@ pub(super) enum WidgetState {
     Focused,
     /// Visible in the hierarchy and taking up room on screen.
     Visible,
+    /// Painted topmost at its middle, whatever covers it lets through.
+    OnTop,
     /// Can be found at all.
     Exists,
 }
@@ -50,6 +52,7 @@ impl WidgetState {
             Self::Pressed => "is pressed",
             Self::Focused => "has focus",
             Self::Visible => "is visible",
+            Self::OnTop => "is on top",
             Self::Exists => "exists",
         }
     }
@@ -129,6 +132,7 @@ pub(super) fn in_state(
             }
         }
         WidgetState::Visible => visible(world, widget, label),
+        WidgetState::OnTop => on_top(world, widget, label),
         WidgetState::Exists => Ok(()),
     }
 }
@@ -148,6 +152,11 @@ fn visible(world: &World, widget: Entity, label: &str) -> Result<(), String> {
         return Err(format!("{label} takes up no room on screen"));
     }
     Ok(())
+}
+
+/// Whether nothing painted later covers the middle of `widget`.
+fn on_top(world: &World, widget: Entity, label: &str) -> Result<(), String> {
+    painted_topmost(world, widget).map_err(|why| format!("{label} is not on top: {why}"))
 }
 
 /// The text `widget` shows: each text node at or below it, in hierarchy

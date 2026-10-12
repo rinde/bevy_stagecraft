@@ -153,6 +153,14 @@ pub enum Check {
     /// The target's widget is visible in the hierarchy and takes up room on
     /// screen.
     Visible(Target),
+    /// The target's widget is painted topmost at its middle: nothing drawn
+    /// later covers it, whatever the covering node's `Pickable` says. This is
+    /// the question of what the person sees, where the player's own wait
+    /// asks what the pointer reaches (a popup that lets the pointer through
+    /// still covers what lies below). Only nodes that paint something count
+    /// as covering (a background that is not transparent, an image or text),
+    /// so an empty full-window container does not.
+    OnTop(Target),
     /// The target can be found: exactly one widget matches it (for a text
     /// target, exactly one node shows the text).
     Exists(Target),
@@ -243,6 +251,8 @@ enum Spelled {
     Focused(Target),
     /// See [`Check::Visible`].
     Visible(Target),
+    /// See [`Check::OnTop`].
+    OnTop(Target),
     /// See [`Check::Exists`].
     Exists(Target),
     /// See [`Check::TextOf`].
@@ -267,7 +277,7 @@ enum Spelled {
 /// The forms a check can take, for a check that does not parse.
 const FORMS: &str = "a check: App(..), Shows(..), Hovered(..), Count(..), Resource(..), \
     Component(..), InState(..), Disabled(..), Checked(..), Selected(..), Pressed(..), \
-    Focused(..), Visible(..), Exists(..), TextOf(..), Tree(..), Not(..), All(..), Any(..) or Within(..)";
+    Focused(..), Visible(..), OnTop(..), Exists(..), TextOf(..), Tree(..), Not(..), All(..), Any(..) or Within(..)";
 
 /// What a file that refers to a check by name, as format versions 1 and 2
 /// could, is told.
@@ -588,6 +598,13 @@ impl Check {
         Self::Visible(target)
     }
 
+    /// The target's widget is painted topmost at its middle: see
+    /// [`Check::OnTop`].
+    #[must_use]
+    pub const fn on_top(target: Target) -> Self {
+        Self::OnTop(target)
+    }
+
     /// The target can be found.
     #[must_use]
     pub const fn exists(target: Target) -> Self {
@@ -654,6 +671,7 @@ impl Check {
             | Self::Pressed(target)
             | Self::Focused(target)
             | Self::Visible(target)
+            | Self::OnTop(target)
             | Self::Exists(target)
             | Self::TextOf(target, _)
             | Self::Tree { of: target, .. } => Some(target),
@@ -820,6 +838,7 @@ impl Check {
             Self::Pressed(target) => widget_state(world, target, WidgetState::Pressed),
             Self::Focused(target) => widget_state(world, target, WidgetState::Focused),
             Self::Visible(target) => widget_state(world, target, WidgetState::Visible),
+            Self::OnTop(target) => widget_state(world, target, WidgetState::OnTop),
             Self::Exists(target) => widget_state(world, target, WidgetState::Exists),
             Self::TextOf(target, matching) => {
                 let node = match widget::node(world, target) {
@@ -1233,6 +1252,7 @@ impl fmt::Display for Check {
             Self::Pressed(target) => write!(f, "{target:?} {}", WidgetState::Pressed.words()),
             Self::Focused(target) => write!(f, "{target:?} {}", WidgetState::Focused.words()),
             Self::Visible(target) => write!(f, "{target:?} {}", WidgetState::Visible.words()),
+            Self::OnTop(target) => write!(f, "{target:?} {}", WidgetState::OnTop.words()),
             Self::Exists(target) => write!(f, "{target:?} {}", WidgetState::Exists.words()),
             Self::TextOf(target, matching) => write!(f, "text of {target:?} {matching}"),
             Self::Tree { of, .. } => write!(f, "tree of {of:?} matches"),

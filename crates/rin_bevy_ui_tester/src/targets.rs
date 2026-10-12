@@ -345,6 +345,13 @@ pub(crate) fn pressable(
     actionable::pressable(world, widget, at, label)
 }
 
+/// Whether nothing painted later covers the middle of `widget`, whatever
+/// `Pickable` says of what covers it; the error says what does or why nothing
+/// is drawn there. This is `Check::OnTop`.
+pub(crate) fn painted_topmost(world: &World, widget: Entity) -> Result<(), String> {
+    actionable::painted_topmost(world, widget)
+}
+
 /// A target worked out to a pixel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResolvedTarget {
