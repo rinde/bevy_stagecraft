@@ -197,6 +197,9 @@ per extension point, and a second one is a load error naming both.
   names a click that hit no label. They replace the session hooks of earlier
   versions.
 - `Registry::app_type(Extension::Setup)` and so on list the variants.
+- A world saved as a setup for other scenarios is the built-in
+  `setup: Scene("start.scene.ron")` (see
+  [Saving a checkpoint as a setup](#saving-a-checkpoint-as-a-setup)).
 
 Most questions about plain Bevy data are built in, typed in Rust and found
 through Bevy's type registry (`AppTypeRegistry`), so writing app code for a
@@ -512,6 +515,52 @@ let scenario = Scenario::from_ron_with(include_str!("x.ron"), &registry)?
 `scenario.to_ron()` / `export_ron(&script)` write pretty RON. A test target
 with `harness = false` calling `run_ron_tests(dir, &registry, run)` turns
 every `.ron` file in a directory into one test named after the file.
+`run_ron_tests_with_variants` plays every file once per variant; see below.
+
+## Window sizes, scale factors and themes: variants
+
+A layout that works at 1280x720 may break at 640x480, on a high-density display
+or in the dark theme. Rather than copy every scenario, list **variants** in the
+runner (what Playwright calls projects) and each scenario is played once per
+variant. A `Variant` has a name and any of a window size (logical pixels), a
+scale factor (physical pixels per logical pixel; the window keeps its logical
+size, so the layout is the same as at 1.0 and the pictures have that many times
+the pixels) and the app's own setup or view (a value of its `#[reflect(AppSetup)]`
+or `#[reflect(AppView)]` enum, for example to switch the theme).
+
+```rust,ignore
+let variants = [
+    Variant::new("wide").window_size(1280, 720),
+    Variant::new("narrow").window_size(640, 480),
+    Variant::new("retina").window_size(1280, 720).scale_factor(2.0),
+    Variant::new("dark").app_setup(MySetup::Dark),
+];
+```
+
+* `run_ron_tests_with_variants(dir, &registry, &variants, run)` makes one test
+  per file and variant, named `file [variant]`, so `cargo test narrow` plays the
+  narrow variant of every file. (`run_ron_variants` is the same without the
+  `main`.)
+* `Recorder::variants(variants)` writes one index entry per scenario and
+  variant, named `scenario [variant]`, each with its own pictures and trace.
+* `Gallery::variants(variants)` adds a **Variant** row of buttons to the
+  Scenarios window. Picking one runs the selected scenario in that variant, and
+  a run-all plays every entry in every variant.
+* By hand, `variant.apply(&scenario)` returns the scenario as that variant runs
+  it (named `scenario [variant]`), and `Scenario::scale_factor` and the script's
+  `scale_factor: Some(2.0)` set the scale factor of a scenario itself.
+
+The list is exactly what runs: a runner given variants plays only those, so put
+`Variant::default()` in the list to play the scenario as written too (its name
+has no brackets). A variant replaces the scenario's own window size, scale
+factor, app setup or app view where it sets one; a scenario's setup and view
+closures still run afterwards.
+
+A step aimed at a fixed screen position (`Screen(..)`) only makes sense in the
+default variant, where nothing changes. In any other variant it is an error
+naming the step (`step 3 aims at a fixed screen position ...`): in the test it
+is a failed test, in the recorder and the gallery a failed setup. Aim at the
+widget instead (`Text`, `Role`, `Component`, `Name`).
 
 ## Seeing what the script does
 
@@ -600,7 +649,7 @@ plugins. The app under test runs untouched in the primary window; a second OS
 window, **Scenarios**, with its own UI camera, holds the catalogue (grouped,
 with descriptions and each entry's last result), play and pause, step one
 frame, step to the next step, restart, speed (1/4x, 1/2x, 1x, 2x), loop on and
-off, **Take over**, **Export RON**, **Record**, **New: empty world** / **New: current state**, **Pick**, the live list of
+off, **Take over**, **Export RON**, **Save as setup**, **Record**, **New: empty world** / **New: current state**, **Pick**, the live list of
 the selected scenario's checks, and its steps (see below). Space plays and pauses, Right steps a frame, Down steps to the next
 step and Left restarts, read from the Scenarios window only.
 
@@ -822,6 +871,46 @@ The file, and whatever the app's `AppSetup::capture` wrote, go to the
 gallery's export directory (or the `SessionPlugin`'s). Load it like any other
 script: its setup is the app's own value, so it plays with nothing else added;
 see `tests/session.rs`, `tests/gallery.rs` and the example.
+
+### Saving a checkpoint as a setup
+
+Another scenario often wants to start where a recording got to. While
+recording, or paused, press the gallery's **Save as setup** (or call
+`save_setup(world, dir, stem, &noise)`): the world as it is goes to
+`{stem}.scene.ron` in the export directory, next to the scenarios (`stem` is
+the selected scenario's file name, else `recording`; a second save is
+`{stem}-2.scene.ron`, and nothing is overwritten). Any scenario then starts
+from it:
+
+```ron
+setup: Scene("recording.scene.ron"),
+```
+
+or `Scenario::scene_setup("recording.scene.ron")` in Rust. A scenario loaded
+from a file (`load_ron_file`, `run_ron_tests`, the gallery example) looks for
+the name next to its own file; one built in Rust looks next to
+`Scenario::with_base_dir(..)`, else in the working directory.
+
+The file is Bevy's own world format (a `DynamicWorld`, the dynamic scene of
+earlier versions) holding the app's reflected resources and entities, and
+loading it is built in: resources are replaced, entities are added. What
+belongs to the tooling or the UI is left out: every type of Bevy's crates and
+of this one (the `NoiseFilter` of the session's hooks decides; by default, all
+of them), every UI node, camera and window and what sits below one, and what
+is marked `NotUnderTest`. So the scenario brings its own UI, with a setup
+closure or the app's own setup, and the data it needs comes from the file.
+Types need `#[derive(Reflect, Default)]` with `#[reflect(Resource)]` or
+`#[reflect(Component)]`; a component that refers to another entity is saved
+with that entity's id, so keep both in the file. The file is the same on every
+run: resources, components and entities are written in a fixed order.
+
+A file named `*.scene.ron` is a setup, not a scenario, so `ron_files`,
+`run_ron_tests` and the gallery example skip it.
+
+An app with a save format of its own does not use the file: its
+`AppSetup::capture` writes the save into `dir` (names starting with `stem`) and
+returns the `App(..)` setup that loads it, and **Save as setup** prefers that
+(the status line then shows the setup to write).
 
 ### Picking a check by clicking a node
 

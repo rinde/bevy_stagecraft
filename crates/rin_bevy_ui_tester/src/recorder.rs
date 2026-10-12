@@ -16,7 +16,9 @@ use std::{fs, io, path::Path, path::PathBuf};
 use bevy::{
     app::{App, Last, Plugin, PluginGroup, PluginGroupBuilder, PostUpdate, Startup},
     asset::{Assets, Handle, RenderAssetUsages},
-    camera::{Camera, CameraUpdateSystems, NormalizedRenderTarget, RenderTarget},
+    camera::{
+        Camera, CameraUpdateSystems, ImageRenderTarget, NormalizedRenderTarget, RenderTarget,
+    },
     core_pipeline::CorePipelinePlugin,
     ecs::{
         component::Component,
@@ -44,13 +46,14 @@ use bevy::{
 use crate::{
     capture::{CaptureError, Frame},
     check::suggest::NoiseFilter,
-    headless::{DEFAULT_WINDOW_SIZE, HeadlessPlugins, RenderCameraSupport},
+    headless::{DEFAULT_SCALE_FACTOR, DEFAULT_WINDOW_SIZE, HeadlessPlugins, RenderCameraSupport},
     index,
     input::SyntheticInput,
     overlay::{CursorOverlayPlugin, TargetDescriptions, current_step_text},
     player::{Outcome, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport, ScenarioSystems},
     scenario::Scenario,
     trace::ScenarioTrace,
+    variant::Variant,
 };
 
 /// Every this many frames a picture is taken, unless configured otherwise.
@@ -150,23 +153,40 @@ pub enum RecorderSystems {
 /// `SyntheticInput` aims its pointer at.
 #[derive(Debug, Clone, Copy)]
 pub struct RecorderPlugins {
-    /// Size of the virtual primary window and of the image.
+    /// Size of the virtual primary window, in logical pixels.
     window_size: (u32, u32),
+    /// Physical pixels per logical pixel; the image has that many times the
+    /// pixels of the window size.
+    scale_factor: f32,
 }
 
 impl Default for RecorderPlugins {
     fn default() -> Self {
         Self {
             window_size: DEFAULT_WINDOW_SIZE,
+            scale_factor: DEFAULT_SCALE_FACTOR,
         }
     }
 }
 
 impl RecorderPlugins {
-    /// Sets the size of the window and the image, in logical pixels.
+    /// Sets the size of the window, in logical pixels. The image has that
+    /// size times the scale factor, in physical pixels.
     #[must_use]
     pub const fn with_window_size(mut self, width: u32, height: u32) -> Self {
         self.window_size = (width, height);
+        self
+    }
+
+    /// Sets the scale factor: physical pixels per logical pixel, as of
+    /// [`HeadlessPlugins::with_scale_factor`]. The UI lays out for the logical
+    /// size and the pictures have that many times the pixels. A value that is
+    /// not finite and above zero is ignored.
+    #[must_use]
+    pub const fn with_scale_factor(mut self, scale_factor: f32) -> Self {
+        if scale_factor.is_finite() && scale_factor > 0.0 {
+            self.scale_factor = scale_factor;
+        }
         self
     }
 }
@@ -176,6 +196,7 @@ impl PluginGroup for RecorderPlugins {
         let (width, height) = self.window_size;
         HeadlessPlugins::default()
             .with_window_size(width, height)
+            .with_scale_factor(self.scale_factor)
             .build()
             // The render plugin brings the render crate's camera plugin.
             .disable::<RenderCameraSupport>()
@@ -235,19 +256,40 @@ fn create_target(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut input: ResMut<SyntheticInput>,
 ) {
-    let (width, height) = windows.iter().next().map_or(DEFAULT_WINDOW_SIZE, |window| {
+    let (width, height, scale_factor) = windows.iter().next().map_or(
         (
-            window.resolution.physical_width(),
-            window.resolution.physical_height(),
-        )
-    });
+            DEFAULT_WINDOW_SIZE.0,
+            DEFAULT_WINDOW_SIZE.1,
+            DEFAULT_SCALE_FACTOR,
+        ),
+        |window| {
+            (
+                window.resolution.physical_width(),
+                window.resolution.physical_height(),
+                window.resolution.scale_factor(),
+            )
+        },
+    );
     let mut image = Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
     // Read back through the screenshot's own copy, but keep the data on the
     // CPU side so the handle is also a normal image.
     image.asset_usage = RenderAssetUsages::default();
     let handle = images.add(image);
-    input.set_target(Some(NormalizedRenderTarget::Image(handle.clone().into())));
+    input.set_target(Some(NormalizedRenderTarget::Image(image_target(
+        &handle,
+        scale_factor,
+    ))));
     commands.insert_resource(RecorderTarget(handle));
+}
+
+/// The image as a render target at the window's scale factor. The cameras'
+/// target and the synthetic pointer's must be equal, scale factor included, or
+/// the pointer's position is not on any camera's target.
+fn image_target(handle: &Handle<Image>, scale_factor: f32) -> ImageRenderTarget {
+    ImageRenderTarget {
+        handle: handle.clone(),
+        scale_factor,
+    }
 }
 
 /// Points every camera that renders to the primary window at the image.
@@ -263,13 +305,17 @@ fn retarget_cameras(
         Query<(Entity, &mut RenderTarget), With<Camera>>,
     )>,
     marked: Query<(), With<IsDefaultUiCamera>>,
-    primary: Query<Entity, With<PrimaryWindow>>,
+    primary: Query<(Entity, &Window), With<PrimaryWindow>>,
 ) {
     let Some(target) = target else {
         return;
     };
     let default = cameras.p0().get();
     let primary = primary.iter().next();
+    let scale_factor = primary.map_or(DEFAULT_SCALE_FACTOR, |(_, window)| {
+        window.resolution.scale_factor()
+    });
+    let primary = primary.map(|(entity, _)| entity);
     for (entity, mut render_target) in &mut cameras.p1() {
         let to_window = match &*render_target {
             RenderTarget::Window(WindowRef::Primary) => true,
@@ -279,7 +325,7 @@ fn retarget_cameras(
         if !to_window {
             continue;
         }
-        *render_target = RenderTarget::Image(target.0.clone().into());
+        *render_target = RenderTarget::Image(image_target(&target.0, scale_factor));
         if default == Some(entity) && marked.is_empty() {
             commands.entity(entity).insert(IsDefaultUiCamera);
         }
@@ -297,6 +343,7 @@ fn request_frames(
     descriptions: Res<TargetDescriptions>,
     theme: Res<crate::overlay::OverlayTheme>,
     target: Option<Res<RecorderTarget>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let frame = report.frames;
     if !captures.enabled || frame == 0 || captures.last_requested == Some(frame) {
@@ -330,7 +377,22 @@ fn request_frames(
     };
     captures.last_requested = Some(frame);
     captures.requested += 1;
-    commands.spawn((Screenshot::image(target.0.clone()), meta));
+    let scale_factor = windows
+        .iter()
+        .next()
+        .map_or(DEFAULT_SCALE_FACTOR, |window| {
+            window.resolution.scale_factor()
+        });
+    commands.spawn((screenshot(&target.0, scale_factor), meta));
+}
+
+/// A screenshot of the recorder's image. It names the image with the scale
+/// factor the cameras render to it at: Bevy keys the screenshot's output by
+/// the whole render target, so one at another scale factor would be a
+/// different target, the cameras would not draw into it, and the picture would
+/// be black.
+fn screenshot(handle: &Handle<Image>, scale_factor: f32) -> Screenshot {
+    Screenshot(RenderTarget::Image(image_target(handle, scale_factor)))
 }
 
 /// Whether any step or check has failed so far.
@@ -371,7 +433,14 @@ pub fn request_capture(world: &mut World, meta: CaptureMeta) {
     if let Some(mut captures) = world.get_resource_mut::<Captures>() {
         captures.requested += 1;
     }
-    world.spawn((Screenshot::image(target.0), meta));
+    let scale_factor = world
+        .query_filtered::<&Window, With<PrimaryWindow>>()
+        .iter(world)
+        .next()
+        .map_or(DEFAULT_SCALE_FACTOR, |window| {
+            window.resolution.scale_factor()
+        });
+    world.spawn((screenshot(&target.0, scale_factor), meta));
 }
 
 /// Why recording failed. A scenario whose checks fail is not an error: it is
@@ -508,6 +577,9 @@ pub struct Recorder {
     every: u32,
     /// Which reflected types the traces' snapshots leave out.
     noise: NoiseFilter,
+    /// The environments every scenario is recorded in, each its own index
+    /// entry; the default one (the scenario as written) unless set.
+    variants: Vec<Variant>,
 }
 
 impl fmt::Debug for Recorder {
@@ -531,6 +603,7 @@ impl Recorder {
             settle: None,
             every: DEFAULT_EVERY,
             noise: NoiseFilter::default(),
+            variants: vec![Variant::default()],
         }
     }
 
@@ -547,6 +620,18 @@ impl Recorder {
             group: group.into(),
             scenario,
         });
+        self
+    }
+
+    /// Records every scenario once per variant, each its own entry in the
+    /// index named `scenario [variant]`, instead of only as written. List
+    /// [`Variant::default`] too to keep the scenario as written. A variant
+    /// that a scenario cannot run in (a step aimed at a screen position, in a
+    /// variant that changes the window) is recorded as a failed entry saying
+    /// so. An empty list records nothing.
+    #[must_use]
+    pub fn variants(mut self, variants: impl IntoIterator<Item = Variant>) -> Self {
+        self.variants = variants.into_iter().collect();
         self
     }
 
@@ -590,19 +675,25 @@ impl Recorder {
         let mut used = Vec::new();
         let mut scenarios = Vec::new();
         for entry in &self.entries {
-            let slug = unique_slug(entry.scenario.name(), &mut used);
-            let (report, pictures, trace) = self.play(&entry.scenario)?;
-            let folder = directory.join(&slug);
-            let recording = ScenarioRecording {
-                name: entry.scenario.name().into(),
-                group: entry.group.clone(),
-                slug,
-                report,
-                pictures: pictures.len(),
-                trace,
-            };
-            index::write_scenario(&folder, &pictures, &recording)?;
-            scenarios.push(recording);
+            for variant in &self.variants {
+                let scenario = variant.varied(&entry.scenario);
+                let refused = variant
+                    .problem(&entry.scenario)
+                    .map(|problem| problem.to_string());
+                let slug = unique_slug(scenario.name(), &mut used);
+                let (report, pictures, trace) = self.play(&scenario, refused)?;
+                let folder = directory.join(&slug);
+                let recording = ScenarioRecording {
+                    name: scenario.name().into(),
+                    group: entry.group.clone(),
+                    slug,
+                    report,
+                    pictures: pictures.len(),
+                    trace,
+                };
+                index::write_scenario(&folder, &pictures, &recording)?;
+                scenarios.push(recording);
+            }
         }
         let index = directory.join("index.html");
         write_file(&index, index::index_html(&scenarios).as_bytes())?;
@@ -614,17 +705,26 @@ impl Recorder {
     }
 
     /// Plays one scenario in a fresh app and returns its report, pictures and
-    /// trace.
-    fn play(&self, scenario: &Scenario) -> Result<PlayedScenario, RecordError> {
+    /// trace. `refused` is why the scenario may not run in its variant: the
+    /// report is then a failed setup, as for any setup that fails.
+    fn play(
+        &self,
+        scenario: &Scenario,
+        refused: Option<String>,
+    ) -> Result<PlayedScenario, RecordError> {
         let name = scenario.name().to_owned();
         let (width, height) = scenario.window().unwrap_or(DEFAULT_WINDOW_SIZE);
+        let mut plugins = RecorderPlugins::default().with_window_size(width, height);
+        if let Some(scale_factor) = scenario.scale() {
+            plugins = plugins.with_scale_factor(scale_factor);
+        }
         let mut app = App::new();
-        app.add_plugins(RecorderPlugins::default().with_window_size(width, height));
+        app.add_plugins(plugins);
         (self.build)(&mut app);
         app.finish();
         app.cleanup();
 
-        let setup = scenario.run_setup(app.world_mut());
+        let setup = refused.map_or_else(|| scenario.run_setup(app.world_mut()), Err);
         if setup.is_ok()
             && let Err(error) = scenario.run_view(app.world_mut())
         {

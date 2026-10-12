@@ -57,9 +57,9 @@ use crate::{
 /// (`Component(..)`, `Name(..)`, `Role(..)`, `Within(..)` and `Nth(..)`)
 /// came later still in version 3, and so did the script's `action_timeout`
 /// and the `Timeout(..)` and `Force(..)` steps that go with steps waiting
-/// for their targets to be actionable, and the `Type(..)` step that types
-/// text: they only add forms, so every file that loaded before still does.
-/// Any other older file still loads.
+/// for their targets to be actionable, the `scale_factor` and the `Type(..)`
+/// step that types text: they only add forms, so every file that loaded
+/// before still does. Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.
@@ -99,12 +99,18 @@ pub struct Script {
     /// The window size the scenario wants, in logical pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_size: Option<(u32, u32)>,
+    /// The scale factor of the window the scenario wants: physical pixels per
+    /// logical pixel. The window keeps its logical size. Must be finite and
+    /// above zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_factor: Option<f32>,
     /// How many frames a step waits for its target to be actionable before
     /// it fails; [`crate::DEFAULT_ACTION_TIMEOUT`] when left out. A step sets
     /// its own with `Timeout(frames, ..)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_timeout: Option<u16>,
-    /// Where the starting state comes from: one of the app's setups.
+    /// Where the starting state comes from: one of the app's setups, or a saved
+    /// world (`Scene("..")`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<Setup>,
     /// How the world is shown: one of the app's views.
@@ -481,6 +487,12 @@ pub(crate) fn build_scenario(
     registry: &Registry,
 ) -> Result<Scenario, LoadError> {
     check_version(script.format_version)?;
+    if let Some(scale_factor) = script.scale_factor {
+        check_scale_factor(scale_factor).map_err(|message| LoadError::Invalid {
+            used_by: "the scale factor".to_owned(),
+            message,
+        })?;
+    }
     let types = registry.types.read();
     if let Some(setup) = &mut script.setup {
         setup
@@ -508,6 +520,17 @@ pub(crate) fn build_scenario(
     }
     drop(types);
     Ok(Scenario::assemble(script))
+}
+
+/// Refuses a scale factor that is not finite and above zero, saying why.
+pub(crate) fn check_scale_factor(scale_factor: f32) -> Result<(), String> {
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the scale factor is {scale_factor}; it must be finite and above zero"
+        ))
+    }
 }
 
 /// Reads the app's values in `check`, and in every check inside it, as the

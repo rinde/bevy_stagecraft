@@ -2,7 +2,9 @@
 //!
 //! Add a test target with `harness = false` and call [`run_ron_tests`] from
 //! its `main`; every `.ron` file in the directory becomes one test, named
-//! after the file.
+//! after the file. With [`run_ron_tests_with_variants`] every file is played
+//! once per [`Variant`] (window size, scale factor, theme), as one test named
+//! `file [variant]`.
 //!
 //! ```toml
 //! [[test]]
@@ -29,15 +31,22 @@ use std::{
 
 use crate::{
     player::ScenarioReport,
+    save::is_scene_file,
     scenario::Scenario,
     script::{LoadError, Registry},
+    variant::Variant,
 };
 
 /// One `.ron` file played.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileResult {
-    /// The file name without its extension, which is the test's name.
+    /// The test's name: the file name without its extension, and the
+    /// variant's name in brackets after it unless the variant is the default
+    /// one (`wrap [narrow]`, see [`Variant::label`]).
     pub name: String,
+    /// The name of the variant the file was played in; empty for the default
+    /// one.
+    pub variant: String,
     /// The file.
     pub path: PathBuf,
     /// The report, or why the file did not load.
@@ -68,7 +77,9 @@ impl FileResult {
     }
 }
 
-/// The `.ron` files directly in `dir`, sorted by name.
+/// The `.ron` files directly in `dir`, sorted by name, except the saved
+/// worlds (`*.scene.ron`, see [`crate::save`]), which are setups and not
+/// scenarios.
 ///
 /// # Errors
 ///
@@ -82,7 +93,10 @@ pub fn ron_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, LoadError> {
     let mut files = Vec::new();
     for entry in fs::read_dir(dir).map_err(io)? {
         let path = entry.map_err(io)?.path();
-        if path.extension().is_some_and(|extension| extension == "ron") {
+        let is_scene = path
+            .file_name()
+            .is_some_and(|name| is_scene_file(&name.to_string_lossy()));
+        if path.extension().is_some_and(|extension| extension == "ron") && !is_scene {
             files.push(path);
         }
     }
@@ -90,7 +104,8 @@ pub fn ron_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, LoadError> {
     Ok(files)
 }
 
-/// Loads one file as a scenario.
+/// Loads one file as a scenario. A setup in it that names a file (a saved
+/// world, `Scene("..")`) looks for it next to this one.
 ///
 /// # Errors
 ///
@@ -101,11 +116,16 @@ pub fn load_ron_file(path: impl AsRef<Path>, registry: &Registry) -> Result<Scen
         path: path.display().to_string(),
         message: error.to_string(),
     })?;
-    Scenario::from_ron_with(&text, registry)
+    let scenario = Scenario::from_ron_with(&text, registry)?;
+    Ok(match path.parent() {
+        Some(dir) => scenario.with_base_dir(dir),
+        None => scenario,
+    })
 }
 
 /// Loads and plays every `.ron` file in `dir` whose name contains `filter`
-/// (all of them when it is empty), with `run`.
+/// (all of them when it is empty), with `run`, as written: the default
+/// variant only. See [`run_ron_variants`].
 ///
 /// # Errors
 ///
@@ -115,23 +135,62 @@ pub fn run_ron_files(
     dir: impl AsRef<Path>,
     registry: &Registry,
     filter: &str,
+    run: impl FnMut(&Scenario) -> ScenarioReport,
+) -> Result<Vec<FileResult>, LoadError> {
+    run_ron_variants(dir, registry, filter, &[Variant::default()], run)
+}
+
+/// Loads every `.ron` file in `dir` and plays it once per variant in
+/// `variants`, with `run`, named `file [variant]`.
+///
+/// `run` gets the scenario as that variant runs it (see [`Variant::apply`]).
+/// A file and variant are played when that name contains `filter` (all of
+/// them when it is empty).
+///
+/// Only the variants listed are played: include [`Variant::default`] to play
+/// the file as written too. A variant a file cannot run in (for example a
+/// step aimed at a screen position, in a variant with another window size) is
+/// a failed [`FileResult`] that says so.
+///
+/// # Errors
+///
+/// [`LoadError::Io`] if the directory cannot be read. A file that does not
+/// load is a failed [`FileResult`] per variant, not an error here.
+pub fn run_ron_variants(
+    dir: impl AsRef<Path>,
+    registry: &Registry,
+    filter: &str,
+    variants: &[Variant],
     mut run: impl FnMut(&Scenario) -> ScenarioReport,
 ) -> Result<Vec<FileResult>, LoadError> {
-    Ok(ron_files(dir)?
-        .into_iter()
-        .filter_map(|path| {
-            let name = path.file_stem()?.to_string_lossy().into_owned();
-            name.contains(filter).then_some((name, path))
-        })
-        .map(|(name, path)| {
-            let outcome = load_ron_file(&path, registry).map(|scenario| run(&scenario));
-            FileResult {
-                name,
-                path,
-                outcome,
+    let mut results = Vec::new();
+    for path in ron_files(dir)? {
+        let Some(stem) = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        let loaded = load_ron_file(&path, registry);
+        for variant in variants {
+            let name = variant.label(&stem);
+            if !name.contains(filter) {
+                continue;
             }
-        })
-        .collect())
+            let outcome = loaded
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|scenario| variant.apply(scenario))
+                .map(|scenario| run(&scenario));
+            results.push(FileResult {
+                name,
+                variant: variant.name().to_owned(),
+                path: path.clone(),
+                outcome,
+            });
+        }
+    }
+    Ok(results)
 }
 
 /// Write a line to standard output; a closed pipe is not worth failing over.
@@ -146,18 +205,36 @@ macro_rules! say {
 /// Plays every `.ron` file in `dir`, prints one line per file in the style of
 /// the standard harness, and succeeds only if all of them passed. Command-line
 /// words that do not start with `-` filter by file name, as with
-/// `cargo test <filter>`.
+/// `cargo test <filter>`. See [`run_ron_tests_with_variants`] to play every
+/// file in several windows and themes.
 #[must_use]
 pub fn run_ron_tests(
     dir: impl AsRef<Path>,
     registry: &Registry,
     run: impl FnMut(&Scenario) -> ScenarioReport,
 ) -> ExitCode {
+    run_ron_tests_with_variants(dir, registry, &[Variant::default()], run)
+}
+
+/// The `main` of a `harness = false` test target that plays every `.ron` file
+/// once per variant, as [`run_ron_variants`] does.
+///
+/// Prints one line per file and variant, named `file [variant]` (just `file`
+/// in the default variant), and succeeds only if all of them passed. A filter
+/// word on the command line matches those names, so `cargo test narrow` plays
+/// the narrow variant of every file.
+#[must_use]
+pub fn run_ron_tests_with_variants(
+    dir: impl AsRef<Path>,
+    registry: &Registry,
+    variants: &[Variant],
+    run: impl FnMut(&Scenario) -> ScenarioReport,
+) -> ExitCode {
     let filter = std::env::args()
         .skip(1)
         .find(|argument| !argument.starts_with('-'))
         .unwrap_or_default();
-    let results = match run_ron_files(dir, registry, &filter, run) {
+    let results = match run_ron_variants(dir, registry, &filter, variants, run) {
         Ok(results) => results,
         Err(error) => {
             writeln!(std::io::stderr().lock(), "{error}").ok();

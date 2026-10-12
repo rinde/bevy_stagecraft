@@ -7,6 +7,7 @@
 
 use alloc::sync::Arc;
 use core::{fmt, ops::BitOr};
+use std::path::{Path, PathBuf};
 
 use bevy::{
     ecs::world::World,
@@ -426,11 +427,17 @@ pub struct Scenario {
     view: Option<Arc<HookFn>>,
     /// The size of the window the scenario wants, in logical pixels.
     window: Option<(u32, u32)>,
+    /// The scale factor of the window the scenario wants: physical pixels per
+    /// logical pixel.
+    scale_factor: Option<f32>,
     /// How many frames a step waits for its target to be actionable, when
     /// the scenario says.
     action_timeout: Option<u16>,
     /// The app's setup, which the script holds.
     app_setup: Option<Setup>,
+    /// The directory the scenario's file is in, where a setup that names a
+    /// file looks for it. `None` for a scenario built in code.
+    base_dir: Option<PathBuf>,
     /// The app's view, which the script holds.
     app_view: Option<View>,
     /// The script.
@@ -446,8 +453,10 @@ impl fmt::Debug for Scenario {
             .field("setup", &self.setup.is_some())
             .field("view", &self.view.is_some())
             .field("window", &self.window)
+            .field("scale_factor", &self.scale_factor)
             .field("action_timeout", &self.action_timeout)
             .field("app_setup", &self.app_setup)
+            .field("base_dir", &self.base_dir)
             .field("app_view", &self.app_view)
             .field("steps", &self.steps)
             .field("expects", &self.expects)
@@ -464,8 +473,10 @@ impl Scenario {
             setup: None,
             view: None,
             window: None,
+            scale_factor: None,
             action_timeout: None,
             app_setup: None,
+            base_dir: None,
             app_view: None,
             steps: Vec::new(),
             expects: Vec::new(),
@@ -501,6 +512,33 @@ impl Scenario {
         self
     }
 
+    /// Starts from a world saved with **Save as setup** in the gallery (see
+    /// [`crate::save`]): `file` is its name, looked for in
+    /// [`Scenario::base_dir`] when there is one. An exported script holds it
+    /// as `setup: Scene("file")`.
+    #[must_use]
+    pub fn scene_setup(mut self, file: impl Into<String>) -> Self {
+        self.app_setup = Some(Setup::Scene(file.into()));
+        self
+    }
+
+    /// Sets the directory a setup that names a file (see
+    /// [`Scenario::scene_setup`]) looks for it in: the scenario's file's
+    /// directory, as [`crate::load_ron_file`] sets it. Without one, a relative
+    /// name is relative to the working directory.
+    #[must_use]
+    pub fn with_base_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.base_dir = Some(dir.into());
+        self
+    }
+
+    /// The directory the scenario's setup looks for the file it names in, if
+    /// the scenario was loaded from a file or given one.
+    #[must_use]
+    pub fn base_dir(&self) -> Option<&Path> {
+        self.base_dir.as_deref()
+    }
+
     /// Sets the app's view: a value of its `#[reflect(AppView)]` enum (see
     /// [`AppView`]), which an exported script holds as `view: App(..)`.
     #[must_use]
@@ -516,6 +554,17 @@ impl Scenario {
     #[must_use]
     pub const fn window_size(mut self, width: u32, height: u32) -> Self {
         self.window = Some((width, height));
+        self
+    }
+
+    /// Sets the scale factor of the window the scenario wants: how many
+    /// physical pixels make one logical pixel. The window keeps its logical
+    /// size, so the layout stays the same and everything renders at that many
+    /// times the pixels. A value that is not finite and above zero is refused
+    /// when a script holding it loads, and ignored by the headless app.
+    #[must_use]
+    pub const fn scale_factor(mut self, scale_factor: f32) -> Self {
+        self.scale_factor = Some(scale_factor);
         self
     }
 
@@ -564,6 +613,30 @@ impl Scenario {
         self.expects.push(check);
     }
 
+    /// A copy called `name` that runs in another environment: whichever of
+    /// the window size, the scale factor, the app's setup and the app's view
+    /// is given replaces the scenario's own. The steps and checks stay.
+    pub(crate) fn in_environment(
+        &self,
+        name: String,
+        window: Option<(u32, u32)>,
+        scale_factor: Option<f32>,
+        setup: Option<&Setup>,
+        view: Option<&View>,
+    ) -> Self {
+        let mut varied = self.clone();
+        varied.name = name;
+        varied.window = window.or(varied.window);
+        varied.scale_factor = scale_factor.or(varied.scale_factor);
+        if let Some(setup) = setup {
+            varied.app_setup = Some(setup.clone());
+        }
+        if let Some(view) = view {
+            varied.app_view = Some(view.clone());
+        }
+        varied
+    }
+
     /// The scenario's name.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -574,6 +647,12 @@ impl Scenario {
     #[must_use]
     pub const fn window(&self) -> Option<(u32, u32)> {
         self.window
+    }
+
+    /// The scale factor the scenario wants, if it says.
+    #[must_use]
+    pub const fn scale(&self) -> Option<f32> {
+        self.scale_factor
     }
 
     /// The app's setup, which the script carries, if any.
@@ -608,7 +687,7 @@ impl Scenario {
     /// Why the app's setup failed; the closure does not run then.
     pub fn run_setup(&self, world: &mut World) -> Result<bool, String> {
         if let Some(setup) = &self.app_setup {
-            setup.build(world)?;
+            setup.build(world, self.base_dir.as_deref())?;
         }
         if let Some(hook) = &self.setup {
             hook(world);
@@ -645,6 +724,7 @@ impl Scenario {
             format_version: FORMAT_VERSION,
             name: self.name.clone(),
             window_size: self.window,
+            scale_factor: self.scale_factor,
             action_timeout: self.action_timeout,
             setup: self.app_setup.clone(),
             view: self.app_view.clone(),
@@ -704,8 +784,10 @@ impl Scenario {
             setup: None,
             view: None,
             window: script.window_size,
+            scale_factor: script.scale_factor,
             action_timeout: script.action_timeout,
             app_setup: script.setup,
+            base_dir: None,
             app_view: script.view,
             steps: script.steps,
             expects: script.expect,

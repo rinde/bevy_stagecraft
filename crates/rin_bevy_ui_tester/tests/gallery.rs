@@ -34,7 +34,7 @@ use rin_bevy_ui_tester::{
     AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryRunReport,
     GalleryState, GalleryTab, HeadlessPlugins, NoiseFilter, Outcome, Probe, ReflectAppSetup,
     Registry, Scenario, ScenarioPlayer, ScenariosCamera, ScenariosWindow, Script, Speed, Step,
-    Target, TraceWorld, WidgetRole,
+    Target, TraceWorld, Variant, WidgetRole,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
@@ -152,6 +152,11 @@ enum GallerySetup {
 #[derive(Resource)]
 struct CaptureFails;
 
+/// Makes the app's setup capture nothing, so the gallery saves a world in the
+/// crate's own format.
+#[derive(Resource)]
+struct CaptureNothing;
+
 impl AppSetup for GallerySetup {
     fn build(&self, world: &mut World) -> Result<(), String> {
         let Self::Counted { count, form } = self else {
@@ -174,6 +179,9 @@ impl AppSetup for GallerySetup {
     ) -> Result<Option<Self>, String> {
         if world.contains_resource::<CaptureFails>() {
             return Err("no way to save this app".into());
+        }
+        if world.contains_resource::<CaptureNothing>() {
+            return Ok(None);
         }
         Ok(Some(Self::Counted {
             count: world.get_resource::<Count>().map_or(0, |count| count.0),
@@ -2069,4 +2077,186 @@ fn running_everything_traces_nothing() {
     let (app, _) = run_all([adds(2)]);
     assert!(app.world().resource::<GalleryState>().trace().is_none());
     assert!(app.world().resource::<ScenarioPlayer>().trace().is_none());
+}
+
+/// The default variant and a larger window.
+fn default_and_large() -> [Variant; 2] {
+    [
+        Variant::default(),
+        Variant::new("large").window_size(800, 600),
+    ]
+}
+
+/// A gallery app over `scenarios`, listing `variants`.
+fn variant_app(scenarios: impl IntoIterator<Item = Scenario>, variants: [Variant; 2]) -> App {
+    app_with(
+        GalleryPlugin::new(Gallery::new().group("All", scenarios).variants(variants))
+            .with_reset(reset_app)
+            .with_loop_pause(2),
+    )
+}
+
+/// The size of the primary window, in logical pixels.
+fn window_size_of(app: &mut App) -> Vec2 {
+    let window = primary(app);
+    app.world()
+        .get::<Window>(window)
+        .expect("window")
+        .resolution
+        .size()
+}
+
+#[test]
+fn the_variant_picker_runs_the_selected_scenario_in_that_variant() {
+    let mut app = variant_app([adds(2)], default_and_large());
+    ask(&mut app, GalleryAction::Select(0));
+    assert_eq!(window_size_of(&mut app), Vec2::new(640.0, 480.0));
+    ask(&mut app, GalleryAction::SelectVariant(1));
+    assert_eq!(app.world().resource::<GalleryState>().variant(), 1);
+    assert_eq!(window_size_of(&mut app), Vec2::new(800.0, 600.0));
+    run_until(&mut app, 600, finished);
+    let report = app.world().resource::<ScenarioReport>();
+    assert_eq!(report.name, "add 2 [large]");
+    assert!(report.passed(), "{report:#?}");
+    let state = app.world().resource::<GalleryState>();
+    assert_eq!(state.result_in(0, 1), Some(true));
+    assert_eq!(state.result_in(0, 0), None, "the default has not run");
+}
+
+#[test]
+fn going_back_to_the_default_variant_puts_the_scenarios_window_back() {
+    let mut app = variant_app([adds(2)], default_and_large());
+    ask(&mut app, GalleryAction::Select(0));
+    ask(&mut app, GalleryAction::SelectVariant(1));
+    ask(&mut app, GalleryAction::SelectVariant(0));
+    assert_eq!(window_size_of(&mut app), Vec2::new(640.0, 480.0));
+    assert_eq!(app.world().resource::<ScenarioReport>().name, "add 2");
+}
+
+#[test]
+fn a_variant_that_does_not_exist_is_ignored() {
+    let mut app = variant_app([adds(2)], default_and_large());
+    ask(&mut app, GalleryAction::SelectVariant(7));
+    assert_eq!(app.world().resource::<GalleryState>().variant(), 0);
+}
+
+#[test]
+fn running_everything_plays_each_scenario_in_each_variant() {
+    let mut app = app_with(
+        GalleryPlugin::new(
+            Gallery::new()
+                .group("All", [adds(2), adds(3)])
+                .variants(default_and_large()),
+        )
+        .with_reset(reset_app)
+        .with_run_all(),
+    );
+    for _ in 0..4_000 {
+        if exit_asked(&app).is_some() {
+            break;
+        }
+        app.update();
+    }
+    let report = app.world().resource::<GalleryRunReport>();
+    assert!(report.passed(), "{}", report.summary());
+    let names: Vec<_> = report.outcomes.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["add 2", "add 2 [large]", "add 3", "add 3 [large]"]);
+}
+
+#[test]
+fn a_screen_step_in_a_variant_fails_the_run_naming_the_step() {
+    let fixed = Scenario::new("fixed")
+        .setup(spawn_app)
+        .window_size(640, 480)
+        .step(Step::move_to(Target::screen(Vec2::new(10.0, 10.0))));
+    let mut app = app_with(
+        GalleryPlugin::new(
+            Gallery::new()
+                .group("All", [fixed])
+                .variants(default_and_large()),
+        )
+        .with_reset(reset_app)
+        .with_run_all(),
+    );
+    for _ in 0..2_000 {
+        if exit_asked(&app).is_some() {
+            break;
+        }
+        app.update();
+    }
+    let report = app.world().resource::<GalleryRunReport>();
+    let failed: Vec<_> = report.failed().collect();
+    assert_eq!(failed.len(), 1, "{}", report.summary());
+    let outcome = failed.first().expect("one failure");
+    assert_eq!(outcome.name, "fixed [large]");
+    assert!(
+        outcome.failures.iter().any(|line| line.contains("step 0")),
+        "{:?}",
+        outcome.failures
+    );
+}
+
+#[test]
+fn save_as_setup_while_recording_writes_the_apps_own_setup() {
+    let dir = fresh_dir("gallery-save-own");
+    let mut app = recording_app(&dir);
+    ask(&mut app, GalleryAction::Record);
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_recording(), "saving does not stop the recording");
+    assert!(state.status().contains("Saved setup"), "{}", state.status());
+    assert!(state.status().contains("Counted"), "{}", state.status());
+    let scenes = std::fs::read_dir(&dir).map_or(0, |files| {
+        files
+            .filter_map(Result::ok)
+            .filter(|file| file.file_name().to_string_lossy().ends_with(".scene.ron"))
+            .count()
+    });
+    assert_eq!(scenes, 0, "the app's capture wrote its own format");
+}
+
+#[test]
+fn save_as_setup_writes_the_world_for_an_app_without_a_save_format() {
+    let dir = fresh_dir("gallery-save-scene");
+    let mut app = recording_app(&dir);
+    app.world_mut().insert_resource(CaptureNothing);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    // Paused, with the script's two clicks done or not: whatever the count is.
+    ask(&mut app, GalleryAction::TakeOver);
+    let count = app.world().resource::<Count>().0;
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    let path = dir.join("add_2.scene.ron");
+    let text = std::fs::read_to_string(&path).expect("the world was written");
+    assert!(text.contains("Count"), "{text}");
+    assert!(
+        !text.contains("Button") && !text.contains("Node"),
+        "the app's UI is not saved: {text}"
+    );
+    let status = app.world().resource::<GalleryState>().status().to_owned();
+    assert!(status.contains("add_2.scene.ron"), "{status}");
+    assert!(status.contains("Scene("), "{status}");
+
+    // A second save does not overwrite the first.
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    assert!(dir.join("add_2-2.scene.ron").exists());
+
+    // And the saved world is a setup that brings the count back.
+    app.world_mut().resource_mut::<Count>().0 = 99;
+    let scenario = Scenario::new("from the save")
+        .scene_setup("add_2.scene.ron")
+        .with_base_dir(&dir);
+    scenario.run_setup(app.world_mut()).expect("loads");
+    assert_eq!(app.world().resource::<Count>().0, count);
+}
+
+#[test]
+fn save_as_setup_says_why_it_failed() {
+    let dir = fresh_dir("gallery-save-fails");
+    let mut app = recording_app(&dir);
+    app.world_mut().insert_resource(CaptureFails);
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    let status = app.world().resource::<GalleryState>().status().to_owned();
+    assert!(status.contains("Save as setup failed"), "{status}");
+    assert!(status.contains("no way to save this app"), "{status}");
 }

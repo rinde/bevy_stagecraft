@@ -24,11 +24,13 @@ pub mod player;
 pub mod probe;
 #[cfg(feature = "record")]
 pub mod recorder;
+pub mod save;
 pub mod scenario;
 pub mod script;
 pub mod session;
 pub mod targets;
 pub mod trace;
+pub mod variant;
 
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
@@ -46,14 +48,17 @@ pub use extension::{
     AppVariant, AppView, AppViewValue, Extension, ReflectAppSetup, ReflectAppTarget,
     ReflectAppView, Setup, SeveralAppTypes, View, app_type,
 };
-pub use files::{FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests};
+pub use files::{
+    FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests,
+    run_ron_tests_with_variants, run_ron_variants,
+};
 #[cfg(feature = "gallery")]
 pub use gallery::{
     Gallery, GalleryAction, GalleryEntry, GalleryGroup, GalleryPlugin, GalleryRunReport,
     GalleryState, GallerySystems, GalleryTab, ScenarioOutcome, ScenariosCamera, ScenariosWindow,
     Speed, Suggestions, TraceWorld,
 };
-pub use headless::{DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
+pub use headless::{DEFAULT_SCALE_FACTOR, DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{
     Keystroke, SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems,
     keystroke,
@@ -72,6 +77,7 @@ pub use recorder::{
     Capture, CaptureMeta, Captures, RecordError, Recorder, RecorderPlugins, RecorderSystems,
     RecorderTarget, Recording, ScenarioRecording,
 };
+pub use save::{SCENE_SUFFIX, SaveError, SavedSetup, save_setup};
 pub use scenario::{CheckResult, Modifiers, Scenario, Step};
 pub use script::{
     ExportError, FORMAT_VERSION, LoadError, OLDEST_FORMAT_VERSION, Registry, Script, export_ron,
@@ -87,3 +93,4 @@ pub use targets::{
 pub use trace::{
     ScenarioTrace, StepTrace, StepView, TargetTrace, TraceCheck, TracePoint, UiLine, step_title,
 };
+pub use variant::Variant;

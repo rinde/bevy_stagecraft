@@ -102,6 +102,8 @@ pub(super) enum Control {
     TakeOver,
     /// Export.
     Export,
+    /// Save the world as a setup.
+    SaveAsSetup,
     /// Start or stop recording a session.
     Record,
     /// Start recording a new scenario from an empty world.
@@ -110,6 +112,8 @@ pub(super) enum Control {
     NewFromCurrent,
     /// A catalogue entry.
     Entry(usize),
+    /// A variant to play the entries in.
+    Variant(usize),
     /// A step of the selected entry, to jump to the start of.
     JumpTo(usize),
     /// A check the last recording suggested at its end, in the checklist.
@@ -193,6 +197,7 @@ fn control_text(control: Control, state: &GalleryState) -> String {
         }
         .into(),
         Control::Export => "Export RON".into(),
+        Control::SaveAsSetup => "Save as setup".into(),
         Control::Record => if state.is_recording() {
             "Stop recording"
         } else {
@@ -218,6 +223,7 @@ fn control_text(control: Control, state: &GalleryState) -> String {
         ),
         Control::TraceWorld(world) => world.label().into(),
         Control::Entry(_)
+        | Control::Variant(_)
         | Control::InspectStep(_)
         | Control::JumpTo(_)
         | Control::Suggestion(_)
@@ -246,6 +252,7 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
             }
         }
         Control::Export => GalleryAction::Export,
+        Control::SaveAsSetup => GalleryAction::SaveAsSetup,
         Control::Record => {
             if state.is_recording() {
                 GalleryAction::StopRecording
@@ -256,6 +263,7 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
         Control::NewEmpty => GalleryAction::NewEmpty,
         Control::NewFromCurrent => GalleryAction::NewFromCurrent,
         Control::Entry(index) => GalleryAction::Select(index),
+        Control::Variant(index) => GalleryAction::SelectVariant(index),
         Control::JumpTo(step) => GalleryAction::JumpTo(step),
         Control::Suggestion(index) => GalleryAction::ToggleSuggestion(index),
         Control::CheckpointSuggestion(checkpoint, index) => {
@@ -273,8 +281,14 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
     }
 }
 
-/// Spawns a button for `control`.
+/// Spawns a button for `control`, worded by [`control_text`].
 fn button(parent: &mut ChildSpawnerCommands<'_>, control: Control, state: &GalleryState) {
+    button_with(parent, control, control_text(control, state), true);
+}
+
+/// Spawns a button for `control` with these words; they are kept up to date by
+/// [`update_labels`] only when `live`.
+fn button_with(parent: &mut ChildSpawnerCommands<'_>, control: Control, text: String, live: bool) {
     parent
         .spawn((
             control,
@@ -295,12 +309,13 @@ fn button(parent: &mut ChildSpawnerCommands<'_>, control: Control, state: &Galle
             },
         )
         .with_children(|button| {
-            let text = control_text(control, state);
             let entity = label(button, text, TEXT);
-            button
-                .commands()
-                .entity(entity)
-                .insert(ControlLabel(control));
+            if live {
+                button
+                    .commands()
+                    .entity(entity)
+                    .insert(ControlLabel(control));
+            }
         });
 }
 
@@ -362,7 +377,15 @@ pub(super) fn place_scenarios_window(
 }
 
 /// The play, speed and tool buttons at the top of the window.
-fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState) {
+fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState, gallery: &Gallery) {
+    if gallery.variant_count() > 1 {
+        row(root, |row| {
+            label(row, "Variant", DIM);
+            for (index, variant) in gallery.variant_list().iter().enumerate() {
+                button_with(row, Control::Variant(index), variant.to_string(), false);
+            }
+        });
+    }
     row(root, |row| {
         button(row, Control::Play, state);
         button(row, Control::StepFrame, state);
@@ -388,6 +411,7 @@ fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState) {
     .with_children(|row| {
         button(row, Control::TakeOver, state);
         button(row, Control::Export, state);
+        button(row, Control::SaveAsSetup, state);
         button(row, Control::Record, state);
         button(row, Control::NewEmpty, state);
         button(row, Control::NewFromCurrent, state);
@@ -436,7 +460,7 @@ pub(super) fn spawn_window(
         ))
         .with_children(|root| {
             label(root, "Scenarios", TEXT);
-            spawn_controls(root, &state);
+            spawn_controls(root, &state, &gallery);
             root.spawn((
                 StatusLine,
                 NotUnderTest,
@@ -541,6 +565,7 @@ pub(super) fn style_controls(
             Control::TakeOver => state.is_taken_over(),
             Control::Record => state.is_recording(),
             Control::Entry(index) => state.selected() == Some(*index),
+            Control::Variant(index) => state.variant() == *index,
             Control::Suggestion(index) => state
                 .suggestions()
                 .is_some_and(|suggestions| suggestions.is_ticked(*index)),
@@ -573,6 +598,7 @@ pub(super) fn style_controls(
             | Control::StepStep
             | Control::Restart
             | Control::Export
+            | Control::SaveAsSetup
             | Control::NewEmpty
             | Control::NewFromCurrent
             | Control::FormField(..) => false,
@@ -653,11 +679,11 @@ fn status_text(state: &GalleryState, report: &ScenarioReport, gallery: &Gallery)
             GalleryPhase::Finished(_) => "finished, failed",
         }
     };
-    format!(
-        "{}: {mode} (step {reached}/{})",
-        entry.scenario.name(),
-        report.steps.len()
-    )
+    let name = gallery.variant(state.variant()).map_or_else(
+        || entry.scenario.name().to_owned(),
+        |variant| variant.label(entry.scenario.name()),
+    );
+    format!("{name}: {mode} (step {reached}/{})", report.steps.len())
 }
 
 /// Applies the wheel to the catalogue, or to the details panel while a
