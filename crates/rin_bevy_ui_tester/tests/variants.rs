@@ -14,8 +14,8 @@ use bevy::{
     window::PrimaryWindow,
 };
 use rin_bevy_ui_tester::{
-    AppSetup, Check, LoadError, ReflectAppSetup, Scenario, ScenarioReport, Step, Target, Variant,
-    run_ron_variants,
+    AppSetup, Check, HeadlessPlugins, LoadError, NoiseFilter, ReflectAppSetup, Scenario,
+    ScenarioReport, Step, Target, Variant, run_ron_variants,
 };
 
 /// How many times the button was activated.
@@ -372,4 +372,82 @@ fn run_ron_variants_names_each_file_and_variant_and_filters_by_that_name() {
     assert_eq!(narrow.len(), 1);
     assert_eq!(narrow[0].variant, "narrow");
     assert!(all.iter().all(|result| result.outcome.is_ok()));
+}
+
+/// A finished headless app at the given logical window size, built without
+/// any help from the scenario.
+fn app_with_window(width: u32, height: u32) -> App {
+    let mut app = App::new();
+    app.add_plugins(HeadlessPlugins::default().with_window_size(width, height));
+    app.finish();
+    app.cleanup();
+    app
+}
+
+/// The primary window's resolution as `(logical width, logical height,
+/// scale factor, physical width)`.
+fn primary_window(app: &mut App) -> (f32, f32, f32, u32) {
+    let world = app.world_mut();
+    let window = world
+        .query_filtered::<&Window, With<PrimaryWindow>>()
+        .single(world)
+        .expect("a primary window");
+    (
+        window.resolution.width(),
+        window.resolution.height(),
+        window.resolution.scale_factor(),
+        window.resolution.physical_width(),
+    )
+}
+
+#[test]
+fn run_in_applies_the_scenarios_window_size_and_scale_factor_to_the_app_it_is_given() {
+    // The button lies outside a 640 px wide window, so this passes only if
+    // the scenario's own size reaches the app it is played in.
+    let scenario = press_pause().window_size(1280, 720).scale_factor(2.0);
+    let mut app = app_with_window(640, 480);
+
+    let report = scenario.run_in(&mut app);
+
+    assert!(report.passed(), "{report:#?}");
+    let (width, height, scale, physical_width) = primary_window(&mut app);
+    assert!((width - 1280.0).abs() < 0.5 && (height - 720.0).abs() < 0.5);
+    assert!((scale - 2.0).abs() < f32::EPSILON);
+    assert_eq!(physical_width, 2560);
+}
+
+#[test]
+fn run_in_leaves_the_window_alone_where_the_scenario_sets_no_size() {
+    let mut app = app_with_window(1280, 720);
+
+    let report = press_pause().run_in(&mut app);
+
+    assert!(report.passed(), "{report:#?}");
+    let (width, height, scale, _) = primary_window(&mut app);
+    assert!((width - 1280.0).abs() < 0.5 && (height - 720.0).abs() < 0.5);
+    assert!((scale - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn a_scenario_loaded_from_a_file_with_a_window_size_fits_when_played_with_run_in() {
+    let text = press_pause()
+        .window_size(1280, 720)
+        .to_ron()
+        .expect("exports");
+    let scenario = Scenario::from_ron(&text).expect("loads");
+    let mut app = app_with_window(640, 480);
+
+    let report = scenario.run_in(&mut app);
+
+    assert!(report.passed(), "{report:#?}");
+}
+
+#[test]
+fn run_in_traced_applies_the_window_size_too() {
+    let scenario = press_pause().window_size(1280, 720);
+    let mut app = app_with_window(640, 480);
+
+    let (report, _) = scenario.run_in_traced(&mut app, NoiseFilter::default());
+
+    assert!(report.passed(), "{report:#?}");
 }
