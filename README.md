@@ -526,7 +526,13 @@ is also a newer one.
 ```
 
 Types are written as short type paths, followed by a reflect path for a field
-(`Editor.tool`, `Score.0`, `Board.cells[2]`). A value is plain RON read as the
+(`Editor.tool`, `Score.0`, `Board.cells[2]`). Where two registered types share
+a short path (Bevy has its own `Label` and `Button`), write the full type path
+(`bevy_ui_widgets::button::Button`); the short one is a load error listing the
+full paths of every candidate. The typed builders (`Check::count::<C>()`,
+`Target::component::<C>()`, ...) write the short path, so for such a type
+build the check from the full path (`Check::count_of(["my_game::Label"])`,
+`Target::Component("my_game::Label".into())`). A value is plain RON read as the
 field's type, so `Eq(Lay)` is the variant `Lay` of whatever enum the field
 holds.
 
