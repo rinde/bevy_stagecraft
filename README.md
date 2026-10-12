@@ -706,6 +706,8 @@ off, **Take over**, **Export RON**, **Save as setup**, **Record**, **New: empty 
 the selected scenario's checks, and its steps (see below). Space plays and pauses, Right steps a frame, Down steps to the next
 step and Left restarts, read from the Scenarios window only.
 
+The window's height is shared between the catalogue and the details panel: half each, unless one needs less than that, when the other gets the rest, and neither gets under a fifth.
+
 ```rust,ignore
 App::new()
     .add_plugins(DefaultPlugins)
