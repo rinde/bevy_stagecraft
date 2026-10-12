@@ -1174,11 +1174,7 @@ fn step_lines(
                 .get(index)
                 .map_or(&Outcome::Skipped, |record| &record.outcome);
             let (mark, _) = outcome_mark(outcome, theme);
-            let words = describe_step(
-                flat.step,
-                steps.get(..index).unwrap_or(&[]),
-                descriptions,
-            );
+            let words = describe_step(flat.step, steps.get(..index).unwrap_or(&[]), descriptions);
             let group: Vec<String> = flat.group.iter().map(|name| (*name).to_owned()).collect();
             (
                 mark,

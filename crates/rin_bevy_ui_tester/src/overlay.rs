@@ -48,7 +48,7 @@ use bevy::{
 use crate::{
     player::{CheckRecord, Outcome, ScenarioReport},
     scenario::{Modifiers, Step, flatten, with_group_path},
-    session::CheckpointTaken,
+    session::{CheckpointTaken, SessionRecorder},
     targets::{NotUnderTest, Target},
 };
 
@@ -476,6 +476,16 @@ pub fn checkpoint_text(taken: &CheckpointTaken) -> String {
         many => format!("{many} checks suggested"),
     };
     format!("Checkpoint {}: {checks}", taken.number)
+}
+
+/// The prompt for a checkpoint's name while it is typed.
+///
+/// It reads such as `Name checkpoint 2 (Enter keeps, Esc skips): raise the br_`.
+/// ASCII only, like the rest of the captions, because the bundled font has no
+/// more.
+#[must_use]
+pub fn naming_text(number: usize, typed: &str) -> String {
+    format!("Name checkpoint {number} (Enter keeps, Esc skips): {typed}_")
 }
 
 /// The camera the overlay draws through, for apps that do not leave it to the
@@ -1020,6 +1030,7 @@ fn show_checkpoint(
     mut taken: MessageReader<CheckpointTaken>,
     mut notice: ResMut<CheckpointNotice>,
     theme: Res<OverlayTheme>,
+    recorder: Option<Res<SessionRecorder>>,
     mut flash: Query<(&mut BackgroundColor, &mut Visibility), With<OverlayCheckpointFlash>>,
     mut line: Query<(&mut Text, &mut TextColor), With<OverlayCheckpointText>>,
 ) {
@@ -1048,10 +1059,17 @@ fn show_checkpoint(
             *visibility = Visibility::Hidden;
         }
     }
-    let caption = notice
-        .shown
-        .as_ref()
-        .map_or("", |(_, caption)| caption.as_str());
+    // The prompt takes the line for as long as it is open.
+    let prompt = recorder.as_deref().and_then(|recorder| {
+        let typed = recorder.naming()?;
+        Some(naming_text(recorder.checkpoints_taken(), typed))
+    });
+    let caption = prompt.as_deref().unwrap_or_else(|| {
+        notice
+            .shown
+            .as_ref()
+            .map_or("", |(_, caption)| caption.as_str())
+    });
     for (mut text, mut colour) in &mut line {
         if text.0 != caption {
             caption.clone_into(&mut text.0);

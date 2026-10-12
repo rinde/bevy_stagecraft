@@ -425,7 +425,8 @@ the same way later in version 3: a `Named(..)` or `File(..)` setup, a view
 given by name (`view: "top_down"`) and a `Custom(resolver: .., argument: ..)`
 target are refused with a load error saying to write `App(..)`. The script's
 `action_timeout` and the `Timeout(..)` and `Force(..)` steps came later in
-version 3 and only add forms. Any other older file is also a newer one.
+version 3 and only add forms, as does `Group(..)` (below). Any other older file
+is also a newer one.
 
 ```ron
 (
@@ -444,6 +445,10 @@ version 3 and only add forms. Any other older file is also a newer one.
         MoveTo(Nth(1, Text("Delete"))),
         Timeout(120, MoveTo(Text("Loaded"))),     // wait longer for this one
         Force(Click(Left)),                        // click without the checks
+        Group(name: "open the menu", steps: [      // named, nestable
+            Click(Left),
+            Group(name: "wait for it", steps: [Wait(5)]),
+        ]),
         Tap(key: KeyP, modifiers: [Ctrl, Shift]),
         Check(App(ActivatedOnce)),               // the app's own checks
         Check(App(Activated(1))),
@@ -485,6 +490,24 @@ let scenario = Scenario::from_ron_with(include_str!("x.ron"), &registry)?
 with `harness = false` calling `run_ron_tests(dir, &registry, run)` turns
 every `.ron` file in a directory into one test named after the file.
 `run_ron_tests_with_variants` plays every file once per variant; see below.
+
+### Named groups of steps
+
+`Group(name: "open the menu", steps: [..])` (`Step::group(name, steps)`)
+gives a run of steps a name, and groups nest. It is only for the person
+reading: the script plays frame for frame as the same steps without the
+groups, and steps are numbered as if they were flat, so `step 4` is the fourth
+step that does something, wherever it sits. The name has to say something
+(an empty or blank one is a load error), and a group may be empty.
+
+Everything that tells you where a step is shows the path of group names in
+front of it, joined with `" > "` (`GROUP_SEPARATOR`; plain ASCII because the
+bundled font draws no `›`): a failure reads `open the menu > wait for it >
+step 4: ...`, and so do load errors, the gallery's step list and step
+captions, the trace and `trace.html`. Each step of a `ScenarioReport` keeps its
+path in `StepRecord::group`. `flatten(steps)` gives the leaf steps with their
+paths for code that walks a script, and `with_group_path(path, text)` puts a
+path in front of a line. A group adds a form to version 3, not a version.
 
 ## Window sizes, scale factors and themes: variants
 
@@ -826,6 +849,24 @@ flash over the window and a caption such as `Checkpoint 2: 3 checks suggested`
 again with the ones you keep at each checkpoint and at the end. In the gallery,
 **Stop recording** lists one checklist per checkpoint and then the end's; the
 wheel scrolls them while the pointer is over them.
+
+#### Naming a checkpoint
+
+A checkpoint can take a name, which turns the steps since the checkpoint
+before (and its own `Check` steps) into a [`Group`](#named-groups-of-steps)
+called that, so a long recording reads as sections. After F8 the overlay's
+caption line becomes a prompt, `Name checkpoint 2 (Enter keeps, Esc skips):
+open the menu_`, and typed text builds the name (at most 60 characters,
+Backspace edits it). Enter keeps it; Escape skips it, leaving the steps
+ungrouped; a mouse press, the next checkpoint or the end of the session keeps
+what has been typed. While the prompt is open every key in the app's window
+goes to it, and its presses and releases never reach the app or the script,
+exactly as with the checkpoint key; keys written in the same update as the
+checkpoint key still pass. An app that needs its keys while recording turns the
+prompt off with `SessionHooks::new().checkpoint_names(false)`, and a
+checkpoint is then named only from code: `session::checkpoint_named(world,
+"open the menu")` takes a checkpoint that opens no prompt. A blank name is no
+name. `SavedSession::save_checks` keeps the groups.
 
 An app whose state lives outside the ECS (rails keeps a Bevy-free `Sim`)
 publishes what matters of it as a reflected facts resource, updated each

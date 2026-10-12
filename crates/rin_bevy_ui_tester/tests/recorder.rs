@@ -390,3 +390,57 @@ fn gpu_a_variant_a_scenario_cannot_run_in_is_recorded_as_a_failed_entry() {
         .expect("the refusal is the setup failure");
     assert!(failure.contains("step 0"), "{failure}");
 }
+
+#[test]
+#[ignore = "needs a GPU: run by `just test-gpu`"]
+fn gpu_the_trace_page_and_the_index_name_the_group_of_each_step() {
+    let dir = output_dir("recorder-groups");
+    let grouped = Scenario::new("grouped click")
+        .window_size(320, 240)
+        .setup(spawn_ui)
+        .steps([
+            Step::group(
+                "press the button",
+                [
+                    Step::move_to(Target::text("Pause")),
+                    Step::group("click it", [Step::click()]),
+                ],
+            ),
+            Step::group(
+                "see the result",
+                [
+                    Step::wait(2),
+                    Step::check(Check::resource::<Activations>(".0").eq(2_u32)),
+                ],
+            ),
+        ]);
+    let recording = Recorder::new(|_app| {})
+        .every(5)
+        .grouped("Buttons", grouped)
+        .record(&dir)
+        .expect("recording works");
+    assert!(recording.any_failed());
+
+    let page =
+        fs::read_to_string(dir.join("grouped-click").join("trace.html")).expect("a trace page");
+    for step in 0..4 {
+        assert!(page.contains(&format!("id=\"step-{step}\"")), "step {step}");
+    }
+    assert!(
+        page.contains("press the button &gt; click it &gt; 2."),
+        "a nested step is titled with its path"
+    );
+    assert!(
+        page.contains("see the result &gt; 4."),
+        "so is a check inside a group"
+    );
+    let index = fs::read_to_string(&recording.index).expect("an index");
+    assert!(
+        index.contains("see the result &gt; step 3"),
+        "the failure names the group: {index}"
+    );
+    assert!(
+        index.contains("grouped-click/trace.html#step-"),
+        "the failed card lists its steps"
+    );
+}

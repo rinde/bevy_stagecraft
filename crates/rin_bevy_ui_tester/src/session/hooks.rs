@@ -73,8 +73,8 @@ impl SessionHooks {
     /// a click or the end of the session keeps what was typed. A checkpoint
     /// with a name groups the steps since the one before (see
     /// [`Step::Group`](crate::Step::Group)). An app whose keys must reach it
-    /// while recording turns this off, and then names nothing from the
-    /// keyboard.
+    /// while recording turns this off; a checkpoint is then named only by
+    /// [`checkpoint_named`](crate::session::checkpoint_named).
     #[must_use]
     pub const fn checkpoint_names(mut self, ask: bool) -> Self {
         self.ask_names = ask;

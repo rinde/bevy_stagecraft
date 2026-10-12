@@ -253,7 +253,7 @@ pub enum Step {
 pub const GROUP_SEPARATOR: &str = " > ";
 
 /// A step that plays, with the names of the groups around it, outermost first.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FlatStep<'a> {
     /// The groups it is in.
     pub group: Vec<&'a str>,

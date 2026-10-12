@@ -806,14 +806,14 @@ impl Running {
                     self.frame(index, Vec::new());
                 }
             }
-            // Keys were handled above; `unwrapped` took the wrappers off.
+            // Keys were handled above; `unwrapped` took the wrappers off, and
+            // the groups were flattened away when the run began.
             Step::Key { .. }
             | Step::KeyUp { .. }
             | Step::Tap { .. }
             | Step::Timeout(..)
-            | Step::Force(_) => {}
-            // Flattened away when the run began; nothing to play.
-            Step::Group { .. } => {}
+            | Step::Force(_)
+            | Step::Group { .. } => {}
             Step::Check(check) => self.ops.push_back(Op::Check {
                 step: index,
                 check,

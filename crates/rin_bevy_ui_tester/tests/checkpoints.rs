@@ -25,10 +25,10 @@ use bevy::{
 };
 use rin_bevy_ui_tester::{
     Check, CheckKind, CursorOverlayPlugin, HeadlessPlugins, Registry, SavedSession, Scenario,
-    ScenarioReport, Script, SessionHooks, SessionPlugin, Step,
+    ScenarioReport, Script, SessionHooks, SessionPlugin, Step, flatten,
     overlay::{
         CHECKPOINT_CAPTION_FRAMES, CHECKPOINT_FLASH_FRAMES, OverlayCaptionStrip,
-        OverlayCheckpointFlash, OverlayCheckpointText,
+        OverlayCheckpointFlash, OverlayCheckpointText, naming_text,
     },
     session,
 };
@@ -510,7 +510,7 @@ fn a_checkpoint_taken_from_code_lands_where_the_key_would() {
 #[test]
 fn the_overlay_flashes_and_names_a_checkpoint_then_fades() {
     let dir = dir("checkpoints-overlay");
-    let mut app = recording_app(&dir, SessionHooks::new(), true);
+    let mut app = recording_app(&dir, SessionHooks::new().checkpoint_names(false), true);
     session::start(app.world_mut(), "overlay").expect("recording starts");
     let centre = button_centre(&mut app);
     real_move(&mut app, centre);
@@ -554,4 +554,327 @@ fn the_overlay_flashes_and_names_a_checkpoint_then_fades() {
     }
     assert!(caption(&mut app).is_empty(), "and then goes");
     assert!(!strip_shown(&mut app));
+}
+
+/// What `bevy_winit` writes for a key that types `text`, without updating.
+fn write_typed(app: &mut App, key_code: KeyCode, text: &str, state: ButtonState) {
+    let window = primary(app);
+    let input = KeyboardInput {
+        key_code,
+        logical_key: Key::Character(text.into()),
+        state,
+        text: (state == ButtonState::Pressed).then(|| text.into()),
+        repeat: false,
+        window,
+    };
+    app.world_mut()
+        .write_message(WindowEvent::from(input.clone()));
+    app.world_mut().write_message(input);
+}
+
+/// Types `text` letter by letter, one update for each press and release.
+fn type_text(app: &mut App, text: &str) {
+    for letter in text.chars() {
+        let letter = letter.to_string();
+        for state in [ButtonState::Pressed, ButtonState::Released] {
+            write_typed(app, KeyCode::KeyN, &letter, state);
+            app.update();
+        }
+    }
+}
+
+/// The steps of the first top-level group called `name`.
+fn group_steps<'a>(steps: &'a [Step], name: &str) -> Option<&'a [Step]> {
+    steps.iter().find_map(|step| match step {
+        Step::Group { name: found, steps } if found == name => Some(steps.as_slice()),
+        _ => None,
+    })
+}
+
+/// Records a click on "+1" and a checkpoint after it, then types `typed`
+/// (keeping it with Enter when `finish` is that key), another click, and the
+/// stop. Returns what was saved and the app.
+fn record_named_checkpoint(
+    name: &str,
+    typed: &str,
+    finish: Option<KeyCode>,
+) -> (SavedSession, App) {
+    let dir = dir(name);
+    let mut app = recording_app(&dir, SessionHooks::new(), false);
+    session::start(app.world_mut(), "named").expect("recording starts");
+    let centre = button_centre(&mut app);
+    real_move(&mut app, centre);
+    real_move(&mut app, centre);
+    click_and_settle(&mut app);
+    real_tap(&mut app, KeyCode::F8, &Key::F8);
+    type_text(&mut app, typed);
+    if let Some(key) = finish {
+        real_tap(&mut app, key, &Key::Enter);
+    }
+    app.update();
+    click_and_settle(&mut app);
+    let saved = session::stop(app.world_mut()).expect("the session is saved");
+    (saved, app)
+}
+
+#[test]
+fn a_named_checkpoint_groups_the_steps_since_the_one_before_with_its_checks() {
+    let (saved, _) = record_named_checkpoint("checkpoints-named", "first", Some(KeyCode::Enter));
+    let steps = &saved.script.steps;
+    let group = group_steps(steps, "first").unwrap_or_else(|| unreachable!("{steps:#?}"));
+    assert!(group.contains(&Step::click()), "{steps:#?}");
+    assert!(
+        group.contains(&Step::check(Check::resource::<Counter>(".0").eq(1_u32))),
+        "the checkpoint's own checks are in it: {steps:#?}"
+    );
+    assert!(
+        matches!(steps.first(), Some(Step::Group { .. })),
+        "everything before the checkpoint is in it: {steps:#?}"
+    );
+    let after: Vec<&Step> = steps.iter().skip(1).collect();
+    assert!(
+        after.contains(&&Step::click()),
+        "the click after it is no part of it: {steps:#?}"
+    );
+    assert!(
+        after.iter().all(|step| !matches!(step, Step::Group { .. })),
+        "{steps:#?}"
+    );
+}
+
+#[test]
+fn a_named_checkpoint_plays_back_and_its_failures_show_the_group() {
+    let (saved, _) =
+        record_named_checkpoint("checkpoints-named-play", "first", Some(KeyCode::Enter));
+    let report = play(&saved.path);
+    assert!(report.passed(), "{:#?}", report.failures());
+    assert!(
+        report
+            .steps
+            .iter()
+            .any(|step| step.group == ["first"] && step.step == Step::click()),
+        "{:#?}",
+        report.steps
+    );
+    assert!(
+        report.steps.iter().any(|step| step.group.is_empty()),
+        "the steps after it are in no group"
+    );
+
+    // A checkpoint's check that does not hold names the group it is in.
+    let mut script = saved.script;
+    if let Some(Step::Group { steps, .. }) = script.steps.first_mut() {
+        steps.push(Step::check(Check::shows("Count: 99")));
+    }
+    let scenario = Scenario::from_script(script, &Registry::default())
+        .expect("it loads")
+        .setup(spawn_ui);
+    let mut app = bare_app();
+    app.finish();
+    app.cleanup();
+    let report = scenario.run_in(&mut app);
+    assert!(
+        report
+            .failures()
+            .iter()
+            .any(|line| line.starts_with("first > step ")),
+        "{:#?}",
+        report.failures()
+    );
+}
+
+#[test]
+fn escape_skips_the_name_and_the_steps_stay_ungrouped() {
+    let (saved, _) =
+        record_named_checkpoint("checkpoints-skipped", "ignored", Some(KeyCode::Escape));
+    assert!(
+        !saved
+            .script
+            .steps
+            .iter()
+            .any(|step| matches!(step, Step::Group { .. })),
+        "{:#?}",
+        saved.script.steps
+    );
+    assert!(
+        saved
+            .script
+            .steps
+            .contains(&Step::check(Check::resource::<Counter>(".0").eq(1_u32))),
+        "the checkpoint's checks are still there"
+    );
+}
+
+#[test]
+fn a_click_keeps_the_name_typed_so_far() {
+    let (saved, _) = record_named_checkpoint("checkpoints-click-names", "typed", None);
+    let steps = &saved.script.steps;
+    assert!(group_steps(steps, "typed").is_some(), "{steps:#?}");
+}
+
+#[test]
+fn stopping_keeps_the_name_typed_so_far() {
+    let dir = dir("checkpoints-stop-names");
+    let mut app = recording_app(&dir, SessionHooks::new(), false);
+    session::start(app.world_mut(), "stop").expect("recording starts");
+    let centre = button_centre(&mut app);
+    real_move(&mut app, centre);
+    click_and_settle(&mut app);
+    real_tap(&mut app, KeyCode::F8, &Key::F8);
+    type_text(&mut app, "the end");
+    let saved = session::stop(app.world_mut()).expect("saved");
+    assert!(
+        group_steps(&saved.script.steps, "the end").is_some(),
+        "{:#?}",
+        saved.script.steps
+    );
+}
+
+#[test]
+fn backspace_edits_the_name_and_blanks_are_no_name() {
+    let dir = dir("checkpoints-backspace");
+    let mut app = recording_app(&dir, SessionHooks::new(), false);
+    session::start(app.world_mut(), "backspace").expect("recording starts");
+    let centre = button_centre(&mut app);
+    real_move(&mut app, centre);
+    click_and_settle(&mut app);
+    real_tap(&mut app, KeyCode::F8, &Key::F8);
+    type_text(&mut app, "abx");
+    real_tap(&mut app, KeyCode::Backspace, &Key::Backspace);
+    type_text(&mut app, "c");
+    real_tap(&mut app, KeyCode::Enter, &Key::Enter);
+    click_and_settle(&mut app);
+    real_tap(&mut app, KeyCode::F8, &Key::F8);
+    type_text(&mut app, "  ");
+    real_tap(&mut app, KeyCode::Enter, &Key::Enter);
+    let saved = session::stop(app.world_mut()).expect("saved");
+    let steps = &saved.script.steps;
+    assert!(group_steps(steps, "abc").is_some(), "{steps:#?}");
+    assert_eq!(
+        steps
+            .iter()
+            .filter(|step| matches!(step, Step::Group { .. }))
+            .count(),
+        1,
+        "a blank name is no group: {steps:#?}"
+    );
+}
+
+#[test]
+fn keys_typed_into_the_name_never_reach_the_app_but_later_ones_do() {
+    let dir = dir("checkpoints-typed-keys");
+    let mut app = recording_app(&dir, SessionHooks::new(), false);
+    session::start(app.world_mut(), "keys").expect("recording starts");
+    real_tap(&mut app, KeyCode::F8, &Key::F8);
+    type_text(&mut app, "name");
+    real_tap(&mut app, KeyCode::Enter, &Key::Enter);
+    app.update();
+    {
+        let seen = app.world().resource::<SeenKeys>();
+        assert!(seen.messages.is_empty(), "{seen:?}");
+        assert!(seen.window_events.is_empty(), "{seen:?}");
+        assert!(seen.just_pressed.is_empty(), "{seen:?}");
+    }
+    real_tap(&mut app, KeyCode::KeyA, &Key::Character("a".into()));
+    app.update();
+    let seen = app.world().resource::<SeenKeys>();
+    assert_eq!(seen.messages, [KeyCode::KeyA], "{seen:?}");
+    assert_eq!(seen.just_pressed, [KeyCode::KeyA], "{seen:?}");
+    let saved = session::stop(app.world_mut()).expect("saved");
+    let keys: Vec<&Step> = flatten(&saved.script.steps)
+        .into_iter()
+        .map(|flat| flat.step)
+        .filter(|step| !matches!(step, Step::Wait(_)))
+        .collect();
+    assert_eq!(
+        keys,
+        [&Step::tap(KeyCode::KeyA)],
+        "only the key the app saw is recorded: {:#?}",
+        saved.script.steps
+    );
+}
+
+#[test]
+fn a_session_that_does_not_ask_for_names_leaves_every_key_to_the_app() {
+    let dir = dir("checkpoints-no-names");
+    let hooks = SessionHooks::new().checkpoint_names(false);
+    assert!(!hooks.asks_names());
+    let mut app = recording_app(&dir, hooks, false);
+    session::start(app.world_mut(), "no names").expect("recording starts");
+    real_tap(&mut app, KeyCode::F8, &Key::F8);
+    type_text(&mut app, "n");
+    real_tap(&mut app, KeyCode::Enter, &Key::Enter);
+    let seen = app.world().resource::<SeenKeys>();
+    assert_eq!(seen.messages, [KeyCode::KeyN, KeyCode::Enter], "{seen:?}");
+    let saved = session::stop(app.world_mut()).expect("saved");
+    assert_eq!(saved.checkpoints.len(), 1);
+}
+
+#[test]
+fn a_checkpoint_named_from_code_opens_no_prompt_and_groups_the_steps() {
+    let dir = dir("checkpoints-named-code");
+    let mut app = recording_app(&dir, SessionHooks::new(), false);
+    assert!(
+        session::checkpoint_named(app.world_mut(), "x").is_err(),
+        "not recording"
+    );
+    session::start(app.world_mut(), "named code").expect("recording starts");
+    let centre = button_centre(&mut app);
+    real_move(&mut app, centre);
+    click_and_settle(&mut app);
+    let taken = session::checkpoint_named(app.world_mut(), "one click").expect("taken");
+    assert_eq!(taken.number, 1);
+    real_tap(&mut app, KeyCode::KeyA, &Key::Character("a".into()));
+    app.update();
+    let seen = app.world().resource::<SeenKeys>();
+    assert_eq!(seen.messages, [KeyCode::KeyA], "{seen:?}");
+    let saved = session::stop(app.world_mut()).expect("saved");
+    let steps = &saved.script.steps;
+    let group = group_steps(steps, "one click").unwrap_or_else(|| unreachable!("{steps:#?}"));
+    assert!(group.contains(&Step::click()), "{steps:#?}");
+    assert!(steps.contains(&Step::tap(KeyCode::KeyA)), "{steps:#?}");
+    let report = play(&saved.path);
+    assert!(report.passed(), "{:#?}", report.failures());
+}
+
+#[test]
+fn saving_the_checks_again_keeps_the_groups() {
+    let (mut saved, _) =
+        record_named_checkpoint("checkpoints-named-save", "first", Some(KeyCode::Enter));
+    saved
+        .save_checks(&[Vec::new()], Vec::new())
+        .expect("written again");
+    let text = fs::read_to_string(&saved.path).expect("the file");
+    let script = Script::from_ron(&text).expect("it reads back");
+    let group = group_steps(&script.steps, "first").unwrap_or_else(|| unreachable!("{text}"));
+    assert!(group.contains(&Step::click()), "{text}");
+    assert!(
+        group.iter().all(|step| !matches!(step, Step::Check(_))),
+        "the unticked checks are gone from inside it: {text}"
+    );
+    let report = play(&saved.path);
+    assert!(report.passed(), "{:#?}", report.failures());
+}
+
+#[test]
+fn the_overlay_shows_the_name_as_it_is_typed_then_the_checkpoint_again() {
+    let dir = dir("checkpoints-overlay-naming");
+    let mut app = recording_app(&dir, SessionHooks::new(), true);
+    session::start(app.world_mut(), "overlay").expect("recording starts");
+    let caption = |app: &mut App| {
+        let world = app.world_mut();
+        let mut line = world.query_filtered::<&Text, With<OverlayCheckpointText>>();
+        line.single(world).expect("one line").0.clone()
+    };
+    real_tap(&mut app, KeyCode::F8, &Key::F8);
+    assert_eq!(caption(&mut app), naming_text(1, ""));
+    type_text(&mut app, "ab");
+    assert_eq!(caption(&mut app), naming_text(1, "ab"));
+    assert!(
+        naming_text(1, "ab").is_ascii(),
+        "the bundled font has no more"
+    );
+    real_tap(&mut app, KeyCode::Enter, &Key::Enter);
+    let text = caption(&mut app);
+    assert!(text.starts_with("Checkpoint 1: "), "{text}");
 }
