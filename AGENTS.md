@@ -23,7 +23,7 @@ Issues labelled `ready-for-agent` can be run by agents end to end with
 
 ## Always work with PRs
 
-Work on a branch named `issue-<n>-<short-slug>`, branched from an up-to-date
+Work on a branch named `TESTER-<n>/<short-slug>`, branched from an up-to-date
 `main`. Before stopping, create the PR (body says `Closes #<n>`) and check
 whether it needs a rebase. Never merge it yourself: only the coordinator
 merges, and only what [Agents](#agents) allows.
@@ -40,7 +40,7 @@ The same set-up runs on `rinde/rin-bevy-ui`.
 | Agent | Model | Does |
 | --- | --- | --- |
 | `coordinator` | Sonnet | Decides what is ready, dispatches implementers and reviewers, checks on GitHub that each did its job, merges. Writes no code. |
-| `implementer-sonnet`, `implementer-opus` | Sonnet, Opus | Implements one issue in a worktree under `.claude/worktrees/` on a branch `issue-<number>-<slug>`, opens a pull request that `Closes #N`, and follows it up on review, red CI or a merge conflict. Runs the `implement-issue` skill. |
+| `implementer-sonnet`, `implementer-opus` | Sonnet, Opus | Implements one issue in a worktree under `.claude/worktrees/` on a branch `TESTER-<number>/<slug>`, opens a pull request that `Closes #N`, and follows it up on review, red CI or a merge conflict. Runs the `implement-issue` skill. |
 | `reviewer-sonnet`, `reviewer-opus` | Sonnet, Opus | Reviews one pull request in a worktree of its own, makes sure CI passed on its head, and posts one review that approves or requests changes, with inline comments. Runs the `review-pr` skill. |
 
 The variants differ only in their model; the instructions are the skills, which
@@ -79,9 +79,9 @@ coordinator stops, comments and takes `ready-for-agent` off the issue.
 
 | How | What |
 | --- | --- |
-| `/coordinate` | Passes until nothing is left to do, then a report. |
+| `/coordinate` | Passes until nothing is left to do, then a report. One implementer at a time in a cloud session (`CLAUDE_CODE_REMOTE=true`), two on a local machine. |
 | `/coordinate #82 #86` | Only those issues and their pull requests. |
-| `/coordinate max 5` | Five implementers at once instead of three. |
+| `/coordinate max 5` | Five implementers at once instead of the default. |
 | `/coordinate dry-run` | Report what it would do and change nothing. |
 | `/loop 30m /coordinate` | Keep coordinating every half hour. |
 | `claude --agent coordinator` | The coordinator as the session's main agent. |
@@ -180,7 +180,7 @@ pinned toolchain (with `rustfmt` and `clippy`), `just`, `cargo-machete` and
 libraries, and warms the build cache in the background. It is idempotent and
 does nothing outside cloud sessions. Run it by hand with
 `.claude/hooks/session-start.sh --force` (this also waits for the cache warm-up).
-`.claude/settings.json` also sets the auto-compact window to 100k tokens for
+`.claude/settings.json` also sets the auto-compact window to 200k tokens for
 Sonnet 5.5 and Opus 5.5 (`modelSettings.<model>.autoCompactWindow`).
 
 ## Code practices

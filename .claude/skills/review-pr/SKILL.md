@@ -33,7 +33,7 @@ friends may fail where `gh api repos/...` works.
   worktree is clean and `HEAD` is `head.sha`. Never switch the branch of the
   main checkout or of another agent's worktree.
 - The issue it closes: the `Closes #N` / `Fixes #N` in the body, else the
-  `issue-<N>-` prefix of the branch. Read it with
+  `TESTER-<N>/` prefix of the branch. Read it with
   `gh api repos/rinde/rin-bevy-ui-tester/issues/<N>`, its comments with
   `.../issues/<N>/comments`, and note its labels. With no issue, review the
   pull request on its own description.
