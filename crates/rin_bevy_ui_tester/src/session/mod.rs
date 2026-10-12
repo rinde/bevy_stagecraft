@@ -879,6 +879,8 @@ impl SessionRecorder {
             name: active.name,
             window_size: active.window_size,
             action_timeout: None,
+            // The display's own scale factor is not the scenario's to fix.
+            scale_factor: None,
             setup: active.setup,
             view: active.view,
             steps: with_checks(&logged.steps, &logged.checkpoints, &active.checkpoints),

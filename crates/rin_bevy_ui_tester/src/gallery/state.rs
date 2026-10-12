@@ -111,6 +111,11 @@ impl TraceWorld {
 pub enum GalleryAction {
     /// Reset the app and play the entry with this index.
     Select(usize),
+    /// Play in the variant with this index among the gallery's (see
+    /// [`crate::Gallery::variants`]): the window size, scale factor and app
+    /// setup or view it sets. With an entry selected it is played again in
+    /// the new variant.
+    SelectVariant(usize),
     /// Reset the app, play the selected entry up to the start of the step with
     /// this index (counting from 0) and pause there, with the app as it is at
     /// that point, for looking at it. Nothing is stored: runs are
@@ -507,8 +512,15 @@ pub struct GalleryState {
     pub(crate) jump: Option<usize>,
     /// Requests not yet carried out, oldest first.
     pub(crate) pending: Vec<GalleryAction>,
-    /// Whether each entry passed the last time it finished.
-    pub(crate) results: BTreeMap<usize, bool>,
+    /// The variant entries are played in, an index among the gallery's.
+    pub(crate) variant: usize,
+    /// The primary window as the app had it before the gallery first changed
+    /// it: logical width, height and scale factor override. Variants and
+    /// scenarios that set nothing get it back.
+    pub(crate) original_window: Option<(f32, f32, Option<f32>)>,
+    /// Whether each entry passed the last time it finished, per variant: the
+    /// entry's index and the variant's.
+    pub(crate) results: BTreeMap<(usize, usize), bool>,
     /// Where exports go.
     pub(crate) export_dir: PathBuf,
     /// The last thing worth telling the person, such as where an export went.
@@ -560,6 +572,8 @@ impl GalleryState {
             step: None,
             jump: None,
             pending: Vec::new(),
+            variant: 0,
+            original_window: None,
             results: BTreeMap::new(),
             export_dir,
             status: String::new(),
@@ -644,11 +658,24 @@ impl GalleryState {
         self.looping
     }
 
-    /// Whether entry `index` passed the last time it finished; `None` if it
-    /// has not finished yet.
+    /// The variant entries are played in: an index among the gallery's.
+    #[must_use]
+    pub const fn variant(&self) -> usize {
+        self.variant
+    }
+
+    /// Whether entry `index` passed the last time it finished in the variant
+    /// chosen now; `None` if it has not finished there yet.
     #[must_use]
     pub fn result(&self, index: usize) -> Option<bool> {
-        self.results.get(&index).copied()
+        self.result_in(index, self.variant)
+    }
+
+    /// Whether entry `index` passed the last time it finished in variant
+    /// `variant`; `None` if it has not finished there yet.
+    #[must_use]
+    pub fn result_in(&self, index: usize, variant: usize) -> Option<bool> {
+        self.results.get(&(index, variant)).copied()
     }
 
     /// The last message for the person, such as where an export went.

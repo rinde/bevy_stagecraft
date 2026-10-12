@@ -25,7 +25,10 @@ use crate::{
     check::{Check, suggest::NoiseFilter},
     input::SyntheticInput,
     player::{ScenarioPlayer, ScenarioReport, advance_world},
+    scenario::Scenario,
+    script::check_scale_factor,
     session::{self, DEFAULT_CHECKPOINT_KEY, SessionConfig, SessionRecorder},
+    variant::Variant,
 };
 
 /// What a scenario recorded in the gallery is called until the person renames
@@ -58,6 +61,51 @@ fn release_held(world: &mut World) {
     }
 }
 
+/// The variant the gallery plays in now; the default one (as written) when
+/// the catalogue lists none.
+fn chosen_variant(world: &World, state: &GalleryState) -> Variant {
+    world
+        .get_resource::<Gallery>()
+        .and_then(|gallery| gallery.variant(state.variant))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Puts the primary window at the size and scale factor the scenario runs in,
+/// and back to what the app had where it sets none. The first call remembers
+/// what the app had.
+fn fit_window(world: &mut World, state: &mut GalleryState, scenario: &Scenario) {
+    let scale = scenario
+        .scale()
+        .filter(|scale| check_scale_factor(*scale).is_ok());
+    for mut window in world
+        .query_filtered::<&mut Window, bevy::ecs::query::With<PrimaryWindow>>()
+        .iter_mut(world)
+    {
+        let resolution = &mut window.resolution;
+        let (original_width, original_height, original_scale) =
+            *state.original_window.get_or_insert_with(|| {
+                (
+                    resolution.width(),
+                    resolution.height(),
+                    resolution.scale_factor_override(),
+                )
+            });
+        let (width, height) = scenario
+            .window()
+            .map_or((original_width, original_height), |(width, height)| {
+                (pixels(width), pixels(height))
+            });
+        let scale = scale.or(original_scale);
+        if resolution.scale_factor_override() != scale {
+            resolution.set_scale_factor_override(scale);
+        }
+        if (resolution.width(), resolution.height()) != (width, height) {
+            resolution.set(width, height);
+        }
+    }
+}
+
 /// Resets the app, sets the entry up and arranges for it to play.
 fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     let Some(entry) = world
@@ -68,6 +116,9 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         bevy::log::warn!("the gallery has no entry {index}");
         return;
     };
+    let variant = chosen_variant(world, state);
+    let refused = variant.problem(&entry.scenario);
+    let scenario = variant.varied(&entry.scenario);
     release_held(world);
     if let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>() {
         player.stop();
@@ -81,21 +132,19 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     if let Some(mut input) = world.get_resource_mut::<SyntheticInput>() {
         input.forget_cursor();
     }
-    if let Some((width, height)) = entry.scenario.window() {
-        for mut window in world
-            .query_filtered::<&mut Window, bevy::ecs::query::With<PrimaryWindow>>()
-            .iter_mut(world)
-        {
-            window.resolution.set(pixels(width), pixels(height));
-        }
-    }
-    let setup = entry.scenario.run_setup(world);
+    fit_window(world, state, &scenario);
+    // A variant the scenario cannot run in is a failed setup, as in the
+    // recorder: the run is over at once and says why.
+    let setup = refused.map_or_else(
+        || scenario.run_setup(world),
+        |problem| Err(problem.to_string()),
+    );
     let view = match &setup {
-        Ok(_) => entry.scenario.run_view(world),
+        Ok(_) => scenario.run_view(world),
         Err(_) => Ok(false),
     };
     world.insert_resource(ScenarioReport {
-        name: entry.scenario.name().into(),
+        name: scenario.name().into(),
         ..ScenarioReport::default()
     });
     state.selected = Some(index);
@@ -111,6 +160,23 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         (Ok(_), Ok(_)) => String::new(),
     };
     state.setup = setup;
+}
+
+/// Chooses the variant entries are played in and, with an entry selected,
+/// plays it again in that one. An index the catalogue has no variant at
+/// changes nothing.
+fn select_variant(world: &mut World, state: &mut GalleryState, variant: usize) {
+    let count = world
+        .get_resource::<Gallery>()
+        .map_or(1, Gallery::variant_count);
+    if variant >= count {
+        warn!("the gallery has no variant {variant}");
+        return;
+    }
+    state.variant = variant;
+    if let Some(index) = state.selected {
+        select(world, state, index);
+    }
 }
 
 /// Restarts the selected entry and plays it up to the start of step `step`,
@@ -401,13 +467,17 @@ fn apply_pick(world: &mut World, state: &mut GalleryState, action: GalleryAction
 fn forget_for(state: &mut GalleryState, action: GalleryAction) {
     // A jump replays the same run, so the trace stays; a new selection or a
     // restart starts over.
-    if matches!(action, GalleryAction::Select(_) | GalleryAction::Restart) {
+    if matches!(
+        action,
+        GalleryAction::Select(_) | GalleryAction::SelectVariant(_) | GalleryAction::Restart
+    ) {
         state.trace = None;
         state.trace_step = None;
     }
     if matches!(
         action,
         GalleryAction::Select(_)
+            | GalleryAction::SelectVariant(_)
             | GalleryAction::JumpTo(_)
             | GalleryAction::Restart
             | GalleryAction::Record
@@ -419,6 +489,7 @@ fn forget_for(state: &mut GalleryState, action: GalleryAction) {
     if matches!(
         action,
         GalleryAction::Select(_)
+            | GalleryAction::SelectVariant(_)
             | GalleryAction::JumpTo(_)
             | GalleryAction::Restart
             | GalleryAction::TogglePlay
@@ -442,6 +513,7 @@ const fn spoils_a_recording(action: GalleryAction) -> bool {
     matches!(
         action,
         GalleryAction::Select(_)
+            | GalleryAction::SelectVariant(_)
             | GalleryAction::JumpTo(_)
             | GalleryAction::Restart
             | GalleryAction::TogglePlay
@@ -512,6 +584,7 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         GalleryAction::InspectStep(step) => state.trace_step = Some(step),
         GalleryAction::ShowTraceWorld(shown) => state.trace_world = shown,
         GalleryAction::Select(index) => select(world, state, index),
+        GalleryAction::SelectVariant(variant) => select_variant(world, state, variant),
         GalleryAction::JumpTo(step) => jump_to(world, state, step),
         GalleryAction::Restart => {
             if let Some(index) = state.selected {
@@ -624,10 +697,11 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
                 state.phase = GalleryPhase::Settling(left - 1);
                 return;
             }
+            let variant = chosen_variant(world, state);
             let scenario = state
                 .selected
                 .and_then(|index| world.get_resource::<Gallery>()?.get(index))
-                .map(|entry| entry.scenario.clone());
+                .map(|entry| variant.varied(&entry.scenario));
             if let (Some(scenario), Some(mut player)) =
                 (scenario, world.get_resource_mut::<ScenarioPlayer>())
             {
@@ -705,7 +779,7 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
             .get_resource::<ScenarioReport>()
             .is_some_and(ScenarioReport::passed);
         if let Some(index) = state.selected {
-            state.results.insert(index, passed);
+            state.results.insert((index, state.variant), passed);
         }
         state.step = None;
         state.jump = None;
@@ -766,11 +840,17 @@ fn run_next(world: &mut World, state: &mut GalleryState) {
     let Some(next) = state.run_all.as_ref().map(|run| run.outcomes.len()) else {
         return;
     };
+    // Every entry in every variant, entry by entry.
+    let variants = world
+        .get_resource::<Gallery>()
+        .map_or(1, Gallery::variant_count);
+    let (entry, variant) = (next / variants, next % variants);
     if world
         .get_resource::<Gallery>()
-        .is_some_and(|gallery| gallery.get(next).is_some())
+        .is_some_and(|gallery| gallery.get(entry).is_some())
     {
-        select(world, state, next);
+        state.variant = variant;
+        select(world, state, entry);
         return;
     }
     let report = state.run_all.take().unwrap_or_default();

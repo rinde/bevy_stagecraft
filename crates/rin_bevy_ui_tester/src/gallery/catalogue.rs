@@ -2,7 +2,7 @@
 
 use bevy::ecs::resource::Resource;
 
-use crate::scenario::Scenario;
+use crate::{scenario::Scenario, variant::Variant};
 
 /// One scenario in the catalogue, with the sentence shown beside it.
 #[derive(Debug, Clone)]
@@ -53,13 +53,19 @@ pub struct GalleryGroup {
 pub struct Gallery {
     /// The groups in the order shown.
     groups: Vec<GalleryGroup>,
+    /// The environments an entry can be played in, one chosen at a time. Empty
+    /// means only as written.
+    variants: Vec<Variant>,
 }
 
 impl Gallery {
     /// An empty catalogue.
     #[must_use]
     pub const fn new() -> Self {
-        Self { groups: Vec::new() }
+        Self {
+            groups: Vec::new(),
+            variants: Vec::new(),
+        }
     }
 
     /// Adds a group.
@@ -74,6 +80,36 @@ impl Gallery {
             entries: entries.into_iter().map(Into::into).collect(),
         });
         self
+    }
+
+    /// Offers every entry in these environments (window size, scale factor,
+    /// theme), with a picker to choose one; a run of the whole catalogue plays
+    /// every entry in each. The first is chosen to begin with. List
+    /// [`Variant::default`] to keep the entries as written among them.
+    #[must_use]
+    pub fn variants(mut self, variants: impl IntoIterator<Item = Variant>) -> Self {
+        self.variants = variants.into_iter().collect();
+        self
+    }
+
+    /// The variant at `index`, if the catalogue lists variants and has one
+    /// there. Without any, entries are played as written.
+    #[must_use]
+    pub fn variant(&self, index: usize) -> Option<&Variant> {
+        self.variants.get(index)
+    }
+
+    /// The variants offered, in order.
+    #[must_use]
+    pub fn variant_list(&self) -> &[Variant] {
+        &self.variants
+    }
+
+    /// How many ways there are to play an entry: the variants listed, or one
+    /// (as written) when there are none.
+    #[must_use]
+    pub fn variant_count(&self) -> usize {
+        self.variants.len().max(1)
     }
 
     /// The groups, in order.

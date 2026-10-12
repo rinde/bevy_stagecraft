@@ -481,6 +481,52 @@ let scenario = Scenario::from_ron_with(include_str!("x.ron"), &registry)?
 `scenario.to_ron()` / `export_ron(&script)` write pretty RON. A test target
 with `harness = false` calling `run_ron_tests(dir, &registry, run)` turns
 every `.ron` file in a directory into one test named after the file.
+`run_ron_tests_with_variants` plays every file once per variant; see below.
+
+## Window sizes, scale factors and themes: variants
+
+A layout that works at 1280x720 may break at 640x480, on a high-density display
+or in the dark theme. Rather than copy every scenario, list **variants** in the
+runner (what Playwright calls projects) and each scenario is played once per
+variant. A `Variant` has a name and any of a window size (logical pixels), a
+scale factor (physical pixels per logical pixel; the window keeps its logical
+size, so the layout is the same as at 1.0 and the pictures have that many times
+the pixels) and the app's own setup or view (a value of its `#[reflect(AppSetup)]`
+or `#[reflect(AppView)]` enum, for example to switch the theme).
+
+```rust,ignore
+let variants = [
+    Variant::new("wide").window_size(1280, 720),
+    Variant::new("narrow").window_size(640, 480),
+    Variant::new("retina").window_size(1280, 720).scale_factor(2.0),
+    Variant::new("dark").app_setup(MySetup::Dark),
+];
+```
+
+* `run_ron_tests_with_variants(dir, &registry, &variants, run)` makes one test
+  per file and variant, named `file [variant]`, so `cargo test narrow` plays the
+  narrow variant of every file. (`run_ron_variants` is the same without the
+  `main`.)
+* `Recorder::variants(variants)` writes one index entry per scenario and
+  variant, named `scenario [variant]`, each with its own pictures and trace.
+* `Gallery::variants(variants)` adds a **Variant** row of buttons to the
+  Scenarios window. Picking one runs the selected scenario in that variant, and
+  a run-all plays every entry in every variant.
+* By hand, `variant.apply(&scenario)` returns the scenario as that variant runs
+  it (named `scenario [variant]`), and `Scenario::scale_factor` and the script's
+  `scale_factor: Some(2.0)` set the scale factor of a scenario itself.
+
+The list is exactly what runs: a runner given variants plays only those, so put
+`Variant::default()` in the list to play the scenario as written too (its name
+has no brackets). A variant replaces the scenario's own window size, scale
+factor, app setup or app view where it sets one; a scenario's setup and view
+closures still run afterwards.
+
+A step aimed at a fixed screen position (`Screen(..)`) only makes sense in the
+default variant, where nothing changes. In any other variant it is an error
+naming the step (`step 3 aims at a fixed screen position ...`): in the test it
+is a failed test, in the recorder and the gallery a failed setup. Aim at the
+widget instead (`Text`, `Role`, `Component`, `Name`).
 
 ## Seeing what the script does
 

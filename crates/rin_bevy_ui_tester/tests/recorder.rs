@@ -17,6 +17,7 @@ use bevy::{camera::RenderTarget, prelude::*};
 use common::{Activations, spawn_ui};
 use rin_bevy_ui_tester::{
     CaptureMeta, Captures, Check, Frame, Recorder, RecorderPlugins, Scenario, Step, Target,
+    Variant,
     overlay::{OverlayTheme, PickHighlight},
     recorder::request_capture,
 };
@@ -172,7 +173,7 @@ fn gpu_a_failed_scenario_gets_a_trace_page_with_snapshots_and_pictures_per_step(
         assert!(page.contains(&format!("id=\"step-{step}\"")), "step {step}");
     }
     assert!(
-        page.contains("activated 1 times, wanted 2"),
+        page.contains("`Activations.0` is 1, expected 2"),
         "the failure is shown"
     );
     assert!(
@@ -285,4 +286,107 @@ fn gpu_the_pick_outlines_are_drawn_just_outside_the_node_in_a_recorded_frame() {
             || pixel(110, 35).iter().take(3).all(|channel| *channel > 200),
         "the button itself is not covered"
     );
+}
+
+/// The width and height in a PNG's header.
+fn png_size(path: &std::path::Path) -> (u32, u32) {
+    let bytes = fs::read(path).expect("a picture");
+    let number = |at: usize| {
+        let word: [u8; 4] = bytes
+            .get(at..at + 4)
+            .and_then(|slice| slice.try_into().ok())
+            .expect("a PNG header");
+        u32::from_be_bytes(word)
+    };
+    (number(16), number(20))
+}
+
+#[test]
+#[ignore = "needs a GPU: run by `just test-gpu`"]
+fn gpu_recording_variants_writes_one_entry_per_scenario_and_variant() {
+    let dir = output_dir("recorder-variants");
+    let recording = Recorder::new(|_app| {})
+        .every(5)
+        .variants([
+            Variant::default(),
+            Variant::new("retina").scale_factor(2.0),
+            Variant::new("small").window_size(240, 180),
+        ])
+        .grouped("Buttons", click_pause("click the pause button", false))
+        .record(&dir)
+        .expect("recording works");
+
+    let names: Vec<_> = recording
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "click the pause button",
+            "click the pause button [retina]",
+            "click the pause button [small]"
+        ]
+    );
+    let slugs: std::collections::BTreeSet<_> = recording
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.slug.clone())
+        .collect();
+    assert_eq!(slugs.len(), 3, "each entry has a folder of its own");
+    let sizes: Vec<_> = recording
+        .scenarios
+        .iter()
+        .map(|scenario| png_size(&dir.join(&scenario.slug).join("frame-00000.png")))
+        .collect();
+    assert_eq!(
+        sizes,
+        [(320, 240), (640, 480), (240, 180)],
+        "the picture has the window's physical size"
+    );
+    for scenario in &recording.scenarios {
+        // A picture at another scale factor than the cameras' target is
+        // black, the right size and empty.
+        let picture = image::open(dir.join(&scenario.slug).join("frame-00005.png"))
+            .expect("a picture")
+            .to_rgba8();
+        let first = picture.pixels().next().expect("a pixel");
+        assert!(
+            picture.pixels().any(|pixel| pixel != first),
+            "{} has something drawn in it",
+            scenario.slug
+        );
+    }
+    assert!(!recording.any_failed(), "all three pass");
+}
+
+#[test]
+#[ignore = "needs a GPU: run by `just test-gpu`"]
+fn gpu_a_variant_a_scenario_cannot_run_in_is_recorded_as_a_failed_entry() {
+    let dir = output_dir("recorder-variant-refused");
+    let fixed = Scenario::new("fixed spot")
+        .window_size(320, 240)
+        .setup(spawn_ui)
+        .step(Step::move_to(Target::screen(Vec2::new(150.0, 50.0))));
+    let recording = Recorder::new(|_app| {})
+        .variants([
+            Variant::default(),
+            Variant::new("small").window_size(240, 180),
+        ])
+        .grouped("Buttons", fixed)
+        .record(&dir)
+        .expect("recording works");
+    let passed: Vec<_> = recording
+        .scenarios
+        .iter()
+        .map(rin_bevy_ui_tester::ScenarioRecording::passed)
+        .collect();
+    assert_eq!(passed, [true, false]);
+    let failure = recording
+        .scenarios
+        .get(1)
+        .and_then(|scenario| scenario.report.setup_failure.clone())
+        .expect("the refusal is the setup failure");
+    assert!(failure.contains("step 0"), "{failure}");
 }
