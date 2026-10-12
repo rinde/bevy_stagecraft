@@ -784,6 +784,10 @@ and through `SessionHooks`:
   leave out (below).
 - `checkpoint_key` picks the key that takes a checkpoint (below); F8 unless
   set.
+- `checkpoint_names` says whether a checkpoint asks for a name (on unless set;
+  see "Naming a checkpoint" below). The prompt is drawn by
+  `CursorOverlayPlugin` only: an app with `SessionPlugin` and no overlay turns
+  it off.
 
 ```ron
 // Recorded from a session. Edit freely. ...
@@ -896,8 +900,11 @@ ungrouped; a mouse press, the next checkpoint or the end of the session keeps
 what has been typed. While the prompt is open every key in the app's window
 goes to it, and its presses and releases never reach the app or the script,
 exactly as with the checkpoint key; keys written in the same update as the
-checkpoint key still pass. An app that needs its keys while recording turns the
-prompt off with `SessionHooks::new().checkpoint_names(false)`, and a
+checkpoint key still pass. The prompt is drawn only by `CursorOverlayPlugin`
+(the gallery and the recorder add it): an app that adds `SessionPlugin` without
+the overlay would lose its keys after F8 with nothing on screen, so it turns
+the prompt off, as does an app that needs its keys while recording, with
+`SessionHooks::new().checkpoint_names(false)`, and a
 checkpoint is then named only from code: `session::checkpoint_named(world,
 "open the menu")` takes a checkpoint that opens no prompt. A blank name is no
 name. `SavedSession::save_checks` keeps the groups.

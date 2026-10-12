@@ -75,6 +75,13 @@ impl SessionHooks {
     /// [`Step::Group`](crate::Step::Group)). An app whose keys must reach it
     /// while recording turns this off; a checkpoint is then named only by
     /// [`checkpoint_named`](crate::session::checkpoint_named).
+    ///
+    /// The prompt is drawn only by
+    /// [`CursorOverlayPlugin`](crate::overlay::CursorOverlayPlugin), which the
+    /// gallery and the recorder add. An app that records with
+    /// [`SessionPlugin`](crate::session::SessionPlugin) but without the
+    /// overlay would lose its keys after the checkpoint key with nothing on
+    /// screen saying why, so it should call `checkpoint_names(false)`.
     #[must_use]
     pub const fn checkpoint_names(mut self, ask: bool) -> Self {
         self.ask_names = ask;

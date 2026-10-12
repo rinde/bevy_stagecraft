@@ -170,6 +170,12 @@ pub struct SessionConfig {
 }
 
 /// Records sessions into `dir`; see the [module documentation](self).
+///
+/// The checkpoint key asks for a name by default, and that prompt is drawn
+/// only by [`CursorOverlayPlugin`](crate::overlay::CursorOverlayPlugin). An
+/// app that adds this plugin without the overlay sets
+/// [`SessionHooks::checkpoint_names`] to `false`, or its keys are taken by a
+/// prompt nobody can see.
 #[derive(Debug, Clone)]
 pub struct SessionPlugin {
     /// The configuration to insert.

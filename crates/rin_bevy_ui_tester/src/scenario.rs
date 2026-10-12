@@ -265,7 +265,8 @@ pub enum Step {
     /// inside names the group path (see [`GROUP_SEPARATOR`]), and the
     /// steps are numbered across groups as if they were one flat list.
     Group {
-        /// What the group is called; not empty.
+        /// What the group is called; not empty. A blank name is refused when
+        /// a script is loaded; [`Step::group`] in Rust does not check it.
         name: String,
         /// The steps in it, which may be groups.
         steps: Vec<Self>,

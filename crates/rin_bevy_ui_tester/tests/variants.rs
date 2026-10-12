@@ -258,6 +258,76 @@ fn a_screen_position_inside_a_timeout_or_a_locator_is_found_too() {
 }
 
 #[test]
+fn a_screen_position_inside_a_group_is_refused_naming_the_group_path() {
+    let scenario = Scenario::new("fixed")
+        .app_setup(RowUi::Light)
+        .step(Step::group(
+            "raise the bridge",
+            [
+                Step::wait(1),
+                Step::move_to(Target::screen(Vec2::new(150.0, 25.0))),
+            ],
+        ));
+    let narrow = Variant::new("narrow").window_size(640, 480);
+    let error = narrow.apply(&scenario).expect_err("refused");
+    let text = error.to_string();
+    assert!(text.contains("raise the bridge > step 1"), "{text}");
+    assert!(text.contains("fixed [narrow]"), "{text}");
+}
+
+#[test]
+fn a_screen_position_in_a_group_inside_a_group_names_the_whole_path() {
+    let scenario = Scenario::new("fixed")
+        .app_setup(RowUi::Light)
+        .step(Step::group(
+            "open the door",
+            [
+                Step::click(),
+                Step::group(
+                    "pull the lever",
+                    [
+                        Step::move_to(Target::screen(Vec2::new(1.0, 1.0))).with_timeout(3),
+                        Step::move_to(Target::text("Pause")),
+                    ],
+                ),
+            ],
+        ))
+        .step(Step::group(
+            "leave",
+            [Step::glide(Target::screen(Vec2::new(2.0, 2.0)), 4)],
+        ));
+    let error = Variant::new("themed")
+        .app_setup(RowUi::Dark)
+        .apply(&scenario)
+        .expect_err("refused");
+    let text = error.to_string();
+    assert!(
+        text.contains("open the door > pull the lever > 1"),
+        "the nested one is found inside its timeout: {text}"
+    );
+    assert!(
+        text.contains("leave > 3"),
+        "so is the one in another group: {text}"
+    );
+}
+
+#[test]
+fn a_group_without_a_screen_position_is_fine_in_another_variant() {
+    let scenario = Scenario::new("grouped")
+        .app_setup(RowUi::Light)
+        .step(Step::group(
+            "press it",
+            [Step::move_to(Target::text("Pause")), Step::click()],
+        ));
+    assert!(
+        Variant::new("dark")
+            .app_setup(RowUi::Dark)
+            .apply(&scenario)
+            .is_ok()
+    );
+}
+
+#[test]
 fn a_screen_position_is_fine_in_the_default_variant() {
     let scenario = Scenario::new("fixed")
         .app_setup(RowUi::Light)

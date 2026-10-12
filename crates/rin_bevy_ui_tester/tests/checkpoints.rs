@@ -856,6 +856,83 @@ fn saving_the_checks_again_keeps_the_groups() {
     assert!(report.passed(), "{:#?}", report.failures());
 }
 
+/// How many of `steps` are clicks.
+fn clicks_in(steps: &[Step]) -> usize {
+    steps.iter().filter(|step| **step == Step::click()).count()
+}
+
+#[test]
+fn two_named_checkpoints_each_group_only_the_steps_since_the_one_before() {
+    let dir = dir("checkpoints-named-two");
+    let mut app = recording_app(&dir, SessionHooks::new(), false);
+    session::start(app.world_mut(), "two names").expect("recording starts");
+    let centre = button_centre(&mut app);
+    real_move(&mut app, centre);
+    real_move(&mut app, centre);
+    click_and_settle(&mut app);
+    session::checkpoint_named(app.world_mut(), "first click").expect("taken");
+    click_and_settle(&mut app);
+    session::checkpoint_named(app.world_mut(), "second click").expect("taken");
+    click_and_settle(&mut app);
+    let saved = session::stop(app.world_mut()).expect("saved");
+    let steps = &saved.script.steps;
+
+    let first = group_steps(steps, "first click").unwrap_or_else(|| unreachable!("{steps:#?}"));
+    let second = group_steps(steps, "second click").unwrap_or_else(|| unreachable!("{steps:#?}"));
+    assert_eq!(clicks_in(first), 1, "{steps:#?}");
+    assert_eq!(clicks_in(second), 1, "only its own click: {steps:#?}");
+    let one = Step::check(Check::resource::<Counter>(".0").eq(1_u32));
+    let two = Step::check(Check::resource::<Counter>(".0").eq(2_u32));
+    assert!(first.contains(&one), "{steps:#?}");
+    assert!(!first.contains(&two), "{steps:#?}");
+    assert!(second.contains(&two), "{steps:#?}");
+    assert!(!second.contains(&one), "{steps:#?}");
+
+    let groups = steps
+        .iter()
+        .filter(|step| matches!(step, Step::Group { .. }))
+        .count();
+    assert_eq!(groups, 2, "{steps:#?}");
+    let loose: Vec<&Step> = steps
+        .iter()
+        .filter(|step| !matches!(step, Step::Group { .. }))
+        .collect();
+    assert_eq!(
+        loose.iter().filter(|step| ***step == Step::click()).count(),
+        1,
+        "the click after the last checkpoint is outside both: {steps:#?}"
+    );
+    let report = play(&saved.path);
+    assert!(report.passed(), "{:#?}", report.failures());
+}
+
+#[test]
+fn a_named_checkpoint_straight_after_another_is_a_group_of_only_its_checks() {
+    let dir = dir("checkpoints-named-empty");
+    let mut app = recording_app(&dir, SessionHooks::new(), false);
+    session::start(app.world_mut(), "empty segment").expect("recording starts");
+    let centre = button_centre(&mut app);
+    real_move(&mut app, centre);
+    real_move(&mut app, centre);
+    click_and_settle(&mut app);
+    session::checkpoint_named(app.world_mut(), "before").expect("taken");
+    session::checkpoint_named(app.world_mut(), "again").expect("taken");
+    let mut saved = session::stop(app.world_mut()).expect("saved");
+    let kept = Check::resource::<Counter>(".0").eq(1_u32);
+    saved
+        .save_checks(&[Vec::new(), vec![kept.clone()]], Vec::new())
+        .expect("written again");
+    let text = fs::read_to_string(&saved.path).expect("the file");
+    let script = Script::from_ron(&text).expect("it reads back");
+
+    let again = group_steps(&script.steps, "again").unwrap_or_else(|| unreachable!("{text}"));
+    assert_eq!(again, [Step::check(kept)], "only its checks: {text}");
+    let before = group_steps(&script.steps, "before").unwrap_or_else(|| unreachable!("{text}"));
+    assert_eq!(clicks_in(before), 1, "{text}");
+    let report = play(&saved.path);
+    assert!(report.passed(), "{:#?}", report.failures());
+}
+
 #[test]
 fn the_overlay_shows_the_name_as_it_is_typed_then_the_checkpoint_again() {
     let dir = dir("checkpoints-overlay-naming");
