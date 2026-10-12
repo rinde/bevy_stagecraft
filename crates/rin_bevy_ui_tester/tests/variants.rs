@@ -336,6 +336,19 @@ fn a_screen_position_is_fine_in_the_default_variant() {
 }
 
 #[test]
+fn a_move_burst_is_refused_in_other_variants_and_fine_in_the_default_one() {
+    let scenario = Scenario::new("burst")
+        .app_setup(RowUi::Light)
+        .step(Step::move_burst([Vec2::new(1.0, 1.0)]));
+    let error = Variant::new("narrow")
+        .window_size(640, 480)
+        .apply(&scenario)
+        .expect_err("refused");
+    assert!(error.to_string().contains("MoveBurst"), "{error}");
+    assert!(Variant::default().apply(&scenario).is_ok());
+}
+
+#[test]
 fn run_ron_variants_names_each_file_and_variant_and_filters_by_that_name() {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("variants_ron");
     std::fs::create_dir_all(&dir).expect("a directory");

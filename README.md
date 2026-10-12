@@ -424,6 +424,29 @@ not read. Enter, Tab and Backspace are not text: use `Tap`. Typing with no
 focused widget does nothing and does not fail. `Type` only adds a form to
 format version 3, so every older file still loads.
 
+### Several pointer moves in one frame
+
+A real mouse can report several moves before the app reads them. A handler
+that starts each move's delta from a value refreshed only by layout (a drag
+that scrolls, say) then counts only the last one, a regression a one-move-per-
+frame scenario cannot show. `Step::move_burst(positions)`
+(`MoveBurst([(x, y), ..])` in a file) sends every position in one frame, in
+order, and leaves the pointer at the last one. It takes one frame whatever
+the number of positions, names no widget, and never waits for a target.
+
+```ron
+steps: [
+    MoveTo(Name("thumb")),           // put the pointer on the widget
+    Press(Left),                       // and hold it, as a drag does
+    MoveBurst([(200.0, 305.0), (200.0, 310.0), (200.0, 315.0)]),
+    Release(Left),
+],
+```
+
+Like `Screen(..)`, a burst names fixed positions of the window, so a
+non-default variant refuses a script that holds one. It only adds a form to
+format version 3, so every older file still loads.
+
 ## Scenarios as RON
 
 `Scenario::to_script()` gives a `Script`, plain serde data (format version,
@@ -475,6 +498,7 @@ is also a newer one.
         MoveTo(Nth(1, Text("Delete"))),
         Timeout(120, MoveTo(Text("Loaded"))),     // wait longer for this one
         Force(Click(Left)),                        // click without the checks
+        MoveBurst([(200.0, 305.0), (200.0, 310.0)]), // two moves in one frame
         Group(name: "open the menu", steps: [      // named, nestable
             Click(Left),
             Group(name: "wait for it", steps: [Wait(5)]),

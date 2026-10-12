@@ -235,6 +235,11 @@ fn steps_read_in_words() {
     assert_eq!(describe_step(&glide, &[], &words), "Glide to (5, 0)");
     let tap = Step::tap(KeyCode::Equal);
     assert_eq!(describe_step(&tap, &[], &words), "Tap =");
+    let burst = Step::move_burst([Vec2::new(1.0, 2.0), Vec2::new(3.0, 4.0)]);
+    assert_eq!(
+        describe_step(&burst, &[], &words),
+        "Move burst of 2 positions"
+    );
     let before = [Step::move_to(Target::text("Rail"))];
     assert_eq!(
         describe_step(&Step::click(), &before, &words),
