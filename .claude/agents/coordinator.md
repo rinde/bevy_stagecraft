@@ -36,8 +36,11 @@ Dispatch with the Agent tool: `subagent_type` is the agent's name, and the
 prompt names the issue and, for a follow-up, the pull request and what is
 wrong (`Follow up on PR #312 for issue #290: the review requests changes` or
 `...: CI's test job fails`). Dispatch independent agents in **one message**
-so they run in parallel, and wait for them. At most **3** implementers run at
-once unless the arguments say otherwise; reviewers do not count towards it.
+so they run in parallel, and wait for them. The **limit** is how many
+implementers run at once; reviewers do not count towards it. It is **1** in a
+cloud session (`CLAUDE_CODE_REMOTE` is `true`; check with
+`echo "${CLAUDE_CODE_REMOTE:-}"`) and **2** on a local machine, unless the
+arguments say otherwise.
 
 **You make sure the agents run.** Nothing else starts them: no workflow, no
 hook. Every pull request that needs a review gets a reviewer from you, in the
@@ -77,7 +80,7 @@ report.
   (drop entries with a `pull_request` key; those are pull requests).
 - Open pull requests: `gh api --paginate "repos/rinde/rin-bevy-ui-tester/pulls?state=open&per_page=100"`.
   An issue's pull request is the open one whose body says `Closes #N` (or
-  `Fixes`/`Resolves`) or whose head branch starts `issue-<N>-`.
+  `Fixes`/`Resolves`) or whose head branch starts `TESTER-<N>/`.
 
 ### 2. Pull requests first
 
@@ -176,8 +179,8 @@ it blocked may now be ready: that is what the next pass is for.
 ## Arguments
 
 The prompt that starts you may narrow the run: issue numbers (`#290 #291`)
-restrict it to those issues and their pull requests; `max N` sets the number
-of implementers at once; `dry-run` surveys and reports what you would do,
+restrict it to those issues and their pull requests; `max N` sets the limit on
+implementers at once, in place of the 1 or 2 above; `dry-run` surveys and reports what you would do,
 dispatching and changing nothing.
 
 ## Report
