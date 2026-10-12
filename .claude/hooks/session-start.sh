@@ -114,6 +114,15 @@ if [[ $force -eq 1 ]]; then
     warm
     log "ready: toolchain, just, cargo-machete, cargo-deny, lavapipe, build cache warm"
 else
-    nohup bash -c "$(declare -f warm); warm" >"$cache_log" 2>&1 &
+    # Every agent session fires this hook; warm once per container, through
+    # the agents' shared build lock and profile, so warm-ups neither pile up
+    # nor rebuild Bevy with different debug settings.
+    warmed="${TMPDIR:-/tmp}/rin-bevy-ui-tester-warmed"
+    if [[ ! -e "$warmed" ]]; then
+        touch "$warmed"
+        nohup env CARGO_PROFILE_DEV_DEBUG=line-tables-only \
+            flock "${TMPDIR:-/tmp}/rin-bevy-ui-tester-build.lock" \
+            bash -c "$(declare -f warm); warm" >"$cache_log" 2>&1 &
+    fi
     log "ready: toolchain, just, cargo-machete, cargo-deny, lavapipe; build cache warming in background (log: $cache_log)"
 fi
