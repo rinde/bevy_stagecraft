@@ -70,6 +70,26 @@
 //! only when what it shows has changed, which includes the scenarios'
 //! revision (see [`GalleryState`]).
 //!
+//! ## What the changes leave out
+//!
+//! The trace holds every reflected type; the tab filters the **changes** it
+//! lists when it draws them ([`GalleryState::noise`]), so the filter can
+//! change at once, without playing the scenario again or disturbing a paused
+//! jump. It starts as the filter the app set for the gallery
+//! ([`crate::SessionHooks::noise_filter`], by default
+//! [`crate::NoiseFilter::default`]). Each change about a reflected type
+//! (`resource`, `count`, `state`) has a **Hide** button
+//! ([`GalleryAction::ToggleType`]); those the filter leaves out are counted,
+//! and **List** opens them, each with a **Show** button. **App default** and
+//! **Everything** ([`GalleryAction::UseNoise`], [`NoisePreset`]) switch
+//! the whole filter. The tab ends with the filter in force as Rust
+//! ([`crate::NoiseFilter::to_code`]), to paste into the app's hooks. Hiding a
+//! type a broader `keep` pattern of the app matches does nothing and says so
+//! in the status line. The filter is for the whole gallery session and every
+//! scenario; it changes the Trace tab and nothing else (not `trace.html`, a
+//! recording's suggested checks or pick mode), and is accepted whatever the
+//! gallery is doing.
+//!
 //! # Running everything
 //!
 //! [`GalleryPlugin::with_run_all`] plays the whole catalogue once, front to
@@ -153,8 +173,8 @@ mod ui;
 pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
 pub use input::scenarios_pointer;
 pub use state::{
-    GalleryAction, GalleryPhase, GalleryRunReport, GalleryState, GalleryTab, PendingStep, Picking,
-    Recording, ScenarioOutcome, Speed, Suggestions, TraceWorld,
+    GalleryAction, GalleryPhase, GalleryRunReport, GalleryState, GalleryTab, HiddenList,
+    NoisePreset, PendingStep, Picking, Recording, ScenarioOutcome, Speed, Suggestions, TraceWorld,
 };
 pub use ui::{GalleryToolbar, SCENARIOS_WINDOW_SIZE, ScenariosCamera, ScenariosWindow};
 
@@ -162,7 +182,7 @@ use crate::{
     input::{SyntheticInputPlugin, SyntheticInputSystems},
     overlay::CursorOverlayPlugin,
     player::{ExternallyDriven, ScenarioPlayerPlugin, ScenarioSystems},
-    session::{SessionHooks, SessionPlugin, SessionSystems},
+    session::{SessionConfig, SessionHooks, SessionPlugin, SessionSystems},
 };
 
 /// How many updates a loop waits before starting again, unless configured.
@@ -305,7 +325,14 @@ impl Plugin for GalleryPlugin {
                 SessionPlugin::new(self.export_dir.clone()).with_hooks(self.session_hooks.clone()),
             );
         }
-        let mut state = GalleryState::new(self.export_dir.clone(), self.loop_pause);
+        // The Trace tab starts from the one filter the app has set for the
+        // gallery: the hooks of the session plugin in use, which may be the
+        // app's own.
+        let noise = app.world().get_resource::<SessionConfig>().map_or_else(
+            || self.session_hooks.noise().clone(),
+            |config| config.hooks.noise().clone(),
+        );
+        let mut state = GalleryState::new(self.export_dir.clone(), self.loop_pause, noise);
         if self.run_all {
             state.begin_run_all();
         }

@@ -238,7 +238,7 @@ pub fn trace_html(recording: &ScenarioRecording, trace: &ScenarioTrace, frames: 
     let steps = &recording.report.steps;
     let descriptions = TargetDescriptions::default();
     for index in 0..steps.len() {
-        if let Some(view) = StepView::new(index, steps, trace, &descriptions) {
+        if let Some(view) = StepView::new(index, steps, trace, &descriptions, trace.filter()) {
             step_section(&mut out, &view, frames);
         }
     }

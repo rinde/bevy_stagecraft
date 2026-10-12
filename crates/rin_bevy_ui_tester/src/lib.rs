@@ -55,8 +55,8 @@ pub use files::{
 #[cfg(feature = "gallery")]
 pub use gallery::{
     Gallery, GalleryAction, GalleryEntry, GalleryGroup, GalleryPlugin, GalleryRunReport,
-    GalleryState, GallerySystems, GalleryTab, ScenarioOutcome, ScenariosCamera, ScenariosWindow,
-    Speed, Suggestions, TraceWorld,
+    GalleryState, GallerySystems, GalleryTab, NoisePreset, ScenarioOutcome, ScenariosCamera,
+    ScenariosWindow, Speed, Suggestions, TraceWorld,
 };
 pub use headless::{DEFAULT_SCALE_FACTOR, DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
 pub use input::{
