@@ -36,7 +36,7 @@ use crate::{
     extension::{
         AppType, Extension, SeveralAppTypes, app_type, bad_app_value, no_app_type, several_message,
     },
-    scenario::{Scenario, Step},
+    scenario::{Scenario, Step, with_group_path},
     targets::Target,
 };
 
@@ -57,8 +57,10 @@ use crate::{
 /// (`Component(..)`, `Name(..)`, `Role(..)`, `Within(..)` and `Nth(..)`)
 /// came later still in version 3, and so did the script's `action_timeout`
 /// and the `Timeout(..)` and `Force(..)` steps that go with steps waiting
-/// for their targets to be actionable, and the `scale_factor`: they only add
-/// forms, so every file that loaded before still does. Any other older file still loads.
+/// for their targets to be actionable, the `scale_factor`, and the
+/// `Group(name: .., steps: [..])` step that names a run of steps: they only
+/// add forms, so every file that loaded before still does. Any other older
+/// file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.
@@ -502,18 +504,7 @@ pub(crate) fn build_scenario(
         view.type_against(&types)
             .map_err(|problem| load_error(problem, "the view", false))?;
     }
-    for (index, step) in script.steps.iter_mut().enumerate() {
-        let used_by = format!("step {index}");
-        check_wrapper(step, &used_by)?;
-        for target in step_targets(step) {
-            target
-                .type_against(&types)
-                .map_err(|problem| load_error(problem, &used_by, false))?;
-        }
-        if let Step::Check(check) = step {
-            resolve_check(&types, check, &used_by)?;
-        }
-    }
+    resolve_steps(&mut script.steps, &types, &mut 0, &mut Vec::new())?;
     for check in &mut script.expect {
         resolve_check(&types, check, "the expect list")?;
     }
@@ -530,6 +521,44 @@ pub(crate) fn check_scale_factor(scale_factor: f32) -> Result<(), String> {
             "the scale factor is {scale_factor}; it must be finite and above zero"
         ))
     }
+}
+
+/// Reads the app's values in `steps`, and in the steps of the groups inside
+/// them, and checks what each step names. `index` counts the steps that are
+/// not groups, as the report does, so an error names the step the report
+/// would; `path` is the groups around `steps`.
+fn resolve_steps(
+    steps: &mut [Step],
+    types: &TypeRegistry,
+    index: &mut usize,
+    path: &mut Vec<String>,
+) -> Result<(), LoadError> {
+    for step in steps {
+        if let Step::Group { name, steps } = step {
+            if name.trim().is_empty() {
+                return Err(LoadError::Invalid {
+                    used_by: with_group_path(path, &format!("step {index}")),
+                    message: "a `Group` needs a name".into(),
+                });
+            }
+            path.push(name.clone());
+            resolve_steps(steps, types, index, path)?;
+            path.pop();
+            continue;
+        }
+        let used_by = with_group_path(path, &format!("step {index}"));
+        *index += 1;
+        check_wrapper(step, &used_by)?;
+        for target in step_targets(step) {
+            target
+                .type_against(types)
+                .map_err(|problem| load_error(problem, &used_by, false))?;
+        }
+        if let Step::Check(check) = step {
+            resolve_check(types, check, &used_by)?;
+        }
+    }
+    Ok(())
 }
 
 /// Reads the app's values in `check`, and in every check inside it, as the

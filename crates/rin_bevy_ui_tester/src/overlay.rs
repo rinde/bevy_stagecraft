@@ -47,7 +47,7 @@ use bevy::{
 
 use crate::{
     player::{CheckRecord, Outcome, ScenarioReport},
-    scenario::{Modifiers, Step},
+    scenario::{Modifiers, Step, flatten, with_group_path},
     session::CheckpointTaken,
     targets::{NotUnderTest, Target},
 };
@@ -324,6 +324,7 @@ pub fn describe_step(step: &Step, before: &[Step], descriptions: &TargetDescript
             describe_step(inner, before, descriptions)
         ),
         Step::Force(inner) => format!("{} (forced)", describe_step(inner, before, descriptions)),
+        Step::Group { name, steps } => format!("{name} ({} steps)", flatten(steps).len()),
     }
 }
 
@@ -344,7 +345,10 @@ pub fn current_step_text(
         .take(index)
         .map(|record| record.step.clone())
         .collect();
-    Some(describe_step(&record.step, &before, descriptions))
+    Some(with_group_path(
+        &record.group,
+        &describe_step(&record.step, &before, descriptions),
+    ))
 }
 
 /// Each check's mark and name, such as `PASS saved  FAIL count`, in the order they

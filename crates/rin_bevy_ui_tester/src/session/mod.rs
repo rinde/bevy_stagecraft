@@ -118,7 +118,7 @@ use crate::{
     check::suggest::{WorldSnapshot, suggest_checks},
     extension::{Setup, View, capture_setup, current_view},
     headless::FRAME_STEP,
-    scenario::Step,
+    scenario::{Step, flatten},
     script::{FORMAT_VERSION, Script},
 };
 
@@ -241,6 +241,9 @@ pub struct Checkpoint {
     /// How many of the recorded steps, not counting any checkpoint's checks,
     /// come before it.
     pub at: usize,
+    /// The name it was given, if any; the steps since the checkpoint before,
+    /// and its checks, are a [`Step::Group`] of this name.
+    pub name: Option<String>,
     /// The checks the world's changes since the checkpoint before (or the
     /// start) suggested, in order; each held when the checkpoint was taken.
     pub candidates: Vec<Check>,
@@ -292,42 +295,33 @@ impl SavedSession {
         at_checkpoints: &[Vec<Check>],
         expect: Vec<Check>,
     ) -> Result<(), SessionError> {
-        let at: Vec<usize> = self
-            .checkpoints
-            .iter()
-            .map(|checkpoint| checkpoint.at)
-            .collect();
-        self.script.steps = with_checks(&self.recorded, &at, at_checkpoints);
+        self.script.steps = with_checks(&self.recorded, &self.checkpoints, at_checkpoints);
         self.script.expect = expect;
         write_script(&self.path, &self.script)
     }
 }
 
 /// `steps` with each checkpoint's checks put in as `Check` steps: those of
-/// checkpoint `n` after the first `at[n]` steps.
-fn with_checks(steps: &[Step], at: &[usize], checks: &[Vec<Check>]) -> Vec<Step> {
+/// checkpoint `n` after the first `checkpoints[n].at` steps, with the
+/// candidates of checkpoint `n` replaced by `checks[n]`.
+///
+/// A named checkpoint wraps what led to it in a [`Step::Group`]: the steps
+/// since the checkpoint before it, and its own checks.
+fn with_checks(steps: &[Step], checkpoints: &[Checkpoint], checks: &[Vec<Check>]) -> Vec<Step> {
     let mut out = Vec::with_capacity(steps.len() + checks.iter().map(Vec::len).sum::<usize>());
-    let checks_before = |before: usize, out: &mut Vec<Step>| {
-        for (_, checks) in at
-            .iter()
-            .zip(checks)
-            .filter(|(position, _)| **position == before)
-        {
-            out.extend(checks.iter().cloned().map(Step::Check));
+    let mut start = 0;
+    for (n, checkpoint) in checkpoints.iter().enumerate() {
+        // A checkpoint counted past the end goes last.
+        let end = checkpoint.at.min(steps.len()).max(start);
+        let mut segment: Vec<Step> = steps.get(start..end).unwrap_or(&[]).to_vec();
+        segment.extend(checks.get(n).into_iter().flatten().cloned().map(Step::Check));
+        match &checkpoint.name {
+            Some(name) if !segment.is_empty() => out.push(Step::group(name.clone(), segment)),
+            _ => out.extend(segment),
         }
-    };
-    for (index, step) in steps.iter().enumerate() {
-        checks_before(index, &mut out);
-        out.push(step.clone());
+        start = end;
     }
-    // A checkpoint past the last step, and one counted past the end, go last.
-    for (_, checks) in at
-        .iter()
-        .zip(checks)
-        .filter(|(position, _)| **position >= steps.len())
-    {
-        out.extend(checks.iter().cloned().map(Step::Check));
-    }
+    out.extend(steps.get(start..).unwrap_or(&[]).iter().cloned());
     out
 }
 
@@ -366,6 +360,14 @@ struct Active {
     before: WorldSnapshot,
     /// What each checkpoint so far suggested, in order.
     checkpoints: Vec<Vec<Check>>,
+    /// The name of each checkpoint so far, in order; `None` for one never
+    /// named.
+    names: Vec<Option<String>>,
+    /// The name being typed for the last checkpoint, while it is asked for.
+    naming: Option<String>,
+    /// Keys the name took the press of and whose release is still to come,
+    /// so the app sees neither.
+    swallowed: Vec<KeyCode>,
     /// Real time spent recording.
     elapsed: Duration,
     /// The log so far.
@@ -702,6 +704,10 @@ impl SessionRecorder {
             });
         }
         for press in buttons.iter().filter(|press| press.window == window) {
+            if press.state == ButtonState::Pressed {
+                // Going back to the mouse is done with the name.
+                active.close_naming();
+            }
             let Some(position) = active.cursor else {
                 continue;
             };
@@ -798,6 +804,9 @@ impl SessionRecorder {
             view,
             before,
             checkpoints: Vec::new(),
+            names: Vec::new(),
+            naming: None,
+            swallowed: Vec::new(),
             elapsed: Duration::ZERO,
             events: Vec::new(),
             cursor: cursor.flatten(),
@@ -814,11 +823,14 @@ impl SessionRecorder {
         world: &mut World,
         config: &SessionConfig,
         ahead: Duration,
+        name: Option<String>,
     ) -> Result<CheckpointTaken, SessionError> {
         let active = self
             .active
             .as_mut()
             .ok_or_else(|| SessionError::new("no session is being recorded"))?;
+        // The name asked for the checkpoint before is final once another is taken.
+        active.close_naming();
         let now = config.hooks.snapshot(world);
         let candidates = suggest_checks(&active.before, &now, world);
         active.before = now;
@@ -831,6 +843,7 @@ impl SessionRecorder {
             candidates: candidates.len(),
         };
         active.checkpoints.push(candidates);
+        active.names.push(name.filter(|name| !name.trim().is_empty()));
         if world.write_message(taken).is_none() {
             bevy::log::warn!("checkpoint {} taken, but nothing can show it", taken.number);
         }
@@ -871,9 +884,26 @@ impl SessionRecorder {
                 },
             });
         }
+        // A name still being typed when the person stops is kept.
+        active.close_naming();
         let logged = read_log(&active.events, end, &config.options);
         let after = config.hooks.snapshot(world);
         let candidates = suggest_checks(&active.before, &after, world);
+        let checkpoints: Vec<Checkpoint> = logged
+            .checkpoints
+            .iter()
+            .zip(active.checkpoints)
+            .zip(active.names)
+            .map(|((at, candidates), name)| Checkpoint {
+                at: *at,
+                name,
+                candidates,
+            })
+            .collect();
+        let kept: Vec<Vec<Check>> = checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.candidates.clone())
+            .collect();
         let script = Script {
             format_version: FORMAT_VERSION,
             name: active.name,
@@ -883,17 +913,11 @@ impl SessionRecorder {
             scale_factor: None,
             setup: active.setup,
             view: active.view,
-            steps: with_checks(&logged.steps, &logged.checkpoints, &active.checkpoints),
+            steps: with_checks(&logged.steps, &checkpoints, &kept),
             expect: candidates.clone(),
         };
         let path = config.dir.join(format!("{}.ron", active.stem));
         write_script(&path, &script)?;
-        let checkpoints = logged
-            .checkpoints
-            .into_iter()
-            .zip(active.checkpoints)
-            .map(|(at, candidates)| Checkpoint { at, candidates })
-            .collect();
         let saved = SavedSession {
             path,
             script,
@@ -943,6 +967,22 @@ fn free_stem(dir: &std::path::Path, name: &str) -> String {
     candidate
 }
 
+impl Active {
+    /// Ends the asking for a name, keeping what was typed (a name of only
+    /// blanks is none).
+    fn close_naming(&mut self) {
+        let Some(typed) = self.naming.take() else {
+            return;
+        };
+        let typed = typed.trim();
+        if !typed.is_empty()
+            && let Some(slot) = self.names.last_mut()
+        {
+            *slot = Some(typed.to_owned());
+        }
+    }
+}
+
 /// Shared by the gallery: a path shown to the person.
 impl SavedSession {
     /// How the save reads in a status line.
@@ -951,7 +991,7 @@ impl SavedSession {
         format!(
             "Saved {} ({} steps)",
             self.path.display(),
-            self.script.steps.len()
+            flatten(&self.script.steps).len()
         )
     }
 }

@@ -25,7 +25,7 @@ use crate::{
     headless::HeadlessPlugins,
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems},
     probe::check_hover,
-    scenario::{ORIGIN, Scenario, Step},
+    scenario::{ORIGIN, Scenario, Step, flatten, with_group_path},
     targets::{Action, NotActionable, ResolvedTarget, Target, actionable, pressable, resolve},
     trace::{ScenarioTrace, TargetTrace, TraceCheck, TracePoint},
 };
@@ -54,6 +54,9 @@ impl Outcome {
 pub struct StepRecord {
     /// The step.
     pub step: Step,
+    /// The names of the [`Step::Group`]s the step is in, outermost first;
+    /// empty for a step at the top level.
+    pub group: Vec<String>,
     /// How it ended.
     pub outcome: Outcome,
     /// The player frame the step began on, counted from 1.
@@ -119,9 +122,10 @@ impl ScenarioReport {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, record)| match &record.outcome {
-                    Outcome::Fail(message) => {
-                        Some(format!("step {index} ({:?}): {message}", record.step))
-                    }
+                    Outcome::Fail(message) => Some(with_group_path(
+                        &record.group,
+                        &format!("step {index} ({:?}): {message}", record.step),
+                    )),
                     Outcome::Pass | Outcome::Skipped => None,
                 });
         let checks = self
@@ -234,6 +238,9 @@ struct Aim {
 struct Running {
     /// The scenario.
     scenario: Scenario,
+    /// The steps to play: the script with its groups flattened away, so a
+    /// grouped script plays frame for frame as the same steps ungrouped.
+    plan: Vec<Step>,
     /// Index of the next step to expand into operations.
     next_step: usize,
     /// Operations expanded from steps but not yet done.
@@ -477,13 +484,15 @@ impl ScenarioPlayer {
             trace.push(first);
             trace
         });
+        let flat = flatten(scenario.script());
+        let plan: Vec<Step> = flat.iter().map(|flat| flat.step.clone()).collect();
         *report = ScenarioReport {
             name: scenario.name().into(),
-            steps: scenario
-                .script()
+            steps: flat
                 .iter()
-                .map(|step| StepRecord {
-                    step: step.clone(),
+                .map(|flat| StepRecord {
+                    step: flat.step.clone(),
+                    group: flat.group.iter().map(|name| (*name).to_owned()).collect(),
                     outcome: Outcome::Skipped,
                     frame: 0,
                 })
@@ -511,6 +520,7 @@ impl ScenarioPlayer {
             .unwrap_or(ORIGIN);
         self.running = Some(Running {
             scenario,
+            plan,
             next_step: 0,
             ops: VecDeque::new(),
             cursor,
@@ -556,7 +566,7 @@ impl ScenarioPlayer {
                     self.halted = true;
                     return;
                 }
-                if run.next_step < run.scenario.script().len() {
+                if run.next_step < run.plan.len() {
                     let index = run.next_step;
                     run.next_step += 1;
                     run.expand(world, report, index);
@@ -711,7 +721,7 @@ impl Running {
     fn abort(&mut self, report: &mut ScenarioReport, step: usize, message: String) {
         fail_step(report, step, message);
         self.ops.clear();
-        self.next_step = self.scenario.script().len();
+        self.next_step = self.plan.len();
         self.aborted = true;
     }
 
@@ -741,7 +751,7 @@ impl Running {
 
     /// Turns step `index` into operations.
     fn expand(&mut self, world: &World, report: &mut ScenarioReport, index: usize) {
-        let Some(step) = self.scenario.script().get(index).cloned() else {
+        let Some(step) = self.plan.get(index).cloned() else {
             return;
         };
         if let Some(record) = report.steps.get_mut(index) {
@@ -802,6 +812,8 @@ impl Running {
             | Step::Tap { .. }
             | Step::Timeout(..)
             | Step::Force(_) => {}
+            // Flattened away when the run began; nothing to play.
+            Step::Group { .. } => {}
             Step::Check(check) => self.ops.push_back(Op::Check {
                 step: index,
                 check,

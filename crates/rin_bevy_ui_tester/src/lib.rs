@@ -75,7 +75,9 @@ pub use recorder::{
     RecorderTarget, Recording, ScenarioRecording,
 };
 pub use save::{SCENE_SUFFIX, SaveError, SavedSetup, save_setup};
-pub use scenario::{CheckResult, Modifiers, Scenario, Step};
+pub use scenario::{
+    CheckResult, FlatStep, GROUP_SEPARATOR, Modifiers, Scenario, Step, flatten, with_group_path,
+};
 pub use script::{
     ExportError, FORMAT_VERSION, LoadError, OLDEST_FORMAT_VERSION, Registry, Script, export_ron,
 };

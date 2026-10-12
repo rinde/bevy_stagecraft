@@ -27,6 +27,8 @@ pub struct SessionHooks {
     noise: NoiseFilter,
     /// The key that takes a checkpoint.
     checkpoint: KeyCode,
+    /// Whether a checkpoint asks for a name.
+    ask_names: bool,
 }
 
 impl Default for SessionHooks {
@@ -34,6 +36,7 @@ impl Default for SessionHooks {
         Self {
             noise: NoiseFilter::default(),
             checkpoint: DEFAULT_CHECKPOINT_KEY,
+            ask_names: true,
         }
     }
 }
@@ -62,6 +65,26 @@ impl SessionHooks {
     pub const fn checkpoint_key(mut self, key: KeyCode) -> Self {
         self.checkpoint = key;
         self
+    }
+
+    /// Sets whether the checkpoint key asks for a name, which it does unless
+    /// set. While the name is asked for, typed keys in the primary window go
+    /// to it and not to the app: Enter keeps the name, Escape skips it, and
+    /// a click or the end of the session keeps what was typed. A checkpoint
+    /// with a name groups the steps since the one before (see
+    /// [`Step::Group`](crate::Step::Group)). An app whose keys must reach it
+    /// while recording turns this off, and then names nothing from the
+    /// keyboard.
+    #[must_use]
+    pub const fn checkpoint_names(mut self, ask: bool) -> Self {
+        self.ask_names = ask;
+        self
+    }
+
+    /// Whether the checkpoint key asks for a name.
+    #[must_use]
+    pub const fn asks_names(&self) -> bool {
+        self.ask_names
     }
 
     /// The key that takes a checkpoint while recording.
