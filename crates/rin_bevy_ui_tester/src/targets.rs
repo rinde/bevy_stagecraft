@@ -200,7 +200,9 @@ impl Target {
     }
 
     /// The entity with the reflected component `C`, a test id, for example
-    /// `Target::component::<PauseButton>()`.
+    /// `Target::component::<PauseButton>()`. It writes the short type path;
+    /// for a type whose short path another registered type shares, use
+    /// `Target::Component` with the full one.
     #[must_use]
     pub fn component<C: Component + TypePath>() -> Self {
         Self::Component(C::short_type_path().to_owned())
