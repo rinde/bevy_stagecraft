@@ -14,7 +14,11 @@
 use std::{fs, path::PathBuf};
 
 use bevy::{
-    input::{ButtonState, mouse::MouseButtonInput},
+    input::{
+        ButtonState,
+        keyboard::{Key, KeyCode, KeyboardInput},
+        mouse::MouseButtonInput,
+    },
     prelude::*,
     ui::{ComputedNode, UiGlobalTransform, px},
     ui_widgets::{Activate, Button},
@@ -578,4 +582,67 @@ fn a_recorded_click_names_a_test_id_then_role_and_label_then_text_then_the_posit
         Target::screen(ground),
         "then the position"
     );
+}
+
+/// A real key press or release, as `bevy_winit` reports it, one update apart.
+fn real_key(app: &mut App, key_code: KeyCode, logical_key: Key, state: ButtonState) {
+    let window = primary(app);
+    let text = match (&logical_key, state) {
+        (Key::Character(text), ButtonState::Pressed) => Some(text.clone()),
+        _ => None,
+    };
+    let input = KeyboardInput {
+        key_code,
+        logical_key,
+        state,
+        text,
+        repeat: false,
+        window,
+    };
+    app.world_mut()
+        .write_message(WindowEvent::from(input.clone()));
+    app.world_mut().write_message(input);
+    app.update();
+}
+
+/// A person types "Hi 5" with Shift for the capital, a few updates per key.
+fn type_hi(app: &mut App) {
+    let character = |text: &str| Key::Character(text.into());
+    real_key(app, KeyCode::ShiftLeft, Key::Shift, ButtonState::Pressed);
+    real_key(app, KeyCode::KeyH, character("H"), ButtonState::Pressed);
+    real_key(app, KeyCode::KeyH, character("H"), ButtonState::Released);
+    real_key(app, KeyCode::ShiftLeft, Key::Shift, ButtonState::Released);
+    for (code, text) in [(KeyCode::KeyI, "i"), (KeyCode::Digit5, "5")] {
+        for _ in 0..3 {
+            app.update();
+        }
+        real_key(app, code, character(text), ButtonState::Pressed);
+        real_key(app, code, character(text), ButtonState::Released);
+    }
+}
+
+#[test]
+fn a_recorded_typing_session_exports_a_single_type_step() {
+    let dir = dir("session-typing");
+    let mut app = app(&dir);
+    session::start(app.world_mut(), "Typing").expect("recording starts");
+    type_hi(&mut app);
+    let saved = session::stop(app.world_mut()).expect("the session is saved");
+    let typed: Vec<_> = saved
+        .script
+        .steps
+        .iter()
+        .filter(|step| matches!(step, Step::Type { .. }))
+        .collect();
+    assert_eq!(typed, [&Step::type_text("Hi5")], "{:?}", saved.script.steps);
+    assert!(
+        saved.script.steps.iter().all(|step| !matches!(
+            step,
+            Step::Key { .. } | Step::KeyUp { .. } | Step::Tap { .. }
+        )),
+        "{:?}",
+        saved.script.steps
+    );
+    let text = fs::read_to_string(&saved.path).expect("written");
+    assert!(text.contains("text: \"Hi5\","), "{text}");
 }

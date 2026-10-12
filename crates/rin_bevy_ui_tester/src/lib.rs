@@ -59,7 +59,10 @@ pub use gallery::{
     Speed, Suggestions, TraceWorld,
 };
 pub use headless::{DEFAULT_SCALE_FACTOR, DEFAULT_WINDOW_SIZE, FRAME_STEP, HeadlessPlugins};
-pub use input::{SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems};
+pub use input::{
+    Keystroke, SyntheticEvent, SyntheticInput, SyntheticInputPlugin, SyntheticInputSystems,
+    keystroke,
+};
 pub use overlay::{
     CursorOverlayPlugin, OverlayCamera, OverlaySystems, OverlayTheme, TargetDescriptions,
     checkpoint_text, checks_text, current_step_text, describe_step, describe_target,

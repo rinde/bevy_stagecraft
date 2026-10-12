@@ -35,7 +35,26 @@ const fn button(frame: u32, state: ButtonState, x: f32, y: f32, target: Target) 
 }
 
 const fn key(frame: u32, key: KeyCode, state: ButtonState) -> RecordedEvent {
-    at(frame, RecordedKind::Key { key, state })
+    at(
+        frame,
+        RecordedKind::Key {
+            key,
+            state,
+            text: None,
+        },
+    )
+}
+
+/// A key press that produced `text`, as a real keyboard reports it.
+fn typed_key(frame: u32, key: KeyCode, text: &str) -> RecordedEvent {
+    at(
+        frame,
+        RecordedKind::Key {
+            key,
+            state: ButtonState::Pressed,
+            text: Some(text.to_owned()),
+        },
+    )
 }
 
 fn convert(events: &[RecordedEvent]) -> Vec<Step> {
@@ -505,4 +524,139 @@ fn a_checkpoint_inside_a_folded_chord_moves_after_it() {
         .position(|step| *step == Step::tap_with(KeyCode::KeyS, Modifiers::CTRL))
         .unwrap();
     assert_eq!(logged.checkpoints, vec![tap + 1], "{logged:?}");
+}
+
+/// The press and release of one typed key, `text` being what it produced.
+fn typed_pair(frame: u32, code: KeyCode, text: &str) -> [RecordedEvent; 2] {
+    [
+        typed_key(frame, code, text),
+        key(frame + 2, code, ButtonState::Released),
+    ]
+}
+
+/// The `Type` steps and what they typed.
+fn typed_texts(steps: &[Step]) -> Vec<&str> {
+    steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Type { text, into: None } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn consecutive_character_keys_become_one_type_step() {
+    let mut events = Vec::new();
+    events.push(key(3, KeyCode::ShiftLeft, ButtonState::Pressed));
+    events.extend(typed_pair(4, KeyCode::KeyA, "A"));
+    events.push(key(7, KeyCode::ShiftLeft, ButtonState::Released));
+    events.extend(typed_pair(10, KeyCode::KeyL, "l"));
+    events.extend(typed_pair(14, KeyCode::KeyP, "p"));
+    events.extend(typed_pair(18, KeyCode::KeyH, "h"));
+    events.extend(typed_pair(22, KeyCode::KeyA, "a"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["Alpha"], "{steps:?}");
+    assert!(
+        steps.iter().all(|step| !matches!(
+            step,
+            Step::Key { .. } | Step::KeyUp { .. } | Step::Tap { .. }
+        )),
+        "no key steps are left over: {steps:?}"
+    );
+}
+
+#[test]
+fn the_text_comes_from_what_the_keyboard_reported_not_the_us_layout() {
+    let mut events = Vec::new();
+    events.extend(typed_pair(3, KeyCode::KeyQ, "a"));
+    events.extend(typed_pair(6, KeyCode::KeyZ, "y"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["ay"], "{steps:?}");
+}
+
+#[test]
+fn a_pause_between_characters_that_is_not_idle_does_not_split_the_run() {
+    let mut events = Vec::new();
+    events.extend(typed_pair(3, KeyCode::KeyA, "a"));
+    events.extend(typed_pair(60, KeyCode::KeyB, "b"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["ab"], "{steps:?}");
+}
+
+#[test]
+fn a_long_idle_pause_splits_the_run_in_two() {
+    let mut events = Vec::new();
+    events.extend(typed_pair(3, KeyCode::KeyA, "a"));
+    events.extend(typed_pair(400, KeyCode::KeyB, "b"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["a", "b"], "{steps:?}");
+}
+
+#[test]
+fn enter_after_typing_stays_a_tap() {
+    let mut events = Vec::new();
+    events.extend(typed_pair(3, KeyCode::KeyH, "h"));
+    events.extend(typed_pair(6, KeyCode::KeyI, "i"));
+    events.push(typed_key(9, KeyCode::Enter, "\r"));
+    events.push(key(11, KeyCode::Enter, ButtonState::Released));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["hi"], "{steps:?}");
+    assert!(steps.contains(&Step::tap(KeyCode::Enter)), "{steps:?}");
+}
+
+#[test]
+fn a_key_without_text_is_not_typing() {
+    let events = [
+        key(3, KeyCode::KeyA, ButtonState::Pressed),
+        key(5, KeyCode::KeyA, ButtonState::Released),
+    ];
+    let steps = convert(&events);
+    assert!(typed_texts(&steps).is_empty(), "{steps:?}");
+    assert!(steps.contains(&Step::tap(KeyCode::KeyA)));
+}
+
+#[test]
+fn a_control_chord_is_not_typing() {
+    let events = [
+        key(3, KeyCode::ControlLeft, ButtonState::Pressed),
+        typed_key(4, KeyCode::KeyS, "s"),
+        key(5, KeyCode::KeyS, ButtonState::Released),
+        key(6, KeyCode::ControlLeft, ButtonState::Released),
+    ];
+    let steps = convert(&events);
+    assert!(typed_texts(&steps).is_empty(), "{steps:?}");
+    assert!(steps.contains(&Step::tap_with(KeyCode::KeyS, Modifiers::CTRL)));
+}
+
+#[test]
+fn a_key_held_down_is_not_typing() {
+    let events = [
+        typed_key(3, KeyCode::KeyA, "a"),
+        key(200, KeyCode::KeyA, ButtonState::Released),
+    ];
+    let steps = convert(&events);
+    assert!(typed_texts(&steps).is_empty(), "{steps:?}");
+}
+
+#[test]
+fn a_click_between_two_runs_keeps_them_apart() {
+    let at_ten = Target::screen(Vec2::new(10.0, 10.0));
+    let mut events = vec![moved(0, 10.0, 10.0)];
+    events.extend(typed_pair(3, KeyCode::KeyA, "a"));
+    events.push(button(8, ButtonState::Pressed, 10.0, 10.0, at_ten.clone()));
+    events.push(button(9, ButtonState::Released, 10.0, 10.0, at_ten));
+    events.extend(typed_pair(12, KeyCode::KeyB, "b"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["a", "b"], "{steps:?}");
+}
+
+#[test]
+fn shift_held_across_several_characters_still_makes_one_type_step() {
+    let mut events = vec![key(1, KeyCode::ShiftLeft, ButtonState::Pressed)];
+    events.extend(typed_pair(3, KeyCode::KeyA, "A"));
+    events.extend(typed_pair(6, KeyCode::KeyB, "B"));
+    events.push(key(10, KeyCode::ShiftLeft, ButtonState::Released));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["AB"], "{steps:?}");
 }
