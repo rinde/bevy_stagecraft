@@ -2,7 +2,8 @@
 //!
 //! In the gallery, **Save as setup** (at any time: while recording, paused or
 //! playing) writes the world as it is to a file next to the scenarios, and any
-//! scenario can start from it with `setup: Scene("name.scene.ron")` (see [`Setup::Scene`]).
+//! scenario can start from it with
+//! `setup: Scene("name.scene.ron")` (see [`Setup::Scene`]).
 //!
 //! The file is Bevy's own world format (a `DynamicWorld`, the dynamic scene of
 //! earlier versions) holding the app's reflected resources and entities. What
