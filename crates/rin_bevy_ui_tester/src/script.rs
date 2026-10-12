@@ -58,7 +58,8 @@ use crate::{
 /// came later still in version 3, and so did the script's `action_timeout`
 /// and the `Timeout(..)` and `Force(..)` steps that go with steps waiting
 /// for their targets to be actionable, and the `Type(..)` step that types
-/// text: they only add forms, so every file that loaded before still does. Any other older file still loads.
+/// text: they only add forms, so every file that loaded before still does.
+/// Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
 /// The oldest script format this crate still reads.

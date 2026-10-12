@@ -397,14 +397,16 @@ failed step skips the rest of the script.
 `Step::type_text("Alpha")` (`Type(text: "Alpha")` in a file) types into
 whatever has keyboard focus, like Playwright's `pressSequentially`. For every
 character it sends a key press and release with the logical key and the text
-the character produces, one character per frame, with Shift held around the
-characters that need it (capitals and the shifted symbols of a US layout), so
-Bevy's own `EditableText` ends up holding exactly that text. A character no key of the US layout types is sent on an unidentified
-physical key, carrying the text, which text fields read all the same. `Step::type_into("Alpha",
-Target::text("Name"))` (`Type(text: "Alpha", into: Text("Name"))`, Playwright's
-`fill`) first moves to the target and clicks it, which focuses a text field,
-waiting for it to be actionable as a click does (so `Timeout(..)` and
-`Force(..)` may wrap a `Type` that has an `into`, and no other).
+the character produces, one character per frame, with Shift pressed and
+released in the same frame around the characters that need it (capitals and
+the shifted symbols of a US layout), so Bevy's own `EditableText` ends up
+holding exactly that text. A character no key of the US layout types is sent
+on an unidentified physical key, carrying the text, which text fields read
+all the same. `Step::type_into("Alpha", Target::text("Name"))`
+(`Type(text: "Alpha", into: Text("Name"))`, Playwright's `fill`) first moves
+to the target and clicks it, which focuses a text field, waiting for it to be
+actionable as a click does (so `Timeout(..)` and `Force(..)` may wrap a `Type`
+that has an `into`, and no other).
 
 ```ron
 steps: [

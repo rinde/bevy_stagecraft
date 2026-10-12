@@ -320,7 +320,7 @@ pub(crate) fn character_events(character: char) -> Vec<SyntheticEvent> {
         character,
         state,
     };
-    let mut events = Vec::with_capacity(4);
+    let mut events = Vec::new();
     if shift {
         events.push(SyntheticEvent::Key(
             KeyCode::ShiftLeft,

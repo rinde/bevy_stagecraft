@@ -226,11 +226,12 @@ pub enum Step {
     },
     /// Type the text into whatever has keyboard focus, one character a
     /// frame: each character is a key press and release with its logical key
-    /// and its text, with Shift held around it where the US layout needs it
-    /// (see [`crate::keystroke`]). With `into`, the target is clicked first,
-    /// which focuses a text field; the click waits for the target as a
-    /// [`Step::Click`] on it would. Takes one frame per character, plus the
-    /// click's.
+    /// and its text. Where the US layout needs Shift (see
+    /// [`crate::keystroke`]), it goes down and up in that same frame, around
+    /// the key, which is what makes a character one frame. With `into`, the
+    /// target is clicked first, which focuses a text field; the click waits
+    /// for the target as a [`Step::Click`] on it would. Takes one frame per
+    /// character, plus the click's.
     Type {
         /// What to type.
         text: String,
