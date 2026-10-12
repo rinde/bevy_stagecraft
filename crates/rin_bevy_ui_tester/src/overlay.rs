@@ -317,6 +317,7 @@ pub fn describe_step(step: &Step, before: &[Step], descriptions: &TargetDescript
             descriptions.describe(to)
         ),
         Step::Wheel { x, y } => format!("Scroll ({x}, {y})"),
+        Step::MoveBurst(positions) => format!("Move burst of {} positions", positions.len()),
         Step::Key { key, modifiers } => format!("Hold {}", chord(*key, *modifiers)),
         Step::KeyUp { key, modifiers } => format!("Release {}", chord(*key, *modifiers)),
         Step::Tap { key, modifiers } => format!("Tap {}", chord(*key, *modifiers)),

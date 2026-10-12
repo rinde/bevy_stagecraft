@@ -207,9 +207,10 @@ impl Variant {
         Some(LoadError::Invalid {
             used_by: steps_text(&steps),
             message: format!(
-                "aims at a fixed screen position (`Screen(..)`), which only makes sense in \
-                 the default variant, and `{}` is not the default one; aim at the widget \
-                 with `Text(..)`, `Role(..)`, `Component(..)` or `Name(..)` instead",
+                "aims at a fixed screen position (`Screen(..)` or a `MoveBurst(..)` of \
+                 positions), which only makes sense in the default variant, and `{}` is not \
+                 the default one; aim at the widget with `Text(..)`, `Role(..)`, \
+                 `Component(..)` or `Name(..)` instead",
                 self.label(scenario.name())
             ),
         })
@@ -243,9 +244,20 @@ fn screen_steps(steps: &[Step]) -> Vec<(usize, Vec<String>)> {
     flatten(steps)
         .into_iter()
         .enumerate()
-        .filter(|(_, flat)| step_targets(flat.step).into_iter().any(has_screen))
+        .filter(|(_, flat)| aims_at_screen(flat.step))
         .map(|(index, flat)| (index, flat.group.into_iter().map(str::to_owned).collect()))
         .collect()
+}
+
+/// Whether `step` aims the pointer at a fixed position of the window: a
+/// [`Target::Screen`], or a [`Step::MoveBurst`], whose positions are just as
+/// fixed.
+fn aims_at_screen(step: &Step) -> bool {
+    match step {
+        Step::MoveBurst(_) => true,
+        Step::Timeout(_, inner) | Step::Force(inner) => aims_at_screen(inner),
+        other => step_targets(other).into_iter().any(has_screen),
+    }
 }
 
 /// The targets a step aims at, inside any `Timeout(..)` or `Force(..)`.

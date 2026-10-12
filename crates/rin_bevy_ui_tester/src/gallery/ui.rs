@@ -21,8 +21,8 @@ use bevy::{
     prelude::On,
     text::{FontSize, TextColor, TextFont},
     ui::{
-        AlignItems, BackgroundColor, BorderRadius, FlexDirection, FlexWrap, Node, Overflow,
-        ScrollPosition, UiRect, UiTargetCamera, Val, px, widget::Text,
+        AlignItems, BackgroundColor, BorderRadius, ComputedNode, FlexDirection, FlexWrap, Node,
+        Overflow, ScrollPosition, UiRect, UiTargetCamera, Val, px, widget::Text,
     },
     window::{
         Monitor, PrimaryMonitor, PrimaryWindow, Window, WindowPosition, WindowRef, WindowResolution,
@@ -52,10 +52,12 @@ const FONT_SIZE: f32 = 15.0;
 const PADDING: f32 = 6.0;
 /// Gap between neighbouring controls, in logical pixels.
 const GAP: f32 = 6.0;
-/// Height of the panel with the selected scenario's checks, in logical pixels.
-const DETAILS_HEIGHT: f32 = 220.0;
-/// Height of the same panel on the Trace tab, which has more to say.
-const TRACE_HEIGHT: f32 = 440.0;
+/// The least share of the room the catalogue and the details panel each keep,
+/// however much the other has to show.
+const MIN_PANEL_SHARE: f32 = 0.2;
+/// How far a panel's height may be off its target before it is set again, in
+/// logical pixels. Keeps layout rounding from setting it every frame.
+const HEIGHT_TOLERANCE: f32 = 0.5;
 /// Indent of a UI tree line per level of depth.
 const TREE_INDENT: &str = "  ";
 
@@ -174,6 +176,16 @@ pub(super) struct Catalogue;
 /// The panel that describes the selected entry and lists its checks.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct Details;
+
+/// What holds the catalogue, the tab row and the details panel, and shares its
+/// height between the catalogue and the details.
+#[derive(Component, Debug, Clone, Copy)]
+pub(super) struct Panels;
+
+/// The row of tab buttons between the catalogue and the details panel, whose
+/// height is not shared.
+#[derive(Component, Debug, Clone, Copy)]
+pub(super) struct TabRow;
 
 /// The text style of the window.
 fn font() -> TextFont {
@@ -340,7 +352,10 @@ fn button_with(parent: &mut ChildSpawnerCommands<'_>, control: Control, text: St
 }
 
 /// A row of controls.
-fn row(parent: &mut ChildSpawnerCommands<'_>, fill: impl FnOnce(&mut ChildSpawnerCommands<'_>)) {
+fn row(
+    parent: &mut ChildSpawnerCommands<'_>,
+    fill: impl FnOnce(&mut ChildSpawnerCommands<'_>),
+) -> Entity {
     parent
         .spawn((
             NotUnderTest,
@@ -351,7 +366,8 @@ fn row(parent: &mut ChildSpawnerCommands<'_>, fill: impl FnOnce(&mut ChildSpawne
                 ..Node::default()
             },
         ))
-        .with_children(fill);
+        .with_children(fill)
+        .id()
 }
 
 /// Puts the Scenarios window directly to the left of the app window, the pair
@@ -489,38 +505,56 @@ pub(super) fn spawn_window(
                 TextColor(DIM),
             ));
             root.spawn((
-                Catalogue,
+                Panels,
                 NotUnderTest,
-                ScrollPosition::default(),
                 Node {
                     flex_direction: FlexDirection::Column,
                     flex_grow: 1.0,
                     min_height: px(0),
                     row_gap: px(GAP),
-                    overflow: Overflow::scroll_y(),
                     ..Node::default()
                 },
             ))
-            .with_children(|list| spawn_catalogue(list, &gallery));
-            row(root, |row| {
-                for tab in GalleryTab::ALL {
-                    button(row, Control::Tab(tab), &state);
-                }
+            .with_children(|panels| {
+                panels
+                    .spawn((
+                        Catalogue,
+                        NotUnderTest,
+                        ScrollPosition::default(),
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            // `split_panels` sets the height from the first
+                            // layout on.
+                            height: Val::Percent(50.0),
+                            flex_shrink: 0.0,
+                            row_gap: px(GAP),
+                            overflow: Overflow::scroll_y(),
+                            ..Node::default()
+                        },
+                    ))
+                    .with_children(|list| spawn_catalogue(list, &gallery));
+                let tabs = row(panels, |row| {
+                    for tab in GalleryTab::ALL {
+                        button(row, Control::Tab(tab), &state);
+                    }
+                });
+                panels.commands().entity(tabs).insert(TabRow);
+                panels.spawn((
+                    Details,
+                    NotUnderTest,
+                    ScrollPosition::default(),
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        height: Val::Percent(50.0),
+                        flex_shrink: 0.0,
+                        overflow: Overflow::scroll_y(),
+                        padding: UiRect::all(px(PADDING)),
+                        row_gap: px(2),
+                        ..Node::default()
+                    },
+                    BackgroundColor(Color::srgb(0.07, 0.08, 0.1)),
+                ));
             });
-            root.spawn((
-                Details,
-                NotUnderTest,
-                ScrollPosition::default(),
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    height: px(DETAILS_HEIGHT),
-                    overflow: Overflow::scroll_y(),
-                    padding: UiRect::all(px(PADDING)),
-                    row_gap: px(2),
-                    ..Node::default()
-                },
-                BackgroundColor(Color::srgb(0.07, 0.08, 0.1)),
-            ));
         });
 }
 
@@ -732,6 +766,69 @@ fn status_text(state: &GalleryState, report: &ScenarioReport, gallery: &Gallery)
     format!("{name}: {mode} (step {reached}/{})", report.steps.len())
 }
 
+/// How the room for the catalogue and the details panel is shared, as their
+/// heights in the same unit as the arguments.
+///
+/// `catalogue` and `details` are what each would like to show in full and
+/// `room` is what there is to share. Both get half, unless one needs more than
+/// that and the other less: the other keeps what it needs and the first gets
+/// the rest. Neither gets less than [`MIN_PANEL_SHARE`] of the room.
+pub(super) fn share_room(catalogue: f32, details: f32, room: f32) -> (f32, f32) {
+    let room = room.max(0.0);
+    let half = room / 2.0;
+    let least = room * MIN_PANEL_SHARE;
+    if catalogue > half && details <= half {
+        let details = details.max(least);
+        (room - details, details)
+    } else if details > half && catalogue <= half {
+        let catalogue = catalogue.max(least);
+        (catalogue, room - catalogue)
+    } else {
+        (half, half)
+    }
+}
+
+/// Gives the catalogue and the details panel the room of the window between
+/// them, as [`share_room`] splits it.
+///
+/// Works from the layout of the frame before, so a change shows one frame
+/// late. A panel's content size does not depend on its own height, so this
+/// settles instead of chasing itself.
+pub(super) fn split_panels(
+    panels: Query<&ComputedNode, With<Panels>>,
+    tabs: Query<&ComputedNode, With<TabRow>>,
+    mut catalogue: Query<(&ComputedNode, &mut Node), (With<Catalogue>, Without<Details>)>,
+    mut details: Query<(&ComputedNode, &mut Node), (With<Details>, Without<Catalogue>)>,
+) {
+    let (Some(panels), Some(tabs), Some((list, mut list_node)), Some((panel, mut panel_node))) = (
+        panels.iter().next(),
+        tabs.iter().next(),
+        catalogue.iter_mut().next(),
+        details.iter_mut().next(),
+    ) else {
+        return;
+    };
+    let logical = |physical: f32, node: &ComputedNode| physical * node.inverse_scale_factor();
+    // Less the gaps between the three children of the container.
+    let room = logical(panels.size().y, panels) - logical(tabs.size().y, tabs) - GAP - GAP;
+    if room <= 0.0 {
+        return;
+    }
+    // The content size leaves out the padding below the last child.
+    let wanted =
+        |node: &ComputedNode| logical(node.content_size().y + node.padding().max_inset.y, node);
+    let (list_height, panel_height) = share_room(wanted(list), wanted(panel), room);
+    for (node, height) in [
+        (&mut list_node, list_height),
+        (&mut panel_node, panel_height),
+    ] {
+        let near = matches!(node.height, Val::Px(now) if (now - height).abs() < HEIGHT_TOLERANCE);
+        if !near {
+            node.height = px(height);
+        }
+    }
+}
+
 /// Applies the wheel to the catalogue, or to the details panel while a
 /// pointer of the Scenarios window is over it: a recording's checklists can
 /// be longer than the panel.
@@ -841,10 +938,10 @@ fn shown_step(
 /// Empties every details panel and fills it again.
 fn redraw(
     commands: &mut Commands,
-    details: &Query<(Entity, &mut Node), With<Details>>,
+    details: &Query<Entity, With<Details>>,
     fill: impl Fn(&mut ChildSpawnerCommands<'_>),
 ) {
-    for (entity, _) in details {
+    for entity in details {
         commands
             .entity(entity)
             .despawn_children()
@@ -902,7 +999,7 @@ pub(super) fn update_details(
     theme: Res<OverlayTheme>,
     descriptions: Option<Res<TargetDescriptions>>,
     player: Option<Res<ScenarioPlayer>>,
-    mut details: Query<(Entity, &mut Node), With<Details>>,
+    details: Query<Entity, With<Details>>,
     mut shown: Local<Option<DetailsKey>>,
 ) {
     let tracing_tab =
@@ -928,16 +1025,6 @@ pub(super) fn update_details(
         return;
     }
     *shown = Some(key);
-    let height = px(if tracing_tab {
-        TRACE_HEIGHT
-    } else {
-        DETAILS_HEIGHT
-    });
-    for (_, mut node) in &mut details {
-        if node.height != height {
-            node.height = height;
-        }
-    }
     if state.is_picking() {
         let destination = if state.is_recording() {
             "the recording, here"
@@ -977,7 +1064,7 @@ pub(super) fn update_details(
     let scenario = &entry.scenario;
     let lines = check_lines(scenario, &report, &theme);
     let steps = step_lines(scenario, &report, &theme, &descriptions);
-    for (entity, _) in &details {
+    for entity in &details {
         commands
             .entity(entity)
             .despawn_children()
@@ -1548,5 +1635,37 @@ fn spawn_pick_panel(
                 panel_button(row, Control::FormField(index, field, true), "+", false);
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::share_room;
+
+    #[test]
+    fn two_long_lists_get_half_the_room_each() {
+        assert_eq!(share_room(900.0, 700.0, 600.0), (300.0, 300.0));
+    }
+
+    #[test]
+    fn a_short_list_leaves_the_rest_to_a_long_one() {
+        assert_eq!(share_room(900.0, 200.0, 600.0), (400.0, 200.0));
+        assert_eq!(share_room(200.0, 900.0, 600.0), (200.0, 400.0));
+    }
+
+    #[test]
+    fn the_shorter_list_keeps_a_fifth_at_least() {
+        assert_eq!(share_room(900.0, 10.0, 600.0), (480.0, 120.0));
+        assert_eq!(share_room(0.0, 900.0, 600.0), (120.0, 480.0));
+    }
+
+    #[test]
+    fn two_short_lists_get_half_the_room_each() {
+        assert_eq!(share_room(100.0, 50.0, 600.0), (300.0, 300.0));
+    }
+
+    #[test]
+    fn no_room_gives_no_height() {
+        assert_eq!(share_room(100.0, 100.0, -5.0), (0.0, 0.0));
     }
 }

@@ -28,10 +28,15 @@ struct Activations(u32);
 #[derive(Resource, Default)]
 struct Dragged(Vec2);
 
+/// How many drag events the drag pad saw.
+#[derive(Resource, Default)]
+struct DragEvents(u32);
+
 /// Spawns a camera, a "Pause" button, and a drag pad.
 fn spawn_ui(world: &mut World) {
     world.init_resource::<Activations>();
     world.init_resource::<Dragged>();
+    world.init_resource::<DragEvents>();
     world.spawn(Camera2d);
     world
         .spawn((
@@ -61,9 +66,12 @@ fn spawn_ui(world: &mut World) {
             },
             BackgroundColor(Color::BLACK),
         ))
-        .observe(|drag: On<Pointer<Drag>>, mut total: ResMut<Dragged>| {
-            total.0 += drag.delta;
-        });
+        .observe(
+            |drag: On<Pointer<Drag>>, mut total: ResMut<Dragged>, mut count: ResMut<DragEvents>| {
+                total.0 += drag.delta;
+                count.0 += 1;
+            },
+        );
 }
 
 /// This app's own checks over the pad, the cursor and the keyboard.
@@ -74,6 +82,8 @@ enum PadCheck {
     CursorAt(Vec2),
     /// The pad was dragged this far to the right and not up or down.
     DraggedRight(f32),
+    /// The pad saw this many drag events.
+    DragEvents(u32),
     /// Control and A are both held.
     ShortcutHeld,
 }
@@ -100,6 +110,14 @@ impl AppCheck for PadCheck {
                     Ok(())
                 } else {
                     Err(format!("dragged {total}"))
+                }
+            }
+            Self::DragEvents(wanted) => {
+                let found = probe.resource::<DragEvents>().map_or(0, |events| events.0);
+                if found == *wanted {
+                    Ok(())
+                } else {
+                    Err(format!("the pad saw {found} drag events"))
                 }
             }
             Self::ShortcutHeld => {
@@ -245,6 +263,31 @@ fn a_glide_passes_through_points_between_start_and_end() {
     let frames: Vec<u32> = report.steps.iter().map(|s| s.frame).collect();
     assert_eq!(frames[1] + 10, frames[2], "the glide lasts ten frames");
     assert_eq!(frames[0] + 1, frames[1], "a jump lasts one frame");
+}
+
+#[test]
+fn a_move_burst_delivers_every_move_in_one_frame() {
+    let report = Scenario::new("burst")
+        .setup(spawn_ui)
+        .steps([
+            Step::move_to(Target::screen(Vec2::new(150.0, 350.0))),
+            Step::press(),
+            Step::move_burst([
+                Vec2::new(150.0, 355.0),
+                Vec2::new(150.0, 360.0),
+                Vec2::new(150.0, 365.0),
+            ]),
+            Step::release(),
+        ])
+        .expect_check(Check::app(PadCheck::DragEvents(3)))
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+    let frames: Vec<u32> = report.steps.iter().map(|s| s.frame).collect();
+    assert_eq!(
+        frames[2],
+        frames[1] + 1,
+        "the burst is one frame, however many moves it holds"
+    );
 }
 
 #[test]

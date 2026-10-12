@@ -803,6 +803,16 @@ impl Running {
                     y,
                 }],
             ),
+            Step::MoveBurst(positions) => {
+                // The positions name no widget, so a press right after it
+                // checks none, as after a move to a position.
+                self.aim = None;
+                let events = positions
+                    .iter()
+                    .map(|position| SyntheticEvent::MoveCursor(*position))
+                    .collect();
+                self.frame(index, events);
+            }
             Step::Type { text, into: None } => self.type_frames(index, &text),
             Step::Wait(frames) => {
                 for _ in 0..frames {

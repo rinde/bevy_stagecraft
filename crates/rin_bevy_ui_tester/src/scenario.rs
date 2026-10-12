@@ -177,6 +177,12 @@ pub enum Step {
         /// How many frames the movement takes; at least one.
         frames: u16,
     },
+    /// Move the pointer to each position within one frame, in order: several
+    /// pointer moves for the app to read at once, as a high-rate mouse
+    /// delivers them. Takes one frame, and leaves the pointer at the last
+    /// position. Useful for regression-testing a handler whose every move
+    /// counts, such as a drag.
+    MoveBurst(Vec<Vec2>),
     /// Press a mouse button.
     Press(MouseButton),
     /// Release a mouse button.
@@ -343,6 +349,12 @@ impl Step {
     #[must_use]
     pub const fn glide(target: Target, frames: u16) -> Self {
         Self::Glide { target, frames }
+    }
+
+    /// Send the pointer to each of `positions` within one frame.
+    #[must_use]
+    pub fn move_burst(positions: impl IntoIterator<Item = Vec2>) -> Self {
+        Self::MoveBurst(positions.into_iter().collect())
     }
 
     /// Click the left mouse button.

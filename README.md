@@ -424,6 +424,29 @@ not read. Enter, Tab and Backspace are not text: use `Tap`. Typing with no
 focused widget does nothing and does not fail. `Type` only adds a form to
 format version 3, so every older file still loads.
 
+### Several pointer moves in one frame
+
+A real mouse can report several moves before the app reads them. A handler
+that starts each move's delta from a value refreshed only by layout (a drag
+that scrolls, say) then counts only the last one, a regression a one-move-per-
+frame scenario cannot show. `Step::move_burst(positions)`
+(`MoveBurst([(x, y), ..])` in a file) sends every position in one frame, in
+order, and leaves the pointer at the last one. It takes one frame whatever
+the number of positions, names no widget, and never waits for a target.
+
+```ron
+steps: [
+    MoveTo(Name("thumb")),           // put the pointer on the widget
+    Press(Left),                       // and hold it, as a drag does
+    MoveBurst([(200.0, 305.0), (200.0, 310.0), (200.0, 315.0)]),
+    Release(Left),
+],
+```
+
+Like `Screen(..)`, a burst names fixed positions of the window, so a
+non-default variant refuses a script that holds one. It only adds a form to
+format version 3, so every older file still loads.
+
 ## Scenarios as RON
 
 `Scenario::to_script()` gives a `Script`, plain serde data (format version,
@@ -475,6 +498,7 @@ is also a newer one.
         MoveTo(Nth(1, Text("Delete"))),
         Timeout(120, MoveTo(Text("Loaded"))),     // wait longer for this one
         Force(Click(Left)),                        // click without the checks
+        MoveBurst([(200.0, 305.0), (200.0, 310.0)]), // two moves in one frame
         Group(name: "open the menu", steps: [      // named, nestable
             Click(Left),
             Group(name: "wait for it", steps: [Wait(5)]),
@@ -502,7 +526,13 @@ is also a newer one.
 ```
 
 Types are written as short type paths, followed by a reflect path for a field
-(`Editor.tool`, `Score.0`, `Board.cells[2]`). A value is plain RON read as the
+(`Editor.tool`, `Score.0`, `Board.cells[2]`). Where two registered types share
+a short path (Bevy has its own `Label` and `Button`), write the full type path
+(`bevy_ui_widgets::button::Button`); the short one is a load error listing the
+full paths of every candidate. The typed builders (`Check::count::<C>()`,
+`Target::component::<C>()`, ...) write the short path, so for such a type
+build the check from the full path (`Check::count_of(["my_game::Label"])`,
+`Target::Component("my_game::Label".into())`). A value is plain RON read as the
 field's type, so `Eq(Lay)` is the variant `Lay` of whatever enum the field
 holds.
 
@@ -675,6 +705,8 @@ frame, step to the next step, restart, speed (1/4x, 1/2x, 1x, 2x), loop on and
 off, **Take over**, **Export RON**, **Save as setup**, **Record**, **New: empty world** / **New: current state**, **Pick**, the live list of
 the selected scenario's checks, and its steps (see below). Space plays and pauses, Right steps a frame, Down steps to the next
 step and Left restarts, read from the Scenarios window only.
+
+The window's height is shared between the catalogue and the details panel: half each, unless one needs less than that, when the other gets the rest, and neither gets under a fifth.
 
 ```rust,ignore
 App::new()
