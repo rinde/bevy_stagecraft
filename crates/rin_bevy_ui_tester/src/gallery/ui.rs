@@ -65,6 +65,8 @@ const BACKGROUND: Color = Color::srgb(0.1, 0.11, 0.14);
 const BUTTON: Color = Color::srgb(0.2, 0.22, 0.28);
 /// A button whose state is on: the speed in use, looping, the selected entry.
 const BUTTON_ON: Color = Color::srgb(0.2, 0.4, 0.65);
+/// A button that cannot be used now.
+const BUTTON_OFF: Color = Color::srgb(0.14, 0.15, 0.19);
 /// Ordinary text.
 const TEXT: Color = Color::srgb(0.9, 0.9, 0.92);
 /// Secondary text.
@@ -552,7 +554,13 @@ fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
     }
 }
 
-/// Shades the buttons whose state is on.
+/// Whether the control cannot be used in this state. A click on it still asks
+/// for its action, which is refused with a line in the status.
+const fn is_disabled(control: Control, state: &GalleryState) -> bool {
+    matches!(control, Control::SaveAsSetup) && !state.can_save_as_setup()
+}
+
+/// Shades the buttons whose state is on, and dims the ones that cannot be used.
 pub(super) fn style_controls(
     state: Res<GalleryState>,
     mut buttons: Query<(&Control, &mut BackgroundColor), Without<StaticShade>>,
@@ -603,7 +611,13 @@ pub(super) fn style_controls(
             | Control::NewFromCurrent
             | Control::FormField(..) => false,
         };
-        let wanted = if on { BUTTON_ON } else { BUTTON };
+        let wanted = if is_disabled(*control, &state) {
+            BUTTON_OFF
+        } else if on {
+            BUTTON_ON
+        } else {
+            BUTTON
+        };
         if colour.0 != wanted {
             colour.0 = wanted;
         }
@@ -616,7 +630,10 @@ pub(super) fn update_labels(
     report: Res<ScenarioReport>,
     theme: Res<OverlayTheme>,
     gallery: Res<Gallery>,
-    mut labels: Query<(&ControlLabel, &mut Text), (Without<EntryResult>, Without<StatusLine>)>,
+    mut labels: Query<
+        (&ControlLabel, &mut Text, &mut TextColor),
+        (Without<EntryResult>, Without<StatusLine>),
+    >,
     mut results: Query<
         (&EntryResult, &mut Text, &mut TextColor),
         (Without<ControlLabel>, Without<StatusLine>),
@@ -630,10 +647,18 @@ pub(super) fn update_labels(
         ),
     >,
 ) {
-    for (ControlLabel(control), mut text) in &mut labels {
+    for (ControlLabel(control), mut text, mut colour) in &mut labels {
         let wanted = control_text(*control, &state);
         if text.0 != wanted {
             text.0 = wanted;
+        }
+        let tint = if is_disabled(*control, &state) {
+            DIM
+        } else {
+            TEXT
+        };
+        if colour.0 != tint {
+            colour.0 = tint;
         }
     }
     for (EntryResult(index), mut text, mut colour) in &mut results {

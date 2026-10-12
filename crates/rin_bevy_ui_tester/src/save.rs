@@ -1,7 +1,7 @@
 //! A checkpoint saved as a setup for other scenarios.
 //!
-//! In the gallery, **Save as setup** (at any time: while recording, paused or
-//! playing) writes the world as it is to a file next to the scenarios, and any
+//! In the gallery, **Save as setup** (while recording, paused, taken over or
+//! finished, but not while a script plays, when the button is disabled) writes the world as it is to a file next to the scenarios, and any
 //! scenario can start from it with `setup: Scene("name.scene.ron")` (see [`Setup::Scene`]).
 //!
 //! The file is Bevy's own world format (a `DynamicWorld`, the dynamic scene of

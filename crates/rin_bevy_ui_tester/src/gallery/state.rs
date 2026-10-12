@@ -143,8 +143,11 @@ pub enum GalleryAction {
     /// Write the selected entry as RON into the export directory.
     Export,
     /// Write the world as it is as a setup file in the export directory, for
-    /// other scenarios to start from (see [`crate::save`]). Allowed at any
-    /// time, while recording, paused or playing: it only reads the world.
+    /// other scenarios to start from (see [`crate::save`]). Allowed while
+    /// recording, paused, taken over or finished, but not while a script plays
+    /// ([`GalleryState::is_script_playing`]): the world then changes every
+    /// frame, so what is saved would be an arbitrary moment. The request is
+    /// refused with a line in the status, as the ones a recording refuses are.
     SaveAsSetup,
     /// Start recording a scenario from a session: pause the script, take the
     /// primary window over and log what the real mouse and keyboard do there
@@ -636,6 +639,23 @@ impl GalleryState {
     #[must_use]
     pub const fn is_playing(&self) -> bool {
         self.playing && !self.taken_over
+    }
+
+    /// Whether a script is running on its own: it advances (or is on its way
+    /// to a step it was asked to jump to) and has not finished. Paused,
+    /// stepping, taken over, finished and recording are not.
+    #[must_use]
+    pub const fn is_script_playing(&self) -> bool {
+        self.selected.is_some()
+            && !self.taken_over
+            && (self.playing || self.jump.is_some())
+            && !matches!(self.phase, GalleryPhase::Finished(_))
+    }
+
+    /// Whether **Save as setup** can be used now: not while a script plays.
+    #[must_use]
+    pub const fn can_save_as_setup(&self) -> bool {
+        !self.is_script_playing()
     }
 
     /// Whether the real mouse and keyboard have the primary window.

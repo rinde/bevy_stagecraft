@@ -2222,8 +2222,10 @@ fn save_as_setup_writes_the_world_for_an_app_without_a_save_format() {
     app.world_mut().insert_resource(CaptureNothing);
     ask(&mut app, GalleryAction::Select(0));
     run_until(&mut app, 100, |world| frames(world) >= 4);
-    // Paused, with the script's two clicks done or not: whatever the count is.
+    // Taken over, so the script no longer plays, with its two clicks done or
+    // not: whatever the count is.
     ask(&mut app, GalleryAction::TakeOver);
+    assert!(app.world().resource::<GalleryState>().can_save_as_setup());
     let count = app.world().resource::<Count>().0;
     ask(&mut app, GalleryAction::SaveAsSetup);
     let path = dir.join("add_2.scene.ron");
@@ -2248,6 +2250,50 @@ fn save_as_setup_writes_the_world_for_an_app_without_a_save_format() {
         .with_base_dir(&dir);
     scenario.run_setup(app.world_mut()).expect("loads");
     assert_eq!(app.world().resource::<Count>().0, count);
+}
+
+#[test]
+fn save_as_setup_does_nothing_while_a_script_plays() {
+    let dir = fresh_dir("gallery-save-playing");
+    let mut app = recording_app(&dir);
+    app.world_mut().insert_resource(CaptureNothing);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| frames(world) >= 4);
+    assert!(!finished(app.world()), "the script is still playing");
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_script_playing());
+    assert!(!state.can_save_as_setup());
+
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    let state = app.world().resource::<GalleryState>();
+    assert!(state.is_playing(), "the request does not pause the script");
+    assert!(
+        !state.status().contains("Saved setup"),
+        "{}",
+        state.status()
+    );
+    assert!(
+        state.status().contains("Pause the script"),
+        "{}",
+        state.status()
+    );
+    assert!(!dir.exists(), "nothing was written");
+
+    // Paused, the same world can be saved.
+    ask(&mut app, GalleryAction::TogglePlay);
+    let state = app.world().resource::<GalleryState>();
+    assert!(!state.is_script_playing());
+    assert!(state.can_save_as_setup());
+    ask(&mut app, GalleryAction::SaveAsSetup);
+    assert!(dir.join("add_2.scene.ron").exists());
+
+    // And so is the finished one.
+    ask(&mut app, GalleryAction::TogglePlay);
+    run_until(&mut app, 400, finished);
+    run_until(&mut app, 10, |world| {
+        world.resource::<GalleryState>().is_finished()
+    });
+    assert!(app.world().resource::<GalleryState>().can_save_as_setup());
 }
 
 #[test]
