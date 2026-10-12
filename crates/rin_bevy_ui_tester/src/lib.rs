@@ -90,7 +90,7 @@ pub use session::{
     SessionSystems, StepOptions, read_log, steps_from_events,
 };
 pub use targets::{
-    DEFAULT_ACTION_TIMEOUT, NotUnderTest, ResolvedTarget, Target, WidgetRole, resolve,
+    DEFAULT_ACTION_TIMEOUT, NotUnderTest, ResolvedTarget, Target, WidgetRole, entity_of, resolve,
 };
 pub use trace::{
     ScenarioTrace, StepTrace, StepView, TargetTrace, TraceCaptured, TraceCheck, TracePoint, UiLine,

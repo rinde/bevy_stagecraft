@@ -197,6 +197,12 @@ per extension point, and a second one is a load error naming both.
   names a click that hit no label. They replace the session hooks of earlier
   versions.
 - `Registry::app_type(Extension::Setup)` and so on list the variants.
+- An app check or target that must reach an entity with no `Node` (a selection
+  shared between widgets, say) reads it with
+  `entity_of(world, &Target::component::<Selection>())`. It finds the entity a
+  `Component(..)`, `Name(..)`, `Role(..)`, `Within(..)` or `Nth(..)` target
+  names as strictly as a step does; `resolve` works a target out to a pixel and
+  refuses such an entity.
 - A world saved as a setup for other scenarios is the built-in
   `setup: Scene("start.scene.ron")` (see
   [Saving a checkpoint as a setup](#saving-a-checkpoint-as-a-setup)).
@@ -529,7 +535,13 @@ is also a newer one.
 ```
 
 Types are written as short type paths, followed by a reflect path for a field
-(`Editor.tool`, `Score.0`, `Board.cells[2]`). A value is plain RON read as the
+(`Editor.tool`, `Score.0`, `Board.cells[2]`). Where two registered types share
+a short path (Bevy has its own `Label` and `Button`), write the full type path
+(`bevy_ui_widgets::button::Button`); the short one is a load error listing the
+full paths of every candidate. The typed builders (`Check::count::<C>()`,
+`Target::component::<C>()`, ...) write the short path, so for such a type
+build the check from the full path (`Check::count_of(["my_game::Label"])`,
+`Target::Component("my_game::Label".into())`). A value is plain RON read as the
 field's type, so `Eq(Lay)` is the variant `Lay` of whatever enum the field
 holds.
 
@@ -752,6 +764,8 @@ frame, step to the next step, restart, speed (1/4x, 1/2x, 1x, 2x), loop on and
 off, **Take over**, **Export RON**, **Save as setup**, **Record**, **New: empty world** / **New: current state**, **Pick**, the live list of
 the selected scenario's checks, and its steps (see below). Space plays and pauses, Right steps a frame, Down steps to the next
 step and Left restarts, read from the Scenarios window only.
+
+The window's height is shared between the catalogue and the details panel: half each, unless one needs less than that, when the other gets the rest, and neither gets under a fifth.
 
 ```rust,ignore
 App::new()
