@@ -25,7 +25,9 @@ use bevy::{
     picking::input::PointerInputSettings,
     prelude::*,
     ui::InteractionDisabled,
-    ui::{ComputedNode, ComputedUiTargetCamera, ScrollPosition, UiGlobalTransform, px},
+    ui::{
+        ComputedNode, ComputedUiTargetCamera, OverflowAxis, ScrollPosition, UiGlobalTransform, px,
+    },
     ui_widgets::{Activate, Button},
     window::{CursorMoved, PrimaryWindow, WindowEvent},
 };
@@ -2305,4 +2307,82 @@ fn save_as_setup_says_why_it_failed() {
     let status = app.world().resource::<GalleryState>().status().to_owned();
     assert!(status.contains("Save as setup failed"), "{status}");
     assert!(status.contains("no way to save this app"), "{status}");
+}
+
+/// A scenario with a long list of steps, so the details panel has plenty to
+/// show.
+fn long_scenario() -> Scenario {
+    let steps: Vec<Step> = (0..40).map(|_| Step::wait(1)).collect();
+    Scenario::new("long").setup(spawn_app).steps(steps)
+}
+
+/// A gallery of `entries` scenarios, the first of which is [`long_scenario`].
+fn gallery_of(entries: u32) -> Gallery {
+    let mut all = vec![GalleryEntry::new(long_scenario())];
+    all.extend((1..entries).map(|at| GalleryEntry::new(adds(at))));
+    Gallery::new().group("All", all)
+}
+
+/// The heights, in logical pixels, of the catalogue and of the details panel:
+/// the two scrolling lists of the Scenarios window, top to bottom.
+fn panel_heights(app: &mut App) -> (f32, f32) {
+    let world = app.world_mut();
+    let mut lists: Vec<(f32, f32)> = world
+        .query::<(&Node, &ComputedNode, &UiGlobalTransform)>()
+        .iter(world)
+        .filter(|(style, ..)| style.overflow.y == OverflowAxis::Scroll)
+        .map(|(_, node, transform)| {
+            (
+                transform.affine().translation.y,
+                node.size().y * node.inverse_scale_factor(),
+            )
+        })
+        .collect();
+    lists.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(lists.len(), 2, "the catalogue and the details panel");
+    (lists[0].1, lists[1].1)
+}
+
+/// Updates a few times so the heights set from one layout have been laid out.
+fn settle(app: &mut App) {
+    for _ in 0..6 {
+        app.update();
+    }
+}
+
+#[test]
+fn a_long_catalogue_and_a_long_list_of_steps_share_the_window_half_and_half() {
+    let mut app = app_with(GalleryPlugin::new(gallery_of(60)).with_reset(reset_app));
+    ask(&mut app, GalleryAction::Select(0));
+    settle(&mut app);
+    let (catalogue, details) = panel_heights(&mut app);
+    assert!(
+        catalogue > 100.0 && details > 100.0,
+        "{catalogue} {details}"
+    );
+    assert!(
+        (catalogue - details).abs() < 2.0,
+        "{catalogue} vs {details}"
+    );
+}
+
+#[test]
+fn a_long_catalogue_leaves_a_selected_scenarios_details_a_fifth_at_least() {
+    let mut app = app_with(GalleryPlugin::new(gallery_of(60)).with_reset(reset_app));
+    // Nothing selected: the details panel needs almost nothing.
+    settle(&mut app);
+    let (catalogue, details) = panel_heights(&mut app);
+    let share = details / (catalogue + details);
+    assert!((share - 0.2).abs() < 0.01, "the details panel had {share}");
+}
+
+#[test]
+fn a_short_catalogue_gives_the_rest_to_a_long_list_of_steps() {
+    let mut app = app_with(GalleryPlugin::new(gallery_of(2)).with_reset(reset_app));
+    ask(&mut app, GalleryAction::Select(0));
+    settle(&mut app);
+    let (catalogue, details) = panel_heights(&mut app);
+    assert!(details > catalogue * 1.5, "{catalogue} vs {details}");
+    let share = catalogue / (catalogue + details);
+    assert!(share >= 0.19, "the catalogue had {share}");
 }

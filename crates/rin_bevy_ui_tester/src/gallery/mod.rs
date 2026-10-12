@@ -361,6 +361,7 @@ impl Plugin for GalleryPlugin {
                 input::exit_with_either_window,
                 ui::place_scenarios_window,
                 ui::scroll_catalogue,
+                ui::split_panels,
                 ui::style_controls,
                 ui::update_labels,
                 ui::update_details,
