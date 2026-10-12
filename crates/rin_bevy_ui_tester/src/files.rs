@@ -249,11 +249,11 @@ pub fn run_ron_tests_with_variants(
     }
 }
 
-/// Plays the files as [`run_ron_variants`] does and prints the standard
-/// harness's lines to `out` (a directory that cannot be read to `err`).
-/// Whether every test passed: the exit code of
-/// [`run_ron_tests_with_variants`], split from it so the lines and the verdict
-/// can be tested.
+/// Plays the files as [`run_ron_variants`] does, prints the standard harness's
+/// lines to `out` (a directory that cannot be read goes to `err`) and returns
+/// whether every test passed. It is the body of
+/// [`run_ron_tests_with_variants`], split out so the lines and the verdict can
+/// be tested.
 fn run_and_print(
     dir: &Path,
     registry: &Registry,
