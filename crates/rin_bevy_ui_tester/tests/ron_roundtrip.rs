@@ -35,6 +35,7 @@ fn in_rust() -> Scenario {
                 Target::app(UiTarget::Showing("Pause".into())),
                 5,
             ),
+            Step::move_burst([Vec2::new(30.0, 40.0), Vec2::new(35.0, 45.0)]),
             Step::caption("done"),
         ])
         .expect_check(Check::app(UiCheck::ActivatedOnce))
@@ -276,6 +277,7 @@ fn a_directory_of_files_becomes_results_named_after_the_files() {
             "app_target",
             "click_pause",
             "grouped",
+            "move_burst",
             "reflected_checks",
             "tree_snapshot",
             "type_text",
