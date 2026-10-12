@@ -629,6 +629,9 @@ impl Recorder {
     /// that a scenario cannot run in (a step aimed at a screen position, in a
     /// variant that changes the window) is recorded as a failed entry saying
     /// so. An empty list records nothing.
+    ///
+    /// Name the variants differently ([`Variant::new`]): two with one name get
+    /// separate folders, but their index entries carry the same title.
     #[must_use]
     pub fn variants(mut self, variants: impl IntoIterator<Item = Variant>) -> Self {
         self.variants = variants.into_iter().collect();
