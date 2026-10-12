@@ -12,6 +12,7 @@
 //! with `#[reflect(AppCheck)]` (see [`AppCheck`]), written inside `App(..)`.
 
 mod app;
+pub mod capture;
 pub mod pick;
 mod reflect;
 pub mod suggest;
@@ -29,19 +30,21 @@ use bevy::{
         resource::Resource,
         world::World,
     },
-    reflect::{GetPath, GetTypeRegistration, PartialReflect, Reflect, TypePath, TypeRegistry},
+    reflect::{GetTypeRegistration, Reflect, TypePath, TypeRegistry},
     state::state::States,
 };
 use ron::value::RawValue;
 use serde::{Deserialize, Serialize, de::DeserializeSeed};
 
+pub(crate) use self::capture::{CapturedValue, CapturedValues};
 pub use self::{
     app::{AppCheck, ReflectAppCheck},
+    capture::Measure,
     value::{Comparison, TextMatch, Value},
 };
 use self::{
     reflect::{Reflected, Role, find_type},
-    value::{Counted, Measure},
+    value::{Comparable, Counted},
     widget::WidgetState,
 };
 use crate::{
@@ -643,6 +646,21 @@ impl Check {
         parts
     }
 
+    /// The names of the captured values this check and the checks inside it
+    /// compare with, in order, once each place they are used.
+    pub(crate) fn captured_names(&self) -> Vec<&str> {
+        self.parts()
+            .into_iter()
+            .flat_map(|part| match part {
+                Self::Count { is, .. } | Self::Resource { is, .. } | Self::Component { is, .. } => {
+                    is.captured_names()
+                }
+                Self::InState { value, .. } => value.captured_name().into_iter().collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
     /// The target this check, not counting the checks inside it, looks at.
     const fn target_mut(&mut self) -> Option<&mut Target> {
         match self {
@@ -713,8 +731,13 @@ impl Check {
     /// Runs the check against `world`, which has waited `waited` frames for
     /// it: `None` while a [`Check::Within`] inside still waits for it to
     /// hold.
-    pub(crate) fn poll(&self, world: &World, waited: u32) -> Option<CheckResult> {
-        match self.verdict(world, waited) {
+    pub(crate) fn poll(
+        &self,
+        world: &World,
+        captures: &CapturedValues,
+        waited: u32,
+    ) -> Option<CheckResult> {
+        match self.verdict(world, captures, waited) {
             Verdict::Holds => Some(Ok(())),
             Verdict::Fails(message) | Verdict::Broken(message) => Some(Err(message)),
             Verdict::Pending(_) => None,
@@ -722,9 +745,9 @@ impl Check {
     }
 
     /// What the check comes to on this frame.
-    fn verdict(&self, world: &World, waited: u32) -> Verdict {
+    fn verdict(&self, world: &World, captures: &CapturedValues, waited: u32) -> Verdict {
         match self {
-            Self::Not(inner) => match inner.verdict(world, waited) {
+            Self::Not(inner) => match inner.verdict(world, captures, waited) {
                 Verdict::Holds => Verdict::Fails(format!("{inner} holds, but should not")),
                 Verdict::Fails(_) => Verdict::Holds,
                 other => other,
@@ -732,7 +755,7 @@ impl Check {
             Self::All(checks) => {
                 let verdicts: Vec<Verdict> = checks
                     .iter()
-                    .map(|check| check.verdict(world, waited))
+                    .map(|check| check.verdict(world, captures, waited))
                     .collect();
                 first_broken(&verdicts)
                     .or_else(|| verdicts.iter().find(|v| matches!(v, Verdict::Fails(_))))
@@ -743,7 +766,7 @@ impl Check {
             Self::Any(checks) => {
                 let verdicts: Vec<Verdict> = checks
                     .iter()
-                    .map(|check| check.verdict(world, waited))
+                    .map(|check| check.verdict(world, captures, waited))
                     .collect();
                 if let Some(broken) = first_broken(&verdicts) {
                     return broken.clone();
@@ -761,14 +784,14 @@ impl Check {
                     format!("none holds: {}", reasons.join("; "))
                 })
             }
-            Self::Within(frames, inner) => match inner.verdict(world, waited) {
+            Self::Within(frames, inner) => match inner.verdict(world, captures, waited) {
                 Verdict::Fails(message) if waited < u32::from(*frames) => Verdict::Pending(message),
                 Verdict::Fails(message) => {
                     Verdict::Fails(format!("{message} (still after {frames} frames)"))
                 }
                 other => other,
             },
-            leaf => match leaf.evaluate(world) {
+            leaf => match leaf.evaluate(world, captures) {
                 Ok(Ok(())) => Verdict::Holds,
                 Ok(Err(message)) => Verdict::Fails(message),
                 Err(message) => Verdict::Broken(message),
@@ -778,7 +801,7 @@ impl Check {
 
     /// Runs a check with no checks inside it. The outer error means it could
     /// not run at all, which [`Check::Not`] passes on rather than inverting.
-    fn evaluate(&self, world: &World) -> Result<CheckResult, String> {
+    fn evaluate(&self, world: &World, captures: &CapturedValues) -> Result<CheckResult, String> {
         let probe = Probe::new(world);
         match self {
             Self::App(value) => value.run(probe),
@@ -812,7 +835,7 @@ impl Check {
             | Self::Component { .. }
             | Self::InState { .. } => {
                 let types = reflect::app_types(world)?;
-                self.evaluate_reflected(world, &types.read())
+                self.evaluate_reflected(world, &types.read(), captures)
             }
             Self::Disabled(target) => widget_state(world, target, WidgetState::Disabled),
             Self::Checked(target) => widget_state(world, target, WidgetState::Checked),
@@ -857,6 +880,7 @@ impl Check {
         &self,
         world: &World,
         types: &TypeRegistry,
+        captures: &CapturedValues,
     ) -> Result<CheckResult, String> {
         match self {
             Self::Count { with, is } => {
@@ -871,43 +895,29 @@ impl Check {
                     return Err("a count needs at least one component".into());
                 }
                 let count = reflect::count(world, &registrations);
-                compare(is, &Counted(count), &count.to_string(), || self.subject())
+                let is = self.resolve_is(is, captures)?;
+                compare(&is, &Counted(count), &count.to_string(), || self.subject())
             }
             Self::Resource { path, is } => {
-                let (type_name, field) = reflect::split_path(path);
-                let registration = find_type(types, type_name, Role::Resource)
-                    .map_err(|problem| problem.message())?;
-                // A field the type cannot have is a mistake, not a state the
-                // world may yet reach.
-                reflect::field_type(types, registration, path, field)
-                    .map_err(|problem| problem.message())?;
-                let Some(resource) = reflect::resource(world, registration) else {
-                    return Ok(Err(format!("there is no `{type_name}` resource")));
+                let is = self.resolve_is(is, captures)?;
+                let (root, field) = match root_of(world, types, None, path)? {
+                    Ok(found) => found,
+                    Err(message) => return Ok(Err(message)),
                 };
-                compare_field(types, resource, path, field, is, || self.subject())
+                compare_field(types, root, path, field, &is, || self.subject())
             }
             Self::Component { target, path, is } => {
-                let (type_name, field) = reflect::split_path(path);
-                let registration = find_type(types, type_name, Role::Component)
-                    .map_err(|problem| problem.message())?;
-                reflect::field_type(types, registration, path, field)
-                    .map_err(|problem| problem.message())?;
-                let node = match widget::node(world, target) {
-                    Lookup::Found(node) => node,
-                    Lookup::Missing(message) => return Ok(Err(message)),
-                    Lookup::Ambiguous(message) | Lookup::NotANode(message) => return Err(message),
+                let is = self.resolve_is(is, captures)?;
+                let (root, field) = match root_of(world, types, Some(target), path)? {
+                    Ok(found) => found,
+                    Err(message) => return Ok(Err(message)),
                 };
-                let Some(component) = self_and_ancestors(world, node)
-                    .into_iter()
-                    .find_map(|entity| reflect::component(world, registration, entity))
-                else {
-                    return Ok(Err(format!(
-                        "neither {target:?} nor anything above it has a `{type_name}`"
-                    )));
-                };
-                compare_field(types, component, path, field, is, || self.subject())
+                compare_field(types, root, path, field, &is, || self.subject())
             }
             Self::InState { state, value } => {
+                let value = value
+                    .resolve(captures)
+                    .map_err(|message| format!("{}: {message}", self.subject()))?;
                 let registration =
                     find_type(types, state, Role::State).map_err(|problem| problem.message())?;
                 let Some(current) = reflect::state(world, registration) else {
@@ -918,7 +928,7 @@ impl Check {
                     registration,
                     types,
                 };
-                Ok(if measured.equals(value)? {
+                Ok(if measured.equals(&value)? {
                     Ok(())
                 } else {
                     Err(format!(
@@ -930,6 +940,13 @@ impl Check {
             }
             _ => Err("this check does not read through reflection".into()),
         }
+    }
+
+    /// `is` with the captured values it refers to looked up; a value that
+    /// cannot be names the check.
+    fn resolve_is(&self, is: &Comparison, captures: &CapturedValues) -> Result<Comparison, String> {
+        is.resolve(captures)
+            .map_err(|message| format!("{}: {message}", self.subject()))
     }
 
     /// What a measuring check measures, in words, such as ``count of `Ghost` ``.
@@ -945,6 +962,46 @@ impl Check {
             other => other.to_string(),
         }
     }
+}
+
+/// The reflected value a resource or component path starts from, and the
+/// field path after its type: the resource, or the component on `target`'s
+/// node or, failing that, the nearest node above it that has one.
+///
+/// The outer error says the path cannot be used at all (a type or field that
+/// cannot exist, a target that is ambiguous); the inner one that the world
+/// does not have it now, which is a failure and may change.
+fn root_of<'w, 'p>(
+    world: &'w World,
+    types: &TypeRegistry,
+    target: Option<&Target>,
+    path: &'p str,
+) -> Result<Result<(&'w dyn Reflect, &'p str), String>, String> {
+    let (type_name, field) = reflect::split_path(path);
+    let Some(target) = target else {
+        let registration =
+            find_type(types, type_name, Role::Resource).map_err(|problem| problem.message())?;
+        // A field the type cannot have is a mistake, not a state the world
+        // may yet reach.
+        reflect::field_type(types, registration, path, field)
+            .map_err(|problem| problem.message())?;
+        return Ok(reflect::resource(world, registration)
+            .map(|resource| (resource, field))
+            .ok_or_else(|| format!("there is no `{type_name}` resource")));
+    };
+    let registration =
+        find_type(types, type_name, Role::Component).map_err(|problem| problem.message())?;
+    reflect::field_type(types, registration, path, field).map_err(|problem| problem.message())?;
+    let node = match widget::node(world, target) {
+        Lookup::Found(node) => node,
+        Lookup::Missing(message) => return Ok(Err(message)),
+        Lookup::Ambiguous(message) | Lookup::NotANode(message) => return Err(message),
+    };
+    Ok(self_and_ancestors(world, node)
+        .into_iter()
+        .find_map(|entity| reflect::component(world, registration, entity))
+        .map(|component| (component, field))
+        .ok_or_else(|| format!("neither {target:?} nor anything above it has a `{type_name}`")))
 }
 
 /// The component id of the reflected component called `name` in `world`'s
@@ -1112,16 +1169,12 @@ fn compare_field(
     path: &str,
     field: &str,
     is: &Comparison,
-    subject: impl FnOnce() -> String,
+    subject: impl Fn() -> String,
 ) -> Result<CheckResult, String> {
-    let value: &dyn PartialReflect = if field.is_empty() {
-        root.as_partial_reflect()
-    } else {
-        match root.reflect_path(field) {
-            Ok(value) => value,
-            // A field of another enum variant than the current one.
-            Err(error) => return Ok(Err(format!("`{path}` cannot be read now: {error}"))),
-        }
+    // A field of another enum variant than the current one fails the check.
+    let value = match reflect::field_value(root, path, field) {
+        Ok(value) => value,
+        Err(message) => return Ok(Err(message)),
     };
     let registration = value
         .get_represented_type_info()
@@ -1139,11 +1192,19 @@ fn compare_field(
 /// found, as `{subject} is {actual}, expected {expected}`.
 fn compare(
     is: &Comparison,
-    measured: &dyn Measure,
+    measured: &dyn Comparable,
     actual: &str,
-    subject: impl FnOnce() -> String,
+    subject: impl Fn() -> String,
 ) -> Result<CheckResult, String> {
-    Ok(if is.test(measured)? {
+    let holds = is.test(measured).map_err(|message| {
+        // A captured value is named in the message, so the check should be.
+        if is.is_captured() {
+            format!("{}: {message}", subject())
+        } else {
+            message
+        }
+    })?;
+    Ok(if holds {
         Ok(())
     } else {
         Err(format!(

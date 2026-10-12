@@ -281,6 +281,13 @@ fn step_section(out: &mut String, view: &StepView<'_>, frames: &[u32]) {
         }
         out.push_str("</ul>");
     }
+    if !view.captured.is_empty() {
+        out.push_str("<h4>Captured</h4><ul>");
+        for captured in view.captured {
+            let _ = write!(out, "<li>{}</li>", escape(&captured.describe()));
+        }
+        out.push_str("</ul>");
+    }
     if !view.checks.is_empty() {
         out.push_str("<h4>Checks</h4><ul>");
         for check in view.checks {

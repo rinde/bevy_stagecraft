@@ -17,8 +17,8 @@ use bevy::{
         world::World,
     },
     reflect::{
-        Access, NamedField, ParsedPath, PartialReflect, Reflect, ReflectFromReflect, TypeInfo,
-        TypePathTable, TypeRegistration, TypeRegistry, UnnamedField,
+        Access, GetPath, NamedField, ParsedPath, PartialReflect, Reflect, ReflectFromReflect,
+        TypeInfo, TypePathTable, TypeRegistration, TypeRegistry, UnnamedField,
         enums::VariantInfo,
         serde::{TypedReflectDeserializer, TypedReflectSerializer},
     },
@@ -26,8 +26,8 @@ use bevy::{
 };
 
 use super::{
-    Problem,
-    value::{Comparison, Counted, Measure, Value},
+    CapturedValue, Problem,
+    value::{Comparable, Comparison, Counted, Value},
 };
 use crate::targets::is_tooling;
 
@@ -305,6 +305,10 @@ pub(super) fn check_comparison(
     comparison: &Comparison,
 ) -> Result<(), Problem> {
     for value in comparison.values() {
+        // A captured value is only known once the scenario has run so far.
+        if value.captured_name().is_some() {
+            continue;
+        }
         let read = read_value(types, registration, value)?;
         if comparison.orders() && order(read.as_ref(), read.as_ref()).is_none() {
             return Err(Problem::Other(format!(
@@ -319,12 +323,55 @@ pub(super) fn check_comparison(
 /// Checks a count's values before anything runs.
 pub(super) fn check_count(comparison: &Comparison) -> Result<(), Problem> {
     for value in comparison.values() {
+        if value.captured_name().is_some() {
+            continue;
+        }
         Counted::read(value).map_err(|message| Problem::BadValue {
             value: value.to_string(),
             message,
         })?;
     }
     Ok(())
+}
+
+/// The field at `field` in `root`, the reflect path after the type; `path` is
+/// the whole path, for the message.
+///
+/// # Errors
+///
+/// Says why the field cannot be read now, such as a field of another enum
+/// variant than the current one.
+pub(super) fn field_value<'a>(
+    root: &'a dyn Reflect,
+    path: &str,
+    field: &str,
+) -> Result<&'a dyn PartialReflect, String> {
+    if field.is_empty() {
+        return Ok(root.as_partial_reflect());
+    }
+    root.reflect_path(field)
+        .map_err(|error| format!("`{path}` cannot be read now: {error}"))
+}
+
+/// What the field at `field` in `root` holds, written as RON with the name
+/// of its type, for a capture.
+///
+/// # Errors
+///
+/// Says why the field cannot be read now or written.
+pub(super) fn capture_field(
+    types: &TypeRegistry,
+    root: &dyn Reflect,
+    path: &str,
+    field: &str,
+) -> Result<CapturedValue, String> {
+    let value = field_value(root, path, field)?;
+    let type_name = value
+        .get_represented_type_info()
+        .map_or("unknown", |info| info.type_path_table().short_path());
+    let ron = ron::to_string(&TypedReflectSerializer::new(value, types))
+        .map_err(|error| format!("`{path}` cannot be written as a value: {error}"))?;
+    Ok(CapturedValue::new(ron, type_name.to_owned()))
 }
 
 /// How two reflected values order, for the types that have one: numbers and
@@ -380,7 +427,7 @@ impl Reflected<'_> {
     }
 }
 
-impl Measure for Reflected<'_> {
+impl Comparable for Reflected<'_> {
     fn equals(&self, value: &Value) -> Result<bool, String> {
         let expected = self.read(value)?;
         self.value

@@ -21,13 +21,13 @@ use bevy::{
 };
 
 use crate::{
-    check::{Check, suggest::NoiseFilter},
+    check::{CapturedValues, Check, Measure, suggest::NoiseFilter},
     headless::HeadlessPlugins,
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems, character_events},
     probe::check_hover,
     scenario::{ORIGIN, Scenario, Step, flatten, with_group_path},
     targets::{Action, NotActionable, ResolvedTarget, Target, actionable, pressable, resolve},
-    trace::{ScenarioTrace, TargetTrace, TraceCheck, TracePoint},
+    trace::{ScenarioTrace, TargetTrace, TraceCaptured, TraceCheck, TracePoint},
 };
 
 /// How a step or a check ended.
@@ -257,6 +257,10 @@ struct Running {
     /// What steps found for their targets, until the player moves it into
     /// its trace.
     resolved: Vec<(usize, TargetTrace)>,
+    /// What `Capture` steps have read so far, for checks to compare with.
+    captures: CapturedValues,
+    /// What `Capture` steps read, until the player moves it into its trace.
+    captured: Vec<(usize, TraceCaptured)>,
     /// The expectations' outcomes so far, once the steps are done: `None`
     /// for one still waiting to hold.
     expected: Option<Vec<Option<Outcome>>>,
@@ -528,6 +532,8 @@ impl ScenarioPlayer {
             aborted: false,
             tracing: self.tracing.is_some(),
             resolved: Vec::new(),
+            captures: CapturedValues::default(),
+            captured: Vec::new(),
             expected: None,
             expect_waited: 0,
         });
@@ -625,7 +631,7 @@ impl ScenarioPlayer {
                     waited,
                 } => {
                     let name = check.to_string();
-                    let Some(result) = check.poll(world, waited) else {
+                    let Some(result) = check.poll(world, &run.captures, waited) else {
                         // Not yet: look again after one more frame.
                         run.ops.push_front(Op::Check {
                             step,
@@ -676,6 +682,9 @@ fn move_targets(trace: &mut Option<ScenarioTrace>, run: &mut Running) {
     };
     for (step, found) in run.resolved.drain(..) {
         trace.add_target(step, found);
+    }
+    for (step, captured) in run.captured.drain(..) {
+        trace.add_captured(step, captured);
     }
 }
 
@@ -832,7 +841,41 @@ impl Running {
                 check,
                 waited: 0,
             }),
+            Step::Capture { name, value } => self.capture(world, report, index, name, &value),
             Step::Caption(text) => self.ops.push_back(Op::Caption(text)),
+        }
+    }
+
+    /// Reads `value` now and keeps it as `name`; stops the script, naming the
+    /// capture, if it cannot be read.
+    fn capture(
+        &mut self,
+        world: &World,
+        report: &mut ScenarioReport,
+        index: usize,
+        name: String,
+        value: &Measure,
+    ) {
+        match value.read(world) {
+            Ok(read) => {
+                if self.tracing {
+                    self.captured.push((
+                        index,
+                        TraceCaptured {
+                            name: name.clone(),
+                            measured: value.to_string(),
+                            value: read.ron().to_owned(),
+                            type_name: read.type_name().to_owned(),
+                        },
+                    ));
+                }
+                self.captures.insert(name, read);
+            }
+            Err(message) => self.abort(
+                report,
+                index,
+                format!("cannot capture {name:?} ({value}): {message}"),
+            ),
         }
     }
 
@@ -1000,10 +1043,12 @@ impl Running {
             *outcome = if self.aborted {
                 Some(Outcome::Skipped)
             } else {
-                expect.poll(world, waited).map(|result| match result {
-                    Ok(()) => Outcome::Pass,
-                    Err(message) => Outcome::Fail(message),
-                })
+                expect
+                    .poll(world, &self.captures, waited)
+                    .map(|result| match result {
+                        Ok(()) => Outcome::Pass,
+                        Err(message) => Outcome::Fail(message),
+                    })
             };
         }
         if outcomes.iter().any(Option::is_none) {

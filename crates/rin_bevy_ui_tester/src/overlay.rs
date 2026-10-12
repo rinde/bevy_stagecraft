@@ -328,6 +328,7 @@ pub fn describe_step(step: &Step, before: &[Step], descriptions: &TargetDescript
         } => format!("Type {text:?} into {}", descriptions.describe(target)),
         Step::Wait(frames) => format!("Wait {frames} frames"),
         Step::Check(check) => format!("Check: {check}"),
+        Step::Capture { name, value } => format!("Capture {name:?}: {value}"),
         Step::Caption(text) => text.clone(),
         Step::Timeout(frames, inner) => format!(
             "{} (waits up to {frames} frames)",

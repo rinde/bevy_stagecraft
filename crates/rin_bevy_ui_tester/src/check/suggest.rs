@@ -41,7 +41,7 @@ use bevy::{
 };
 
 use super::{
-    Check, Comparison, Value,
+    CapturedValues, Check, Comparison, Value,
     app::app_facts,
     reflect::{self, Role},
     widget::{self, WidgetState},
@@ -567,7 +567,11 @@ pub(super) fn holds(world: &World, check: &Check) -> bool {
             })
         });
     // The lock is let go first: running the check takes it again.
-    loads && matches!(check.poll(world, 0), Some(Ok(())))
+    loads
+        && matches!(
+            check.poll(world, &CapturedValues::default(), 0),
+            Some(Ok(()))
+        )
 }
 
 #[cfg(test)]

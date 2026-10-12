@@ -58,8 +58,10 @@ use crate::{
 /// came later still in version 3, and so did the script's `action_timeout`
 /// and the `Timeout(..)` and `Force(..)` steps that go with steps waiting
 /// for their targets to be actionable, the `scale_factor`, the `Type(..)` step
-/// that types text and the `Group(name: .., steps: [..])` step that names a run
-/// of steps: they only add forms, so every file that loaded before still does.
+/// that types text, the `Group(name: .., steps: [..])` step that names a run
+/// of steps, and the `Capture(name: .., value: ..)` step with the
+/// `Captured(..)` operand of a comparison: they only add forms, so every file
+/// that loaded before still does.
 /// Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
@@ -504,9 +506,18 @@ pub(crate) fn build_scenario(
         view.type_against(&types)
             .map_err(|problem| load_error(problem, "the view", false))?;
     }
-    resolve_steps(&mut script.steps, &types, &mut 0, &mut Vec::new())?;
+    let mut captured = Vec::new();
+    resolve_steps(
+        &mut script.steps,
+        &types,
+        &mut 0,
+        &mut Vec::new(),
+        &mut captured,
+    )?;
     for check in &mut script.expect {
         resolve_check(&types, check, "the expect list")?;
+        // The expect list runs last, so it sees every capture.
+        known_captures(check, &captured, "the expect list", "the script")?;
     }
     drop(types);
     Ok(Scenario::assemble(script))
@@ -526,12 +537,14 @@ pub(crate) fn check_scale_factor(scale_factor: f32) -> Result<(), String> {
 /// Reads the app's values in `steps`, and in the steps of the groups inside
 /// them, and checks what each step names. `index` counts the steps that are
 /// not groups, as the report does, so an error names the step the report
-/// would; `path` is the groups around `steps`.
+/// would; `path` is the groups around `steps`; `captured` collects the names
+/// `Capture` steps give, in order, which a check may use only after one.
 fn resolve_steps(
     steps: &mut [Step],
     types: &TypeRegistry,
     index: &mut usize,
     path: &mut Vec<String>,
+    captured: &mut Vec<String>,
 ) -> Result<(), LoadError> {
     for step in steps {
         if let Step::Group { name, steps } = step {
@@ -542,7 +555,7 @@ fn resolve_steps(
                 });
             }
             path.push(name.clone());
-            resolve_steps(steps, types, index, path)?;
+            resolve_steps(steps, types, index, path, captured)?;
             path.pop();
             continue;
         }
@@ -554,8 +567,48 @@ fn resolve_steps(
                 .type_against(types)
                 .map_err(|problem| load_error(problem, &used_by, false))?;
         }
-        if let Step::Check(check) = step {
-            resolve_check(types, check, &used_by)?;
+        match step {
+            Step::Check(check) => {
+                resolve_check(types, check, &used_by)?;
+                known_captures(check, captured, &used_by, "this step")?;
+            }
+            Step::Capture { name, value } => {
+                if captured.contains(name) {
+                    return Err(LoadError::Invalid {
+                        used_by,
+                        message: format!(
+                            "`{name}` is captured twice; a captured name is used once in a script"
+                        ),
+                    });
+                }
+                value
+                    .problem(types)
+                    .map_err(|problem| load_error(problem, &used_by, false))?;
+                captured.push(name.clone());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a check that compares with a value no `Capture` step has taken
+/// among `captured`, naming the check's place `used_by`; `before` says before
+/// what the capture must come.
+fn known_captures(
+    check: &Check,
+    captured: &[String],
+    used_by: &str,
+    before: &str,
+) -> Result<(), LoadError> {
+    for name in check.captured_names() {
+        if !captured.iter().any(|known| known == name) {
+            return Err(LoadError::BadCheck {
+                used_by: used_by.to_owned(),
+                message: format!(
+                    "nothing is captured as {name:?} before {before}; add `Capture(name: {name:?}, value: ..)` earlier"
+                ),
+            });
         }
     }
     Ok(())
@@ -633,6 +686,7 @@ fn step_targets(step: &mut Step) -> Vec<&mut Target> {
             into: Some(target), ..
         } => vec![target],
         Step::Drag { from, to, .. } => vec![from, to],
+        Step::Capture { value, .. } => value.target_mut().into_iter().collect(),
         Step::Timeout(_, inner) | Step::Force(inner) => step_targets(inner),
         _ => Vec::new(),
     }
