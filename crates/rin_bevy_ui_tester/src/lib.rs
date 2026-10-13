@@ -49,7 +49,7 @@ pub use extension::{
     ReflectAppView, Setup, SeveralAppTypes, View, app_type,
 };
 pub use files::{
-    FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests,
+    FileOutcome, FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests,
     run_ron_tests_with_variants, run_ron_variants,
 };
 #[cfg(feature = "gallery")]
@@ -96,4 +96,4 @@ pub use trace::{
     ScenarioTrace, StepTrace, StepView, TargetTrace, TraceCaptured, TraceCheck, TracePoint, UiLine,
     step_title,
 };
-pub use variant::Variant;
+pub use variant::{DEFAULT_VARIANT_NAME, Variant};

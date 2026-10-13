@@ -546,6 +546,9 @@ pub struct Scenario {
     base_dir: Option<PathBuf>,
     /// The app's view, which the script holds.
     app_view: Option<View>,
+    /// The names of the variants the scenario runs in; empty when it runs in
+    /// every one.
+    variants: Vec<String>,
     /// The script.
     steps: Vec<Step>,
     /// Checks run once the script has finished.
@@ -564,6 +567,7 @@ impl fmt::Debug for Scenario {
             .field("app_setup", &self.app_setup)
             .field("base_dir", &self.base_dir)
             .field("app_view", &self.app_view)
+            .field("variants", &self.variants)
             .field("steps", &self.steps)
             .field("expects", &self.expects)
             .finish()
@@ -584,6 +588,7 @@ impl Scenario {
             app_setup: None,
             base_dir: None,
             app_view: None,
+            variants: Vec::new(),
             steps: Vec::new(),
             expects: Vec::new(),
         }
@@ -672,6 +677,28 @@ impl Scenario {
     pub const fn scale_factor(mut self, scale_factor: f32) -> Self {
         self.scale_factor = Some(scale_factor);
         self
+    }
+
+    /// Restricts the scenario to the variants with these names (see
+    /// [`crate::Variant::name`]): a runner [skips](crate::Variant::skips) it in every other
+    /// variant rather than failing. The default variant answers to `default`
+    /// (or the empty string). Leaving this out, the default, runs the
+    /// scenario in every variant.
+    ///
+    /// A file writes this as `variants: [..]`. It is the way a scenario that
+    /// needs a fixed screen position is limited to the variants whose window
+    /// it was written for.
+    #[must_use]
+    pub fn variants(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.variants = names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The names of the variants the scenario runs in, in order; empty when
+    /// it runs in every variant. See [`Scenario::variants`].
+    #[must_use]
+    pub fn variant_names(&self) -> &[String] {
+        &self.variants
     }
 
     /// Sets how many frames a step waits for its target to be actionable
@@ -834,6 +861,7 @@ impl Scenario {
             action_timeout: self.action_timeout,
             setup: self.app_setup.clone(),
             view: self.app_view.clone(),
+            variants: self.variants.clone(),
             steps: self.steps.clone(),
             expect: self.expects.clone(),
         }
@@ -895,6 +923,7 @@ impl Scenario {
             app_setup: script.setup,
             base_dir: None,
             app_view: script.view,
+            variants: script.variants,
             steps: script.steps,
             expects: script.expect,
         }

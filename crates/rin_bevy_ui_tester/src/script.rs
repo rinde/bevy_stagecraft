@@ -61,7 +61,8 @@ use crate::{
 /// that types text, the `Group(name: .., steps: [..])` step that names a run
 /// of steps, and the `Capture(name: .., value: ..)` step with the
 /// `Captured(..)` operand of a comparison: they only add forms, so every file
-/// that loaded before still does.
+/// that loaded before still does. The `variants` field came later still in
+/// version 3 and also only adds a form.
 /// Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
@@ -119,6 +120,12 @@ pub struct Script {
     /// How the world is shown: one of the app's views.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<View>,
+    /// The names of the variants the scenario runs in (see
+    /// [`Variant::name`](crate::Variant::name)); empty, the default, means
+    /// every variant. A runner skips a file and variant not listed rather
+    /// than failing it. The default variant answers to `default`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<String>,
     /// What the scenario does.
     pub steps: Vec<Step>,
     /// Checks that run once the steps have finished. A recorded session
