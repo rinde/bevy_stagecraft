@@ -461,14 +461,16 @@ steps: [
 ],
 ```
 
-Like `Screen(..)`, a burst names fixed positions of the window, so a
-non-default variant refuses a script that holds one. It only adds a form to
-format version 3, so every older file still loads.
+Like `Screen(..)`, a burst names fixed positions of the window (logical
+pixels), so a variant that runs the scenario in another window size refuses a
+script that holds one; a scale factor or a theme change does not. It only
+adds a form to format version 3, so every older file still loads.
 
 ## Scenarios as RON
 
 `Scenario::to_script()` gives a `Script`, plain serde data (format version,
-name, window size, action timeout, setup, view, steps, expect list), and `Scenario::from_ron`
+name, window size, action timeout, setup, view, variants, steps, expect list),
+and `Scenario::from_ron`
 reads one back, so a scenario can be written in Rust or as a file and
 converted either way. Closures cannot be serialised, so a script holds the
 app's setup, view, targets and checks as values of its own reflected enums,
@@ -630,11 +632,35 @@ has no brackets). A variant replaces the scenario's own window size, scale
 factor, app setup or app view where it sets one; a scenario's setup and view
 closures still run afterwards.
 
-A step aimed at a fixed screen position (`Screen(..)`) only makes sense in the
-default variant, where nothing changes. In any other variant it is an error
-naming the step (`step 3 aims at a fixed screen position ...`): in the test it
-is a failed test, in the recorder and the gallery a failed setup. Aim at the
-widget instead (`Text`, `Role`, `Component`, `Name`).
+A step aimed at a fixed screen position (`Screen(..)`, and a `MoveBurst(..)`
+of positions) is in **logical** pixels, so it stays valid wherever the
+logical window is the one it was written for. A variant that only sets a
+scale factor, an app setup or an app view keeps that window, and the step
+runs; a variant that sets another window size makes the position ambiguous
+and is an error naming the step (`step 3 aims at a fixed screen position
+...`): in the test it is a failed test, in the recorder and the gallery a
+failed setup. Aim at the widget instead (`Text`, `Role`, `Component`,
+`Name`).
+
+A scenario can restrict the variants it runs in, so a file that really needs
+a screen position is run only where it is valid and skipped everywhere else
+rather than failing. It lists the variant names in the file:
+
+```ron
+(
+    format_version: 3,
+    name: "drag the thumb",
+    // The drag starts at a fixed spot, so only the window it was written for
+    // is valid.
+    variants: ["default"],
+    steps: [ /* .. */ ],
+)
+```
+
+The default variant answers to `default`. A file that names none runs in
+every variant. `run_ron_variants` (and `run_ron_tests_with_variants`) reports
+a variant a file is thus limited out of as `skipped`, not `failed`, and
+`FileResult::skipped` says so.
 
 ## Seeing what the script does
 

@@ -16,10 +16,13 @@
 //! covers exactly those, so list the default one too to cover the scenario as
 //! it is written.
 //!
-//! A step that aims at a fixed screen position ([`Target::Screen`]) only makes
-//! sense where the window is the one the position was written for. In any
-//! variant that changes something it is an error naming the step; aim at the
-//! widget instead.
+//! A step that aims at a fixed screen position ([`Target::Screen`]) is in
+//! logical pixels, so it only makes sense where the logical window is the one
+//! the position was written for. A variant that only changes the scale factor
+//! or the app's setup or view leaves that window alone and runs the step; a
+//! variant that sets another window size is an error naming the step unless
+//! the scenario [restricts itself](Scenario::variants) to the variants it is
+//! valid in, where the others are skipped rather than failed.
 
 use core::fmt;
 
@@ -149,7 +152,7 @@ impl Variant {
     }
 
     /// Whether this is the default variant: it changes nothing, so a scenario
-    /// runs as written. Steps aimed at a screen position are only valid here.
+    /// runs as written.
     #[must_use]
     pub const fn is_default(&self) -> bool {
         self.window.is_none()
@@ -178,12 +181,40 @@ impl Variant {
     /// # Errors
     ///
     /// [`LoadError::Invalid`] when the scale factor is not finite and above
-    /// zero, or when this is not the default variant and a step aims at a
-    /// fixed screen position ([`Target::Screen`]). It names the steps, counted
-    /// from 0 as a file's loader does.
+    /// zero, or when this variant runs the scenario in another window size and
+    /// a step aims at a fixed screen position ([`Target::Screen`] or a
+    /// [`Step::MoveBurst`], whose positions are logical too). It names the
+    /// steps, counted from 0 as a file's loader does.
     pub fn apply(&self, scenario: &Scenario) -> Result<Scenario, LoadError> {
         self.problem(scenario)
             .map_or_else(|| Ok(self.varied(scenario)), Err)
+    }
+
+    /// Whether `scenario` restricts itself away from this variant: it names
+    /// the variants it runs in ([`Scenario::variant_names`], a file's
+    /// `variants: [..]`) and this is not one of them. A runner skips such a
+    /// file and variant rather than failing it. A scenario that names none
+    /// runs in every variant.
+    ///
+    /// The default variant answers to the name `default` (the empty name a
+    /// variant with no name has).
+    #[must_use]
+    pub fn skips(&self, scenario: &Scenario) -> bool {
+        let names = scenario.variant_names();
+        if names.is_empty() {
+            return false;
+        }
+        !names.iter().any(|name| self.matches_name(name))
+    }
+
+    /// Whether this variant answers to `name`: its own name, or `default`
+    /// (or the empty string) for a variant with no name.
+    fn matches_name(&self, name: &str) -> bool {
+        if name.is_empty() || name == DEFAULT_VARIANT_NAME {
+            self.name.is_empty()
+        } else {
+            self.name == name
+        }
     }
 
     /// Why `scenario` cannot run in this variant, if it cannot; see
@@ -197,7 +228,10 @@ impl Variant {
                 message,
             });
         }
-        if self.is_default() {
+        // A fixed position is in logical pixels, so it stays valid wherever
+        // the logical window is the one it was written for: a scale factor, a
+        // setup or a view leaves that window alone.
+        if !self.changes_window(scenario) {
             return None;
         }
         let steps = screen_steps(scenario.script());
@@ -208,12 +242,21 @@ impl Variant {
             used_by: steps_text(&steps),
             message: format!(
                 "aims at a fixed screen position (`Screen(..)` or a `MoveBurst(..)` of \
-                 positions), which only makes sense in the default variant, and `{}` is not \
-                 the default one; aim at the widget with `Text(..)`, `Role(..)`, \
-                 `Component(..)` or `Name(..)` instead",
+                 positions), which is in logical pixels and only makes sense in the window \
+                 the scenario was written for, but `{}` runs it in another window size; aim at \
+                 the widget with `Text(..)`, `Role(..)`, `Component(..)` or `Name(..)` instead, \
+                 or list the variants the file runs in with `variants: [..]` so the others are \
+                 skipped",
                 self.label(scenario.name())
             ),
         })
+    }
+
+    /// Whether this variant runs `scenario` in a different logical window
+    /// than the scenario's own. A window size the scenario already asks for
+    /// changes nothing.
+    fn changes_window(&self, scenario: &Scenario) -> bool {
+        self.window.is_some() && self.window != scenario.window()
     }
 
     /// The scenario as this variant runs it, whether or not it can.
@@ -227,6 +270,11 @@ impl Variant {
         )
     }
 }
+
+/// The name the default variant answers to in a scenario's variant list
+/// ([`Scenario::variant_names`]): `default`, because a variant with no name
+/// is written as the empty string.
+pub const DEFAULT_VARIANT_NAME: &str = "default";
 
 impl fmt::Display for Variant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

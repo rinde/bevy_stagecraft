@@ -14,8 +14,8 @@ use bevy::{
     window::PrimaryWindow,
 };
 use rin_bevy_ui_tester::{
-    AppSetup, Check, HeadlessPlugins, LoadError, NoiseFilter, ReflectAppSetup, Scenario,
-    ScenarioReport, Step, Target, Variant, run_ron_variants,
+    AppSetup, Check, FileOutcome, HeadlessPlugins, LoadError, NoiseFilter, ReflectAppSetup,
+    Scenario, ScenarioReport, Step, Target, Variant, run_ron_variants,
 };
 
 /// How many times the button was activated.
@@ -250,8 +250,8 @@ fn a_screen_position_inside_a_timeout_or_a_locator_is_found_too() {
         .step(Step::click())
         .step(Step::move_to(Target::screen(Vec2::new(1.0, 1.0))).with_timeout(3))
         .step(Step::glide(Target::screen(Vec2::new(2.0, 2.0)), 4).forced());
-    let error = Variant::new("themed")
-        .app_setup(RowUi::Dark)
+    let error = Variant::new("narrow")
+        .window_size(640, 480)
         .apply(&scenario)
         .expect_err("refused");
     assert!(error.to_string().contains("steps 1, 2"), "{error}");
@@ -296,8 +296,8 @@ fn a_screen_position_in_a_group_inside_a_group_names_the_whole_path() {
             "leave",
             [Step::glide(Target::screen(Vec2::new(2.0, 2.0)), 4)],
         ));
-    let error = Variant::new("themed")
-        .app_setup(RowUi::Dark)
+    let error = Variant::new("narrow")
+        .window_size(640, 480)
         .apply(&scenario)
         .expect_err("refused");
     let text = error.to_string();
@@ -325,6 +325,63 @@ fn a_group_without_a_screen_position_is_fine_in_another_variant() {
             .apply(&scenario)
             .is_ok()
     );
+}
+
+#[test]
+fn a_screen_position_in_a_scale_factor_only_variant_runs() {
+    // The position is logical, so a scale factor leaves it just as valid as
+    // at 1.0: only a window-size change makes it ambiguous.
+    let scenario = Scenario::new("fixed")
+        .app_setup(RowUi::Light)
+        // The middle of the "Pause" button, which is logical at any scale.
+        .step(Step::move_to(Target::screen(Vec2::new(750.0, 25.0))))
+        .step(Step::click())
+        .expect_check(Check::resource::<Activations>(".0").eq(1_u32));
+    let retina = Variant::new("retina").scale_factor(2.0);
+    assert!(
+        retina.apply(&scenario).is_ok(),
+        "the scale-only variant runs"
+    );
+    let report = play(&scenario, &retina).expect("runs");
+    assert!(report.passed(), "{report:#?}");
+    assert_eq!(report.name, "fixed [retina]");
+}
+
+#[test]
+fn a_screen_position_in_a_setup_only_variant_runs() {
+    // A theme changes how things look, not where logical positions are.
+    let scenario = Scenario::new("fixed")
+        .app_setup(RowUi::Light)
+        .step(Step::move_to(Target::screen(Vec2::new(750.0, 25.0))))
+        .step(Step::click())
+        .expect_check(Check::resource::<Activations>(".0").eq(1_u32));
+    let dark = Variant::new("dark").app_setup(RowUi::Dark);
+    assert!(dark.apply(&scenario).is_ok(), "the setup-only variant runs");
+    let report = play(&scenario, &dark).expect("runs");
+    assert!(report.passed(), "{report:#?}");
+}
+
+#[test]
+fn a_scenario_restricted_to_the_default_variant_is_skipped_in_the_others() {
+    let scenario = Scenario::new("fixed")
+        .app_setup(RowUi::Light)
+        .variants(["default"])
+        .step(Step::move_to(Target::screen(Vec2::new(150.0, 25.0))));
+    assert!(!Variant::default().skips(&scenario));
+    assert!(
+        Variant::new("narrow")
+            .window_size(640, 480)
+            .skips(&scenario)
+    );
+    assert!(Variant::new("retina").scale_factor(2.0).skips(&scenario));
+    assert_eq!(scenario.variant_names(), ["default".to_owned()]);
+}
+
+#[test]
+fn a_scenario_that_names_no_variants_runs_in_every_one() {
+    let scenario = Scenario::new("plain").step(Step::wait(1));
+    assert!(!Variant::default().skips(&scenario));
+    assert!(scenario.variant_names().is_empty());
 }
 
 #[test]
@@ -371,7 +428,10 @@ fn run_ron_variants_names_each_file_and_variant_and_filters_by_that_name() {
         .expect("reads the directory");
     assert_eq!(narrow.len(), 1);
     assert_eq!(narrow[0].variant, "narrow");
-    assert!(all.iter().all(|result| result.outcome.is_ok()));
+    assert!(
+        all.iter()
+            .all(|result| matches!(result.outcome, FileOutcome::Ran(Ok(_))))
+    );
 }
 
 /// A finished headless app at the given logical window size, built without

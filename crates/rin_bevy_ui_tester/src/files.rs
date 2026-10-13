@@ -37,6 +37,18 @@ use crate::{
     variant::Variant,
 };
 
+/// How one file and variant ended.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileOutcome {
+    /// The file loaded (or not) and the scenario ran. `Err` is why it did not
+    /// load, or why the variant refused it.
+    Ran(Result<ScenarioReport, LoadError>),
+    /// The scenario names the variants it runs in ([`Scenario::variant_names`])
+    /// and this is not one, so it was skipped, not failed. See
+    /// [`Variant::skips`].
+    Skipped,
+}
+
 /// One `.ron` file played.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileResult {
@@ -49,30 +61,43 @@ pub struct FileResult {
     pub variant: String,
     /// The file.
     pub path: PathBuf,
-    /// The report, or why the file did not load.
-    pub outcome: Result<ScenarioReport, LoadError>,
+    /// The report, why the file did not load, or that it was skipped.
+    pub outcome: FileOutcome,
 }
 
 impl FileResult {
-    /// Whether the file loaded and its scenario passed.
+    /// Whether the file loaded and its scenario passed. A skipped file counts
+    /// as passed: it was not run, so it is nothing to fail over.
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.outcome.as_ref().is_ok_and(ScenarioReport::passed)
+        match &self.outcome {
+            FileOutcome::Skipped => true,
+            FileOutcome::Ran(result) => result.as_ref().is_ok_and(ScenarioReport::passed),
+        }
     }
 
-    /// Why the test failed, one line per reason; empty when it passed.
+    /// Whether the scenario does not run in this variant and was skipped
+    /// rather than played.
+    #[must_use]
+    pub const fn skipped(&self) -> bool {
+        matches!(self.outcome, FileOutcome::Skipped)
+    }
+
+    /// Why the test failed, one line per reason; empty when it passed or was
+    /// skipped.
     #[must_use]
     pub fn failures(&self) -> Vec<String> {
         match &self.outcome {
-            Ok(report) if report.passed() => Vec::new(),
-            Ok(report) => {
+            FileOutcome::Skipped => Vec::new(),
+            FileOutcome::Ran(Ok(report)) if report.passed() => Vec::new(),
+            FileOutcome::Ran(Ok(report)) => {
                 let mut failures = report.failures();
                 if failures.is_empty() {
                     failures.push("the scenario did not finish".into());
                 }
                 failures
             }
-            Err(error) => vec![error.to_string()],
+            FileOutcome::Ran(Err(error)) => vec![error.to_string()],
         }
     }
 }
@@ -150,7 +175,9 @@ pub fn run_ron_files(
 /// Only the variants listed are played: include [`Variant::default`] to play
 /// the file as written too. A variant a file cannot run in (for example a
 /// step aimed at a screen position, in a variant with another window size) is
-/// a failed [`FileResult`] that says so.
+/// a failed [`FileResult`] that says so. A file that names the variants it
+/// runs in ([`Scenario::variant_names`]) is skipped ([`FileResult::skipped`])
+/// in every other variant, not failed.
 ///
 /// # Errors
 ///
@@ -183,11 +210,13 @@ pub fn run_ron_variants(
         }
         let loaded = load_ron_file(&path, registry);
         for (variant, name) in wanted {
-            let outcome = loaded
-                .as_ref()
-                .map_err(Clone::clone)
-                .and_then(|scenario| variant.apply(scenario))
-                .map(|scenario| run(&scenario));
+            let outcome = match &loaded {
+                Ok(scenario) if variant.skips(scenario) => FileOutcome::Skipped,
+                Ok(scenario) => {
+                    FileOutcome::Ran(variant.apply(scenario).map(|scenario| run(&scenario)))
+                }
+                Err(error) => FileOutcome::Ran(Err(error.clone())),
+            };
             results.push(FileResult {
                 name,
                 variant: variant.name().to_owned(),
@@ -280,11 +309,14 @@ fn print_results(out: &mut impl Write, results: &[FileResult]) -> bool {
     let mut say = |line: String| writeln!(out, "{line}").ok();
     say(format!("\nrunning {} tests", results.len()));
     for result in results {
-        say(format!(
-            "test {} ... {}",
-            result.name,
-            if result.passed() { "ok" } else { "FAILED" }
-        ));
+        let verdict = if result.skipped() {
+            "skipped"
+        } else if result.passed() {
+            "ok"
+        } else {
+            "FAILED"
+        };
+        say(format!("test {} ... {verdict}", result.name));
     }
     let failed: Vec<_> = results.iter().filter(|result| !result.passed()).collect();
     for result in &failed {
@@ -297,18 +329,24 @@ fn print_results(out: &mut impl Write, results: &[FileResult]) -> bool {
             say(line);
         }
     }
+    let skipped = results.iter().filter(|result| result.skipped()).count();
     say(format!(
-        "\ntest result: {}. {} passed; {} failed\n",
+        "\ntest result: {}. {} passed; {} failed; {} skipped\n",
         if failed.is_empty() { "ok" } else { "FAILED" },
-        results.len() - failed.len(),
-        failed.len()
+        results.len() - failed.len() - skipped,
+        failed.len(),
+        skipped
     ));
     failed.is_empty()
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, reason = "tests may panic")]
+    #![allow(
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        reason = "tests may panic"
+    )]
 
     use bevy::prelude::*;
 
@@ -424,7 +462,10 @@ mod tests {
             ]
         );
         let refused = results.last().expect("a result");
-        assert!(matches!(refused.outcome, Err(LoadError::Invalid { .. })));
+        assert!(matches!(
+            refused.outcome,
+            FileOutcome::Ran(Err(LoadError::Invalid { .. }))
+        ));
         assert!(
             refused
                 .failures()
@@ -453,7 +494,7 @@ mod tests {
             "test fixed ... ok",
             "test fixed [narrow] ... FAILED",
             "---- fixed [narrow] (",
-            "test result: FAILED. 3 passed; 1 failed",
+            "test result: FAILED. 3 passed; 1 failed; 0 skipped",
         ] {
             assert!(out.contains(line), "missing {line:?} in\n{out}");
         }
@@ -470,8 +511,77 @@ mod tests {
         let (passed, out, _) = print_for(&dir, "fine", &variants);
         assert!(passed, "{out}");
         assert!(out.contains("running 2 tests"), "{out}");
-        assert!(out.contains("test result: ok. 2 passed; 0 failed"), "{out}");
+        assert!(
+            out.contains("test result: ok. 2 passed; 0 failed; 0 skipped"),
+            "{out}"
+        );
         assert!(!out.contains("fixed"), "{out}");
+    }
+
+    #[test]
+    fn a_file_restricted_to_other_variants_is_skipped_not_failed() {
+        let dir = scratch_dir("skipped");
+        write_scenario(
+            &dir,
+            "only_default",
+            &Scenario::new("only_default")
+                .variants(["default"])
+                .step(Step::move_to(Target::screen(Vec2::new(10.0, 10.0)))),
+        );
+        let variants = [
+            Variant::default(),
+            Variant::new("narrow").window_size(640, 480),
+            Variant::new("retina").scale_factor(2.0),
+        ];
+        let results = run_ron_variants(
+            &dir,
+            &Registry::default(),
+            "",
+            &variants,
+            Scenario::run_headless,
+        )
+        .expect("reads the directory");
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].variant, "");
+        assert!(results[0].passed(), "the default variant runs it");
+        assert!(!results[0].skipped());
+        assert_eq!(results[1].variant, "narrow");
+        assert!(results[1].skipped());
+        assert!(results[1].passed(), "a skip is not a failure");
+        assert!(results[1].failures().is_empty());
+        assert_eq!(results[2].variant, "retina");
+        assert!(
+            results[2].skipped(),
+            "a file limited to the default variant skips a scale-only variant too"
+        );
+    }
+
+    #[test]
+    fn the_runner_prints_skipped_tests_apart_from_failed_ones() {
+        let dir = scratch_dir("printed_skip");
+        write_scenario(
+            &dir,
+            "only_default",
+            &Scenario::new("only_default")
+                .variants(["default"])
+                .step(Step::wait(1)),
+        );
+        let variants = [
+            Variant::default(),
+            Variant::new("narrow").window_size(640, 480),
+        ];
+        let (passed, out, err) = print_for(&dir, "", &variants);
+        assert!(passed, "{out}");
+        assert!(err.is_empty(), "{err}");
+        assert!(out.contains("test only_default ... ok"), "{out}");
+        assert!(
+            out.contains("test only_default [narrow] ... skipped"),
+            "{out}"
+        );
+        assert!(
+            out.contains("test result: ok. 1 passed; 0 failed; 1 skipped"),
+            "{out}"
+        );
     }
 
     #[test]
