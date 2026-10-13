@@ -33,7 +33,7 @@ use bevy::{
 };
 
 use super::{
-    CapturedValues, Check, Comparison, TextMatch, Value,
+    CapturedValues, Check, Comparison, TextMatch, Unit, Value,
     reflect::{self, Role},
     suggest::{NoiseFilter, flatten, holds, name_of, ron_of, widget_check},
     widget::{self, WidgetState},
@@ -363,6 +363,7 @@ fn component_checks(
                 Some(Check::Component {
                     target: target.clone(),
                     path,
+                    unit: Unit::Physical,
                     is: Comparison::Eq(Value::from_ron(&ron).ok()?),
                 })
             }));

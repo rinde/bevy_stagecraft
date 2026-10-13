@@ -24,6 +24,45 @@ use super::CapturedValues;
 /// What a script spells a captured operand with: `Captured("views")`.
 const CAPTURED: &str = "Captured";
 
+/// Whether a reflected number is a physical or a logical pixel value.
+///
+/// Bevy's UI holds some numbers in physical pixels (`ComputedNode.size`,
+/// `ComputedNode.scroll_position`, `UiGlobalTransform`) and some in logical
+/// pixels (`ScrollPosition`). A `Resource(..)`, `Component(..)`, or the
+/// matching `Measure`, written as `unit: Logical` reads a physical value as
+/// logical: divided by the primary window's scale factor. A script then states
+/// sizes and positions in logical pixels and passes at every scale factor.
+///
+/// ```ron
+/// Check(Component(target: Name("popup"), path: "ComputedNode.size.x", unit: Logical, is: Eq(430.0))),
+/// Capture(name: "x", value: Component(target: Name("popup"), path: "UiGlobalTransform.0.translation.x", unit: Logical)),
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Unit {
+    /// The field as it is, in physical pixels. The default.
+    #[default]
+    Physical,
+    /// The field divided by the primary window's scale factor, in logical
+    /// pixels.
+    Logical,
+}
+
+impl Unit {
+    /// Whether this reads a physical value as logical.
+    #[must_use]
+    pub const fn is_logical(self) -> bool {
+        matches!(self, Self::Logical)
+    }
+
+    /// Whether this reads the field as it is, for `serde`'s
+    /// `skip_serializing_if`.
+    #[must_use]
+    pub const fn is_physical(&self) -> bool {
+        matches!(self, Self::Physical)
+    }
+}
+
 /// A value as a script writes it: RON text, read against the type of what it
 /// is compared with, or a value captured earlier in the scenario (see
 /// [`Value::captured`]).

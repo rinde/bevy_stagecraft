@@ -42,7 +42,7 @@ use bevy::{
 };
 
 use super::{
-    CapturedValues, Check, Comparison, Value,
+    CapturedValues, Check, Comparison, Unit, Value,
     app::app_facts,
     reflect::{self, Role},
     widget::{self, WidgetState},
@@ -568,6 +568,7 @@ fn resource_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec
             {
                 out.push(Check::Resource {
                     path: path.clone(),
+                    unit: Unit::Physical,
                     is: Comparison::Eq(value),
                 });
             }

@@ -15,7 +15,7 @@ use bevy::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CapturedValue, Problem, Role, field_registration, find_type, join_path, reflect, root_of,
+    CapturedValue, Problem, Role, Unit, field_registration, find_type, join_path, reflect, root_of,
 };
 use crate::targets::Target;
 
@@ -55,6 +55,9 @@ pub enum Measure {
     Resource {
         /// The type and the field.
         path: String,
+        /// Whether a physical value is read as logical. See [`Unit`].
+        #[serde(default, skip_serializing_if = "Unit::is_physical")]
+        unit: Unit,
     },
     /// A field of a reflected component on the target's node or, failing
     /// that, on the nearest node above it that has the component, as
@@ -64,6 +67,9 @@ pub enum Measure {
         target: Target,
         /// The component's type path, then a reflect path into it.
         path: String,
+        /// Whether a physical value is read as logical. See [`Unit`].
+        #[serde(default, skip_serializing_if = "Unit::is_physical")]
+        unit: Unit,
     },
 }
 
@@ -90,6 +96,7 @@ impl Measure {
     pub fn resource<R: Resource + TypePath>(path: &str) -> Self {
         Self::Resource {
             path: join_path(R::short_type_path(), path),
+            unit: Unit::Physical,
         }
     }
 
@@ -100,7 +107,20 @@ impl Measure {
         Self::Component {
             target,
             path: join_path(C::short_type_path(), path),
+            unit: Unit::Physical,
         }
+    }
+
+    /// Reads the measurement as logical pixels: a physical value is divided
+    /// by the primary window's scale factor. See [`Unit`]. A count has no
+    /// unit, so this leaves it as it is.
+    #[must_use]
+    pub const fn logical(mut self) -> Self {
+        match &mut self {
+            Self::Resource { unit, .. } | Self::Component { unit, .. } => *unit = Unit::Logical,
+            Self::Count { .. } => {}
+        }
+        self
     }
 
     /// The target this measurement looks at, if it looks at one.
@@ -124,9 +144,19 @@ impl Measure {
                 with.iter()
                     .try_for_each(|name| find_type(types, name, Role::Counted).map(|_| ()))
             }
-            Self::Resource { path } => field_registration(types, path, Role::Resource).map(|_| ()),
-            Self::Component { path, .. } => {
-                field_registration(types, path, Role::Component).map(|_| ())
+            Self::Resource { path, unit } => {
+                let field = field_registration(types, path, Role::Resource)?;
+                if unit.is_logical() {
+                    reflect::check_logical(field)?;
+                }
+                Ok(())
+            }
+            Self::Component { path, unit, .. } => {
+                let field = field_registration(types, path, Role::Component)?;
+                if unit.is_logical() {
+                    reflect::check_logical(field)?;
+                }
+                Ok(())
             }
         }
     }
@@ -158,13 +188,13 @@ impl Measure {
                     "usize".into(),
                 ))
             }
-            Self::Resource { path } => {
+            Self::Resource { path, unit } => {
                 let (root, field) = root_of(world, &types, None, path)??;
-                reflect::capture_field(&types, root, path, field)
+                reflect::capture_field(world, &types, root, path, field, *unit)
             }
-            Self::Component { target, path } => {
+            Self::Component { target, path, unit } => {
                 let (root, field) = root_of(world, &types, Some(target), path)??;
-                reflect::capture_field(&types, root, path, field)
+                reflect::capture_field(world, &types, root, path, field, *unit)
             }
         }
     }
@@ -179,8 +209,20 @@ impl fmt::Display for Measure {
                 let names: Vec<String> = with.iter().map(|name| format!("`{name}`")).collect();
                 write!(f, "count of {}", names.join(" and "))
             }
-            Self::Resource { path } => write!(f, "`{path}`"),
-            Self::Component { target, path } => write!(f, "`{path}` of {target:?}"),
+            Self::Resource { path, unit } => {
+                if unit.is_logical() {
+                    write!(f, "logical `{path}`")
+                } else {
+                    write!(f, "`{path}`")
+                }
+            }
+            Self::Component { target, path, unit } => {
+                if unit.is_logical() {
+                    write!(f, "logical `{path}` of {target:?}")
+                } else {
+                    write!(f, "`{path}` of {target:?}")
+                }
+            }
         }
     }
 }
