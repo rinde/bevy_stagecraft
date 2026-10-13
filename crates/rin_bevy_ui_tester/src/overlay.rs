@@ -12,14 +12,18 @@
 //! tests never do. Everything it draws is screen-space UI with
 //! [`Pickable::IGNORE`], so it can never take a picking hit from the UI under
 //! it.
+//!
+//! Every top-level node carries a `UiTargetCamera` from the moment it is
+//! spawned, so an app can tell the overlay's roots from its own. The overlay
+//! therefore waits for a camera (see [`OverlayCamera`]).
 
 use alloc::{collections::VecDeque, sync::Arc};
 use core::fmt;
 
 use bevy::{
-    app::{App, Plugin, Startup, Update},
+    app::{App, Plugin, Update},
     asset::{Assets, RenderAssetUsages},
-    camera::visibility::Visibility,
+    camera::{Camera, visibility::Visibility},
     color::{Alpha, Color},
     ecs::{
         component::Component,
@@ -37,9 +41,9 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     text::{FontSize, FontSource, TextColor, TextFont},
     ui::{
-        AlignItems, BackgroundColor, BorderColor, BorderRadius, ComputedNode, Display,
-        FlexDirection, GlobalZIndex, Node, PositionType, UiGlobalTransform, UiRect, UiTargetCamera,
-        px,
+        AlignItems, BackgroundColor, BorderColor, BorderRadius, ComputedNode, DefaultUiCamera,
+        Display, FlexDirection, GlobalZIndex, Node, PositionType, UiGlobalTransform, UiRect,
+        UiTargetCamera, px,
         widget::{ImageNode, Text},
     },
     window::{PrimaryWindow, Window},
@@ -501,15 +505,28 @@ pub fn naming_text(number: usize, typed: &str) -> String {
 /// The camera the overlay draws through, for apps that do not leave it to the
 /// default UI camera.
 ///
-/// With `None` the overlay's nodes carry no `UiTargetCamera` and go to
-/// whichever camera Bevy picks by default. That is the highest-order camera
-/// that renders to the primary window; a camera rendering to an image is
-/// never the default, so an app whose cameras target images (the recorder
-/// retargets them) either marks one with `IsDefaultUiCamera` or sets this.
+/// With `None` the overlay aims at the camera Bevy would use as the default UI
+/// camera (`DefaultUiCamera`). That is the highest-order camera that renders
+/// to the primary window; a camera rendering to an image is never the default,
+/// so an app whose cameras target images (the recorder retargets them) either
+/// marks one with `IsDefaultUiCamera` or sets this.
+///
+/// Either way every top-level overlay node carries a `UiTargetCamera` from the
+/// moment it exists, and the overlay does not exist while there is no camera
+/// to aim at.
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OverlayCamera(pub Option<Entity>);
 
+/// The camera the overlay's roots are aimed at now, `None` while there are no
+/// roots because there is no camera.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct OverlayAim(Option<Entity>);
+
 /// Every top-level node of the overlay, so one system can aim them all.
+///
+/// Each carries a `UiTargetCamera` from the bundle it is spawned in, so an
+/// app's observer on `Add<Node>` can tell them from its own roots, and all are
+/// [`NotUnderTest`].
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct OverlayRoot;
 
@@ -519,7 +536,9 @@ struct TrailHistory(VecDeque<Vec2>);
 
 /// Draws the script's pointer and a caption strip over the app's UI.
 ///
-/// It draws through the default UI camera unless [`OverlayCamera`] names one.
+/// It draws through the default UI camera unless [`OverlayCamera`] names one,
+/// and only exists while there is such a camera: its roots are spawned the
+/// first frame one exists, aimed at it, and follow it if it changes.
 /// The cursor follows the primary window's cursor position, which
 /// `SyntheticInput` sets. The strip reads [`ScenarioReport`]. Replace
 /// [`OverlayTheme`] to restyle it and add to [`TargetDescriptions`] to word an
@@ -531,6 +550,7 @@ impl Plugin for CursorOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OverlayTheme>()
             .init_resource::<OverlayCamera>()
+            .init_resource::<OverlayAim>()
             .init_resource::<TargetDescriptions>()
             .init_resource::<TrailHistory>()
             .init_resource::<ScenarioReport>()
@@ -538,13 +558,9 @@ impl Plugin for CursorOverlayPlugin {
             .init_resource::<PickHighlight>()
             .add_message::<CheckpointTaken>()
             .add_systems(
-                Startup,
-                (spawn_overlay, spawn_checkpoint_flash, spawn_pick_outlines),
-            )
-            .add_systems(
                 Update,
                 (
-                    aim_overlay,
+                    maintain_overlay,
                     move_cursor,
                     spawn_rings,
                     animate_rings,
@@ -606,18 +622,22 @@ fn round_marker(size: f32, border: f32) -> Node {
     }
 }
 
-/// Spawns the cursor, the held ring, the trail and the caption strip.
+/// Spawns the cursor, the held ring, the trail and the caption strip, each
+/// aimed at `camera` from the start.
 fn spawn_overlay(
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    theme: Res<OverlayTheme>,
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    theme: &OverlayTheme,
+    camera: Entity,
 ) {
+    let target = UiTargetCamera(camera);
     let z = GlobalZIndex(OVERLAY_Z_INDEX);
     for index in 0..TRAIL_LENGTH {
         commands.spawn((
             OverlayTrailDot(index),
             OverlayRoot,
             NotUnderTest,
+            target.clone(),
             round_marker(TRAIL_DOT_SIZE, 0.0),
             BackgroundColor(theme.trail.with_alpha(0.0)),
             Pickable::IGNORE,
@@ -628,6 +648,7 @@ fn spawn_overlay(
         OverlayHeld,
         OverlayRoot,
         NotUnderTest,
+        target.clone(),
         round_marker(HELD_SIZE, RING_BORDER),
         BorderColor::all(theme.held_ring),
         Pickable::IGNORE,
@@ -638,6 +659,7 @@ fn spawn_overlay(
         OverlayCursor,
         OverlayRoot,
         NotUnderTest,
+        target.clone(),
         Node {
             position_type: PositionType::Absolute,
             width: px(CURSOR_WIDTH),
@@ -663,6 +685,7 @@ fn spawn_overlay(
             OverlayCaptionStrip,
             OverlayRoot,
             NotUnderTest,
+            target,
             Node {
                 position_type: PositionType::Absolute,
                 left: px(0),
@@ -701,11 +724,12 @@ fn spawn_overlay(
 }
 
 /// Spawns the flash a checkpoint shows, hidden until one is taken.
-fn spawn_checkpoint_flash(mut commands: Commands, theme: Res<OverlayTheme>) {
+fn spawn_checkpoint_flash(commands: &mut Commands, theme: &OverlayTheme, camera: Entity) {
     commands.spawn((
         OverlayCheckpointFlash,
         OverlayRoot,
         NotUnderTest,
+        UiTargetCamera(camera),
         Node {
             position_type: PositionType::Absolute,
             left: px(0),
@@ -723,7 +747,7 @@ fn spawn_checkpoint_flash(mut commands: Commands, theme: Res<OverlayTheme>) {
 
 /// Spawns the two pick outlines, hidden until [`PickHighlight`] names a
 /// node, and the tag over the hovered one.
-fn spawn_pick_outlines(mut commands: Commands, theme: Res<OverlayTheme>) {
+fn spawn_pick_outlines(commands: &mut Commands, theme: &OverlayTheme, camera: Entity) {
     for kind in [PickOutlineKind::Selected, PickOutlineKind::Hovered] {
         let colour = match kind {
             PickOutlineKind::Hovered => theme.pick_hovered,
@@ -733,6 +757,7 @@ fn spawn_pick_outlines(mut commands: Commands, theme: Res<OverlayTheme>) {
             OverlayPickOutline(kind),
             OverlayRoot,
             NotUnderTest,
+            UiTargetCamera(camera),
             Node {
                 position_type: PositionType::Absolute,
                 border: UiRect::all(px(PICK_OUTLINE_WIDTH)),
@@ -857,19 +882,60 @@ fn show_pick_outlines(
     }
 }
 
-/// Points every overlay root at [`OverlayCamera`], when one is named.
-fn aim_overlay(
+/// The camera the overlay should be aimed at: the one named by
+/// [`OverlayCamera`], else Bevy's default UI camera. `None` while there is no
+/// such camera, or the named entity is not one.
+fn wanted_camera(
+    named: OverlayCamera,
+    default: &DefaultUiCamera,
+    cameras: &Query<(), With<Camera>>,
+) -> Option<Entity> {
+    named.0.map_or_else(
+        || default.get(),
+        |camera| cameras.contains(camera).then_some(camera),
+    )
+}
+
+/// Spawns the overlay once there is a camera to aim it at, aims it at the new
+/// camera when that changes, and despawns it when the camera is gone.
+///
+/// Spawning the roots only once the camera is known puts a `UiTargetCamera` in
+/// the very bundle that adds each `Node`, which an app's observer on
+/// `Add<Node>` needs to tell the overlay's roots from its own. A root that
+/// did not name its camera would be taken for the app's.
+fn maintain_overlay(
     mut commands: Commands,
-    camera: Res<OverlayCamera>,
+    mut images: ResMut<Assets<Image>>,
+    mut aim: ResMut<OverlayAim>,
+    named: Res<OverlayCamera>,
+    default: DefaultUiCamera,
+    cameras: Query<(), With<Camera>>,
+    theme: Res<OverlayTheme>,
     roots: Query<(Entity, Option<&UiTargetCamera>), With<OverlayRoot>>,
 ) {
-    let Some(camera) = camera.0 else {
-        return;
-    };
-    for (entity, aimed) in &roots {
-        if aimed.is_none_or(|aimed| aimed.0 != camera) {
-            commands.entity(entity).insert(UiTargetCamera(camera));
+    let wanted = wanted_camera(*named, &default, &cameras);
+    match (aim.0, wanted) {
+        (None, Some(camera)) => {
+            spawn_overlay(&mut commands, &mut images, &theme, camera);
+            spawn_checkpoint_flash(&mut commands, &theme, camera);
+            spawn_pick_outlines(&mut commands, &theme, camera);
         }
+        (Some(_), None) => {
+            for (entity, _) in &roots {
+                commands.entity(entity).despawn();
+            }
+        }
+        (Some(_), Some(camera)) => {
+            for (entity, aimed) in &roots {
+                if aimed.is_none_or(|aimed| aimed.0 != camera) {
+                    commands.entity(entity).insert(UiTargetCamera(camera));
+                }
+            }
+        }
+        (None, None) => {}
+    }
+    if aim.0 != wanted {
+        aim.0 = wanted;
     }
 }
 
@@ -944,21 +1010,23 @@ fn spawn_rings(
     windows: Query<&Window, With<PrimaryWindow>>,
     buttons: Res<ButtonInput<MouseButton>>,
     theme: Res<OverlayTheme>,
-    camera: Res<OverlayCamera>,
+    aim: Res<OverlayAim>,
 ) {
     let pressed = buttons.just_pressed(MouseButton::Left)
         || buttons.just_pressed(MouseButton::Right)
         || buttons.just_pressed(MouseButton::Middle);
-    let Some(position) = pointer_position(&windows).filter(|_| pressed) else {
+    let (Some(position), Some(camera)) = (pointer_position(&windows).filter(|_| pressed), aim.0)
+    else {
         return;
     };
-    let mut ring = commands.spawn((
+    commands.spawn((
         OverlayRing {
             age: 0,
             centre: position,
         },
         OverlayRoot,
         NotUnderTest,
+        UiTargetCamera(camera),
         Node {
             left: px(position.x - RING_START_SIZE / 2.0),
             top: px(position.y - RING_START_SIZE / 2.0),
@@ -968,9 +1036,6 @@ fn spawn_rings(
         Pickable::IGNORE,
         GlobalZIndex(OVERLAY_Z_INDEX),
     ));
-    if let Some(camera) = camera.0 {
-        ring.insert(UiTargetCamera(camera));
-    }
 }
 
 /// Grows and fades the rings, and removes the ones that are done. Counts
