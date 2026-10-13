@@ -98,10 +98,7 @@ fn the_pointer_reaches_a_widget_that_a_popup_covers_without_blocking() {
 
 /// A node over the middle of the "Go" button that paints only through
 /// `painter`, whatever it is, and lets the pointer through.
-fn with_painted_popup(
-    name: &str,
-    painter: impl Bundle + Clone,
-) -> Scenario {
+fn with_painted_popup(name: &str, painter: impl Bundle + Clone) -> Scenario {
     Scenario::new(name)
         .setup(move |world| {
             spawn_go(world);
