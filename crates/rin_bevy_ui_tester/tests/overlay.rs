@@ -18,7 +18,8 @@ use bevy::{
 };
 use rin_bevy_ui_tester::{
     AppCheck, AppTarget, Check, CheckResult, HeadlessPlugins, Probe, ReflectAppCheck,
-    ReflectAppTarget, ResolvedTarget, Scenario, Step, Target, TargetDescriptions, describe_step,
+    ReflectAppTarget, ResolvedTarget, Scenario, Step, SyntheticInput, Target, TargetDescriptions,
+    describe_step,
     overlay::{
         CursorOverlayPlugin, OverlayCamera, OverlayCaptionStrip, OverlayChecksText, OverlayCursor,
         OverlayHeld, OverlayRing, OverlayRoot, OverlayStepText, OverlayTheme, OverlayTrailDot,
@@ -419,6 +420,19 @@ fn the_overlay_never_adds_a_root_without_a_target_camera() {
     let aims = overlay_aims(&mut app);
     assert!(aims.len() > 10, "the overlay exists now: {}", aims.len());
     assert!(aims.iter().all(|aim| *aim == Some(first)));
+
+    // A press starts a ring, the one root that appears long after the rest.
+    {
+        let mut input = app.world_mut().resource_mut::<SyntheticInput>();
+        input.move_cursor(Vec2::new(40.0, 30.0));
+        input.press_button(MouseButton::Left);
+    }
+    app.update();
+    let world = app.world_mut();
+    let mut rings = world.query_filtered::<Option<&UiTargetCamera>, With<OverlayRing>>();
+    let rings: Vec<_> = rings.iter(world).collect();
+    assert_eq!(rings.len(), 1, "the press started a ring");
+    assert!(rings[0].is_some_and(|aimed| aimed.0 == first));
 
     // Another camera takes over as the default UI camera (a despawned
     // camera needs the renderer's world to sync to, which this app lacks).
