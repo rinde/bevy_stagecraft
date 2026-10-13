@@ -26,8 +26,8 @@ use bevy::{
     math::Vec2,
     picking::Pickable,
     ui::{
-        BackgroundColor, CalculatedClip, ComputedNode, ComputedUiTargetCamera, InteractionDisabled,
-        Node, UiGlobalTransform, UiStack,
+        BackgroundColor, BackgroundGradient, CalculatedClip, ComputedNode, ComputedUiTargetCamera,
+        InteractionDisabled, Node, UiGlobalTransform, UiStack,
         widget::{ImageNode, Text},
     },
     window::{PrimaryWindow, Window},
@@ -254,10 +254,11 @@ fn receives_pointer(
 /// This is condition 5 without `Pickable`: it asks what the person sees,
 /// not what the pointer reaches. A popup that lets the pointer through
 /// (`should_block_lower: false`) still covers what is below it here. Nodes
-/// that paint nothing (no background colour that shows, no image, no text)
-/// cover nothing, or an empty full-window container would cover the whole
-/// UI; the widget's own nodes count whether they paint or not. Only nodes on
-/// the widget's camera count, and never the tooling's.
+/// that paint nothing (no background colour that shows, no background
+/// gradient, no image, no text; see `paints`) cover nothing, or an empty
+/// full-window container would cover the whole UI; the widget's own nodes
+/// count whether they paint or not. Only nodes on the widget's camera count,
+/// and never the tooling's.
 ///
 /// # Errors
 ///
@@ -290,12 +291,17 @@ pub(super) fn painted_topmost(world: &World, widget: Entity) -> Result<(), Strin
     Err("nothing is drawn at its middle (it is hidden, clipped or outside the window)".into())
 }
 
-/// Whether `node` draws something of its own: a background that shows, an
-/// image or text.
+/// Whether `node` draws something of its own over its whole box: a
+/// background colour that shows, a background gradient, an image or text.
+/// Borders and shadows are left out: they paint the edge or outside of the
+/// box, not what lies under its middle.
 fn paints(world: &World, node: Entity) -> bool {
     world
         .get::<BackgroundColor>(node)
         .is_some_and(|background| background.0.alpha() > 0.0)
+        || world
+            .get::<BackgroundGradient>(node)
+            .is_some_and(|gradient| !gradient.0.is_empty())
         || world.get::<ImageNode>(node).is_some()
         || world.get::<Text>(node).is_some()
 }
