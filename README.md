@@ -621,7 +621,9 @@ let variants = [
   variant, named `scenario [variant]`, each with its own pictures and trace.
 * `Gallery::variants(variants)` adds a **Variant** row of buttons to the
   Scenarios window. Picking one runs the selected scenario in that variant, and
-  a run-all plays every entry in every variant.
+  a run-all plays every entry in every variant. A scenario that restricts the
+  variants it runs in (below) is skipped in the others: the row keeps the
+  `SKIP` mark and the run report counts it as skipped, not failed.
 * By hand, `variant.apply(&scenario)` returns the scenario as that variant runs
   it (named `scenario [variant]`), and `Scenario::scale_factor` and the script's
   `scale_factor: Some(2.0)` set the scale factor of a scenario itself.

@@ -174,7 +174,8 @@ pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
 pub use input::scenarios_pointer;
 pub use state::{
     GalleryAction, GalleryPhase, GalleryRunReport, GalleryState, GalleryTab, HiddenList,
-    NoisePreset, PendingStep, Picking, Recording, ScenarioOutcome, Speed, Suggestions, TraceWorld,
+    NoisePreset, PendingStep, Picking, Recording, ScenarioOutcome, ScenarioResult, Speed,
+    Suggestions, TraceWorld,
 };
 pub use ui::{GalleryToolbar, SCENARIOS_WINDOW_SIZE, ScenariosCamera, ScenariosWindow};
 
