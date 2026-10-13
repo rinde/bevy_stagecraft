@@ -35,7 +35,8 @@ pub mod variant;
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
 pub use check::{
-    AppCheck, Check, Comparison, CountOf, FieldOf, Measure, ReflectAppCheck, TextMatch, Value,
+    AppCheck, Check, Comparison, CountOf, FieldOf, Measure, ReflectAppCheck, TextMatch, Unit,
+    Value,
     pick::{
         AppCheckForm, FieldValue, Picked, PickedForm, app_check_forms, checks_that_hold, node_at,
         subject_of, target_alternatives,

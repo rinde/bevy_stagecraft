@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize, de::DeserializeSeed};
 pub use self::{
     app::{AppCheck, ReflectAppCheck},
     capture::Measure,
-    value::{Comparison, TextMatch, Value},
+    value::{Comparison, TextMatch, Unit, Value},
 };
 use self::{
     reflect::{Reflected, Role, find_type},
@@ -119,6 +119,8 @@ pub enum Check {
     Resource {
         /// The type and the field.
         path: String,
+        /// Whether a physical value is read as logical. See [`Unit`].
+        unit: Unit,
         /// How the field must compare.
         is: Comparison,
     },
@@ -130,6 +132,8 @@ pub enum Check {
         target: Target,
         /// The component's type path, then a reflect path into it.
         path: String,
+        /// Whether a physical value is read as logical. See [`Unit`].
+        unit: Unit,
         /// How the field must compare.
         is: Comparison,
     },
@@ -224,6 +228,9 @@ enum Spelled {
         /// See [`Check::Resource`].
         path: String,
         /// See [`Check::Resource`].
+        #[serde(default, skip_serializing_if = "Unit::is_physical")]
+        unit: Unit,
+        /// See [`Check::Resource`].
         is: Comparison,
     },
     /// See [`Check::Component`].
@@ -232,6 +239,9 @@ enum Spelled {
         target: Target,
         /// See [`Check::Component`].
         path: String,
+        /// See [`Check::Component`].
+        #[serde(default, skip_serializing_if = "Unit::is_physical")]
+        unit: Unit,
         /// See [`Check::Component`].
         is: Comparison,
     },
@@ -430,9 +440,18 @@ pub struct FieldOf {
     target: Option<Target>,
     /// The type path and the field.
     path: String,
+    /// Whether a physical value is read as logical.
+    unit: Unit,
 }
 
 impl FieldOf {
+    /// Reads the field as logical pixels: a physical value is divided by the
+    /// primary window's scale factor. See [`Unit`].
+    pub const fn logical(mut self) -> Self {
+        self.unit = Unit::Logical;
+        self
+    }
+
     /// The field compares as `comparison` says.
     #[must_use]
     pub fn is(self, comparison: Comparison) -> Check {
@@ -440,10 +459,12 @@ impl FieldOf {
             Some(target) => Check::Component {
                 target,
                 path: self.path,
+                unit: self.unit,
                 is: comparison,
             },
             None => Check::Resource {
                 path: self.path,
+                unit: self.unit,
                 is: comparison,
             },
         }
@@ -544,6 +565,7 @@ impl Check {
         FieldOf {
             target: None,
             path: join_path(R::short_type_path(), path),
+            unit: Unit::Physical,
         }
     }
 
@@ -553,6 +575,7 @@ impl Check {
         FieldOf {
             target: Some(target),
             path: join_path(C::short_type_path(), path),
+            unit: Unit::Physical,
         }
     }
 
@@ -729,12 +752,18 @@ impl Check {
                 }
                 reflect::check_count(is)
             }
-            Self::Resource { path, is } => {
+            Self::Resource { path, is, unit } => {
                 let field = field_registration(types, path, Role::Resource)?;
+                if unit.is_logical() {
+                    reflect::check_logical(field)?;
+                }
                 reflect::check_comparison(types, field, is)
             }
-            Self::Component { path, is, .. } => {
+            Self::Component { path, is, unit, .. } => {
                 let field = field_registration(types, path, Role::Component)?;
+                if unit.is_logical() {
+                    reflect::check_logical(field)?;
+                }
                 reflect::check_comparison(types, field, is)
             }
             Self::InState { state, value } => {
@@ -917,21 +946,30 @@ impl Check {
                 let is = self.resolve_is(is, captures)?;
                 compare(&is, &Counted(count), &count.to_string(), || self.subject())
             }
-            Self::Resource { path, is } => {
+            Self::Resource { path, is, unit } => {
                 let is = self.resolve_is(is, captures)?;
                 let (root, field) = match root_of(world, types, None, path)? {
                     Ok(found) => found,
                     Err(message) => return Ok(Err(message)),
                 };
-                compare_field(types, root, path, field, &is, || self.subject())
+                compare_field(world, types, root, path, field, &is, *unit, || {
+                    self.subject()
+                })
             }
-            Self::Component { target, path, is } => {
+            Self::Component {
+                target,
+                path,
+                is,
+                unit,
+            } => {
                 let is = self.resolve_is(is, captures)?;
                 let (root, field) = match root_of(world, types, Some(target), path)? {
                     Ok(found) => found,
                     Err(message) => return Ok(Err(message)),
                 };
-                compare_field(types, root, path, field, &is, || self.subject())
+                compare_field(world, types, root, path, field, &is, *unit, || {
+                    self.subject()
+                })
             }
             Self::InState { state, value } => {
                 let value = value
@@ -975,11 +1013,22 @@ impl Check {
                 let names: Vec<String> = with.iter().map(|name| format!("`{name}`")).collect();
                 format!("count of {}", names.join(" and "))
             }
-            Self::Resource { path, .. } => format!("`{path}`"),
-            Self::Component { target, path, .. } => format!("`{path}` of {target:?}"),
+            Self::Resource { path, unit, .. } => logical(*unit, &format!("`{path}`")),
+            Self::Component {
+                target, path, unit, ..
+            } => logical(*unit, &format!("`{path}` of {target:?}")),
             Self::InState { state, .. } => format!("state `{state}`"),
             other => other.to_string(),
         }
+    }
+}
+
+/// `subject`, marked as read in logical pixels when `unit` says so.
+fn logical(unit: Unit, subject: &str) -> String {
+    if unit.is_logical() {
+        format!("logical {subject}")
+    } else {
+        subject.to_owned()
     }
 }
 
@@ -1227,13 +1276,15 @@ fn field_registration<'r>(
 }
 
 /// Compares the field at `field` in `root` as `is` says. `path` is the whole
-/// path, for messages.
+/// path, for messages; `unit: Logical` reads a physical number as logical.
 fn compare_field(
+    world: &World,
     types: &TypeRegistry,
     root: &dyn Reflect,
     path: &str,
     field: &str,
     is: &Comparison,
+    unit: Unit,
     subject: impl Fn() -> String,
 ) -> Result<CheckResult, String> {
     // A field of another enum variant than the current one fails the check.
@@ -1245,8 +1296,12 @@ fn compare_field(
         .get_represented_type_info()
         .and_then(|info| types.get(info.type_id()))
         .ok_or_else(|| format!("the type of `{path}` is not registered"))?;
+    let scaled = unit
+        .is_logical()
+        .then(|| reflect::to_logical(world, value))
+        .transpose()?;
     let measured = Reflected {
-        value,
+        value: scaled.as_deref().unwrap_or(value),
         registration,
         types,
     };

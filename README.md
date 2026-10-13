@@ -252,6 +252,34 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
   without a guessed `Wait`, and takes only the frames it waited. It works in
   the expect list too.
 
+#### Reading physical pixels as logical
+
+Bevy's UI holds some numbers in **physical** pixels — `ComputedNode.size`,
+`ComputedNode.scroll_position` and `UiGlobalTransform` — and some in logical
+pixels — `ScrollPosition`. At a window scale factor of 2 every physical value
+doubles, so a check written with the number a scale factor 1 window shows
+passes only there. A `Resource(..)` or `Component(..)` check, and the matching
+`Measure`, reads a physical value as logical with `unit: Logical`: the value is
+divided by the primary window's scale factor, so the same number states the
+size or position in logical pixels and passes at every scale factor.
+
+```ron
+// The popup is 430 logical pixels wide and its centre is 225 logical pixels
+// from the left edge, whatever the scale factor.
+Check(Component(target: Name("popup"), path: "ComputedNode.size.x", unit: Logical, is: Eq(430.0))),
+Check(Component(target: Name("popup"), path: "UiGlobalTransform.0.translation.x", unit: Logical, is: Eq(225.0))),
+Capture(name: "x", value: Component(target: Name("popup"), path: "UiGlobalTransform.0.translation.x", unit: Logical)),
+```
+
+The default is `unit: Physical`, the field as it is, so an older file reads the
+same. A logical value a `Capture` took is stored as the logical number and a
+later logical check compares with it, `plus` included; a check and its capture
+should name the same unit. `unit: Logical` applies to a number or a vector of
+numbers (`f32`, `f64`, `Vec2`, `Vec3`); on anything else it is a load error.
+In Rust the builder is `.logical()`:
+`Check::component::<ComputedNode>(target, "size.x").logical().eq(430.0_f32)`,
+`Measure::component::<ComputedNode>(target, "size.x").logical()`.
+
 #### Tree snapshots
 
 `Tree` checks the shape of a piece of UI in one step: the node a target names
@@ -746,7 +774,9 @@ Step::check(Check::resource::<Score>("0").is(Comparison::Ge(Value::captured("sco
 - `value` is `Count(with: [..])`, `Resource(path: ..)` or
   `Component(target: .., path: ..)`: the check of the same name without its
   `is`, read the same way. A capture takes no frame and sees the world as the
-  step before it left it.
+  step before it left it. A `Resource(..)` or `Component(..)` measure may add
+  `unit: Logical` (Rust: `.logical()`) to store a physical value as its
+  logical number; see "Reading physical pixels as logical" above.
 - Any value of a comparison (`Eq`, `Ne`, `Lt`, `Le`, `Gt`, `Ge`, both ends of
   `Between`, and `InState`'s value) may be `Captured("name")`, or
   `Captured(name: "name", plus: n)` to add `n` to a number. (The offset is

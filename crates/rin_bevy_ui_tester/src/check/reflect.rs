@@ -16,6 +16,7 @@ use bevy::{
         reflect::{AppTypeRegistry, ReflectComponent, ReflectResource},
         world::World,
     },
+    math::{Vec2, Vec3},
     reflect::{
         Access, GetPath, NamedField, ParsedPath, PartialReflect, Reflect, ReflectFromReflect,
         TypeInfo, TypePathTable, TypeRegistration, TypeRegistry, UnnamedField,
@@ -23,11 +24,14 @@ use bevy::{
         serde::{TypedReflectDeserializer, TypedReflectSerializer},
     },
     state::reflect::ReflectState,
+    window::{PrimaryWindow, Window},
 };
+
+use crate::headless::DEFAULT_SCALE_FACTOR;
 
 use super::{
     CapturedValue, Problem,
-    value::{Comparable, Comparison, Counted, Value},
+    value::{Comparable, Comparison, Counted, Unit, Value},
 };
 use crate::targets::is_tooling;
 
@@ -354,24 +358,105 @@ pub(super) fn field_value<'a>(
 }
 
 /// What the field at `field` in `root` holds, written as RON with the name
-/// of its type, for a capture.
+/// of its type, for a capture. With `unit: Logical` a physical number is
+/// written as the logical one.
 ///
 /// # Errors
 ///
 /// Says why the field cannot be read now or written.
 pub(super) fn capture_field(
+    world: &World,
     types: &TypeRegistry,
     root: &dyn Reflect,
     path: &str,
     field: &str,
+    unit: Unit,
 ) -> Result<CapturedValue, String> {
     let value = field_value(root, path, field)?;
     let type_name = value
         .get_represented_type_info()
         .map_or("unknown", |info| info.type_path_table().short_path());
+    let scaled = unit
+        .is_logical()
+        .then(|| to_logical(world, value))
+        .transpose()?;
+    let value = scaled.as_deref().unwrap_or(value);
     let ron = ron::to_string(&TypedReflectSerializer::new(value, types))
         .map_err(|error| format!("`{path}` cannot be written as a value: {error}"))?;
     Ok(CapturedValue::new(ron, type_name.to_owned()))
+}
+
+/// `value`, a reflected number in physical pixels, as logical pixels: divided
+/// by the primary window's scale factor. The type is kept, so it reads as the
+/// same type and can be compared or written as RON.
+///
+/// # Errors
+///
+/// Why the value is not a number, and so cannot be read as logical pixels.
+pub(super) fn to_logical(
+    world: &World,
+    value: &dyn PartialReflect,
+) -> Result<Box<dyn PartialReflect>, String> {
+    let inverse = 1.0 / primary_scale_factor(world);
+    if let Some(number) = value.try_downcast_ref::<f32>() {
+        return Ok(Box::new(*number * inverse));
+    }
+    if let Some(number) = value.try_downcast_ref::<f64>() {
+        return Ok(Box::new(*number * f64::from(inverse)));
+    }
+    if let Some(vector) = value.try_downcast_ref::<Vec2>() {
+        return Ok(Box::new(*vector * inverse));
+    }
+    if let Some(vector) = value.try_downcast_ref::<Vec3>() {
+        return Ok(Box::new(*vector * inverse));
+    }
+    Err(format!(
+        "`{}` is not a number in physical pixels, so it cannot be read as logical",
+        value.reflect_type_path()
+    ))
+}
+
+/// Checks, before anything runs, that a field read as logical is a number.
+///
+/// # Errors
+///
+/// Why `unit: Logical` does not apply to the type `registration` describes.
+pub(super) fn check_logical(registration: &TypeRegistration) -> Result<(), Problem> {
+    if is_logical_number(registration.type_id()) {
+        return Ok(());
+    }
+    Err(Problem::Other(format!(
+        "`{}` is not a number in physical pixels, so `unit: Logical` does not apply",
+        registration.type_info().type_path_table().short_path()
+    )))
+}
+
+/// Whether a type read as logical is a number: a float or a vector of floats.
+fn is_logical_number(id: TypeId) -> bool {
+    [
+        TypeId::of::<f32>(),
+        TypeId::of::<f64>(),
+        TypeId::of::<Vec2>(),
+        TypeId::of::<Vec3>(),
+    ]
+    .contains(&id)
+}
+
+/// The scale factor of the primary window: physical pixels per logical pixel,
+/// [`DEFAULT_SCALE_FACTOR`] when there is none. A physical value divided by
+/// it is logical.
+fn primary_scale_factor(world: &World) -> f32 {
+    world
+        .iter_entities()
+        .find_map(|entity| {
+            entity
+                .contains::<PrimaryWindow>()
+                .then(|| entity.get::<Window>())
+                .flatten()
+        })
+        .map_or(DEFAULT_SCALE_FACTOR, |window| {
+            window.resolution.scale_factor()
+        })
 }
 
 /// How two reflected values order, for the types that have one: numbers and
