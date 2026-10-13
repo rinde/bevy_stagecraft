@@ -1,5 +1,6 @@
-//! The offscreen recorder. Every test here needs a (software) GPU, so they are
-//! ignored by `just test` and run by `just test-gpu`.
+//! The offscreen recorder. Every test that plays a scenario needs a (software)
+//! GPU, so those are ignored by `just test` and run by `just test-gpu`; a
+//! scenario that is only skipped records nothing and runs without one.
 
 #![allow(
     clippy::expect_used,
@@ -389,6 +390,42 @@ fn gpu_a_variant_a_scenario_cannot_run_in_is_recorded_as_a_failed_entry() {
         .and_then(|scenario| scenario.report.setup_failure.clone())
         .expect("the refusal is the setup failure");
     assert!(failure.contains("step 0"), "{failure}");
+}
+
+#[test]
+fn a_scenario_restricted_to_another_variant_is_recorded_as_skipped() {
+    let dir = output_dir("recorder-variant-skipped");
+    // A scenario limited to the default variant, recorded only in a named one:
+    // nothing plays, so no GPU is needed.
+    let scenario = Scenario::new("only the default").variants(["default"]);
+    let recording = Recorder::new(|_app| {})
+        .variants([Variant::new("wide")])
+        .scenario(scenario)
+        .record(&dir)
+        .expect("recording works");
+
+    assert!(
+        !recording.any_failed(),
+        "a skip is nothing to fail over: {:?}",
+        recording
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.report.failures())
+            .collect::<Vec<_>>()
+    );
+    let recorded = recording.scenarios.first().expect("one entry");
+    assert!(recorded.skipped(), "it did not run in this variant");
+    assert!(!recorded.passed(), "it never finished");
+    assert!(
+        !dir.join(&recorded.slug).exists(),
+        "nothing is written for a skipped entry"
+    );
+    let index = fs::read_to_string(&recording.index).expect("an index");
+    assert!(index.contains("SKIPPED"), "the index says so: {index}");
+    assert!(
+        index.contains("1 skipped") && !index.contains("1 failed"),
+        "counted as skipped, not failed: {index}"
+    );
 }
 
 #[test]

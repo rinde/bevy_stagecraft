@@ -618,7 +618,9 @@ let variants = [
   narrow variant of every file. (`run_ron_variants` is the same without the
   `main`.)
 * `Recorder::variants(variants)` writes one index entry per scenario and
-  variant, named `scenario [variant]`, each with its own pictures and trace.
+  variant, named `scenario [variant]`, each with its own pictures and trace. A
+  scenario that restricts the variants it runs in (below) is skipped in the
+  others: its index card says `SKIPPED` and nothing is recorded for it.
 * `Gallery::variants(variants)` adds a **Variant** row of buttons to the
   Scenarios window. Picking one runs the selected scenario in that variant, and
   a run-all plays every entry in every variant. A scenario that restricts the

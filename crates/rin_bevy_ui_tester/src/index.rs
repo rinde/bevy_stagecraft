@@ -120,17 +120,26 @@ fn escape(text: &str) -> String {
 
 /// One scenario's card in the contact sheet.
 fn card(out: &mut String, scenario: &ScenarioRecording) {
-    let class = if scenario.passed() { "pass" } else { "fail" };
-    let verdict = if scenario.passed() {
-        "passed"
+    let (class, verdict) = if scenario.skipped() {
+        ("skipped", "SKIPPED")
+    } else if scenario.passed() {
+        ("pass", "passed")
     } else {
-        "FAILED"
+        ("fail", "FAILED")
     };
     let slug = escape(&scenario.slug);
     let _ = write!(
         out,
-        "<article class=\"card {class}\" id=\"{slug}\"><h3>{name} <small>{verdict}</small></h3>\
-         <a href=\"{slug}/{FILMSTRIP_FILE}\"><img src=\"{slug}/{GIF_FILE}\" alt=\"{name}\" \
+        "<article class=\"card {class}\" id=\"{slug}\"><h3>{name} <small>{verdict}</small></h3>",
+        name = escape(&scenario.name),
+    );
+    if scenario.skipped() {
+        out.push_str("<p>does not run in this variant</p></article>");
+        return;
+    }
+    let _ = write!(
+        out,
+        "<a href=\"{slug}/{FILMSTRIP_FILE}\"><img src=\"{slug}/{GIF_FILE}\" alt=\"{name}\" \
          loading=\"lazy\"></a>",
         name = escape(&scenario.name),
     );
@@ -442,13 +451,13 @@ pub fn index_html(scenarios: &[ScenarioRecording]) -> String {
     }
     // Stable sorts keep the catalogue's order among equals.
     for (_, members) in &mut groups {
-        members.sort_by_key(|scenario| scenario.passed());
+        members.sort_by_key(|scenario| !scenario.failed());
     }
-    groups.sort_by_key(|(_, members)| members.iter().all(|scenario| scenario.passed()));
+    groups.sort_by_key(|(_, members)| !members.iter().any(|scenario| scenario.failed()));
 
     let failed = scenarios
         .iter()
-        .filter(|scenario| !scenario.passed())
+        .filter(|scenario| scenario.failed())
         .count();
     let mut out = String::from(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
@@ -457,16 +466,26 @@ pub fn index_html(scenarios: &[ScenarioRecording]) -> String {
          .grid{display:flex;flex-wrap:wrap;gap:1rem}\
          .card{width:340px;background:#24242c;border-left:6px solid #3c9a54;padding:.5rem .8rem}\
          .card.fail{border-left-color:#c84040}\
+         .card.skipped{border-left-color:#777}\
          .card img{width:100%}\
          .card h3{margin:.2rem 0}.card small{font-weight:normal;opacity:.7}\
          ul{list-style:none;padding:0;margin:.4rem 0;font-size:.9rem}\
          li.pass{color:#7fdc8c}li.fail{color:#ff7a7a}li.skipped{color:#999}\
          a{color:#9cc8ff}</style></head><body><h1>Scenario recordings</h1>",
     );
+    let skipped = scenarios
+        .iter()
+        .filter(|scenario| scenario.skipped())
+        .count();
     let _ = write!(
         out,
-        "<p>{} scenarios, {failed} failed.</p>",
-        scenarios.len()
+        "<p>{} scenarios, {failed} failed{}.</p>",
+        scenarios.len(),
+        if skipped == 0 {
+            String::new()
+        } else {
+            format!(", {skipped} skipped")
+        }
     );
     for (group, members) in groups {
         let _ = write!(
@@ -507,9 +526,41 @@ mod tests {
             group: group.into(),
             slug: name.into(),
             report,
+            skipped: false,
             pictures: 3,
             trace: None,
         }
+    }
+
+    /// A recording of a scenario that does not run in its variant.
+    fn skipped_recording(name: &str, group: &str) -> ScenarioRecording {
+        ScenarioRecording {
+            name: name.into(),
+            group: group.into(),
+            slug: name.into(),
+            report: ScenarioReport::default(),
+            skipped: true,
+            pictures: 0,
+            trace: None,
+        }
+    }
+
+    #[test]
+    fn the_index_shows_a_skipped_scenario_as_skipped_not_failed() {
+        let html = index_html(&[
+            skipped_recording("elsewhere", "A"),
+            recording("good", "A", true),
+        ]);
+        assert!(html.contains("SKIPPED"), "it is marked as skipped: {html}");
+        assert!(html.contains("1 skipped"), "the summary counts it: {html}");
+        assert!(
+            !html.contains("1 failed"),
+            "a skip is not a failure: {html}"
+        );
+        assert!(
+            !html.contains("elsewhere/filmstrip.png"),
+            "nothing was recorded for it: {html}"
+        );
     }
 
     #[test]
@@ -543,6 +594,7 @@ mod tests {
             group: "A".into(),
             slug: "shows-it".into(),
             report,
+            skipped: false,
             pictures: 0,
             trace: Some(trace),
         }
@@ -589,6 +641,7 @@ mod tests {
             group: "A".into(),
             slug: "captures".into(),
             report,
+            skipped: false,
             pictures: 0,
             trace: Some(trace.clone()),
         };

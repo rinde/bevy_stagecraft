@@ -511,6 +511,9 @@ pub struct ScenarioRecording {
     pub slug: String,
     /// How it ended.
     pub report: ScenarioReport,
+    /// Whether the scenario does not run in its variant and was skipped rather
+    /// than played (see [`Variant::skips`]).
+    pub skipped: bool,
     /// How many pictures were written.
     pub pictures: usize,
     /// The world around each step, which `trace.html` in the scenario's
@@ -523,6 +526,19 @@ impl ScenarioRecording {
     #[must_use]
     pub fn passed(&self) -> bool {
         self.report.passed()
+    }
+
+    /// Whether the scenario does not run in its variant and was skipped rather
+    /// than played. A skipped scenario is nothing to fail over.
+    #[must_use]
+    pub const fn skipped(&self) -> bool {
+        self.skipped
+    }
+
+    /// Whether the scenario ran and failed.
+    #[must_use]
+    pub fn failed(&self) -> bool {
+        !self.passed() && !self.skipped
     }
 }
 
@@ -538,10 +554,11 @@ pub struct Recording {
 }
 
 impl Recording {
-    /// Whether any scenario failed, for the calling binary to exit non-zero.
+    /// Whether any scenario failed, for the calling binary to exit non-zero. A
+    /// scenario that was skipped is nothing to fail over.
     #[must_use]
     pub fn any_failed(&self) -> bool {
-        self.scenarios.iter().any(|scenario| !scenario.passed())
+        self.scenarios.iter().any(ScenarioRecording::failed)
     }
 }
 
@@ -625,10 +642,11 @@ impl Recorder {
 
     /// Records every scenario once per variant, each its own entry in the
     /// index named `scenario [variant]`, instead of only as written. List
-    /// [`Variant::default`] too to keep the scenario as written. A variant
-    /// that a scenario cannot run in (a step aimed at a screen position, in a
-    /// variant that changes the window) is recorded as a failed entry saying
-    /// so. An empty list records nothing.
+    /// [`Variant::default`] too to keep the scenario as written. A variant a
+    /// scenario does not name (see [`Variant::skips`]) gets a skipped entry,
+    /// like the `.ron` test runner; a variant that it cannot run in (a step
+    /// aimed at a screen position, in a variant that changes the window) is
+    /// recorded as a failed entry saying so. An empty list records nothing.
     ///
     /// Name the variants differently ([`Variant::new`]): two with one name get
     /// separate folders, but their index entries carry the same title.
@@ -680,21 +698,39 @@ impl Recorder {
         for entry in &self.entries {
             for variant in &self.variants {
                 let scenario = variant.varied(&entry.scenario);
-                let refused = variant
-                    .problem(&entry.scenario)
-                    .map(|problem| problem.to_string());
                 let slug = unique_slug(scenario.name(), &mut used);
-                let (report, pictures, trace) = self.play(&scenario, refused)?;
+                // A scenario that does not name this variant is skipped, not
+                // failed, and nothing is played or written for it; the `.ron`
+                // test runner does the same.
+                let skipped = variant.skips(&entry.scenario);
+                let (report, pictures, trace) = if skipped {
+                    (
+                        ScenarioReport {
+                            name: scenario.name().into(),
+                            ..ScenarioReport::default()
+                        },
+                        Vec::new(),
+                        None,
+                    )
+                } else {
+                    let refused = variant
+                        .problem(&entry.scenario)
+                        .map(|problem| problem.to_string());
+                    self.play(&scenario, refused)?
+                };
                 let folder = directory.join(&slug);
                 let recording = ScenarioRecording {
                     name: scenario.name().into(),
                     group: entry.group.clone(),
                     slug,
                     report,
+                    skipped,
                     pictures: pictures.len(),
                     trace,
                 };
-                index::write_scenario(&folder, &pictures, &recording)?;
+                if !skipped {
+                    index::write_scenario(&folder, &pictures, &recording)?;
+                }
                 scenarios.push(recording);
             }
         }
