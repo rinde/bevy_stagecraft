@@ -715,7 +715,11 @@ Step::check(Check::resource::<Score>("0").is(Comparison::Ge(Value::captured("sco
   `Captured(name: "name", plus: n)` to add `n` to a number. (The offset is
   written with the name as a field because RON does not allow
   `Captured("name", plus: n)`, a positional and a named field in one.) A whole
-  number stays whole; a fractional `plus` on one is an error.
+  number stays whole (and is added exactly, even above 2^53); a fractional `plus`
+  on one is an error. Other numbers are added as `f64`. The long form refuses a
+  key it does not know (`pluss`). Anything written `Captured(..)` is read as a
+  captured operand, so an app enum's variant named `Captured` cannot be written
+  as a value.
 - A capture is read as RON written from the reflected field, then against the
   type of what it is compared with, as a literal is, so a count captured as `3`
   can be compared with a `u32` field.

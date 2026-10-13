@@ -6,7 +6,6 @@
 //! is all a comparison needs: it reads the text against the type of what it is
 //! compared with, as it does for a literal.
 
-use alloc::collections::BTreeMap;
 use core::fmt;
 
 use bevy::{
@@ -15,7 +14,9 @@ use bevy::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{Problem, Role, field_registration, find_type, join_path, reflect, root_of};
+use super::{
+    CapturedValue, Problem, Role, field_registration, find_type, join_path, reflect, root_of,
+};
 use crate::targets::Target;
 
 /// What a `Capture` step reads from the world, to give a name to.
@@ -152,10 +153,10 @@ impl Measure {
                 if registrations.is_empty() {
                     return Err("a count needs at least one component".into());
                 }
-                Ok(CapturedValue {
-                    ron: reflect::count(world, &registrations).to_string(),
-                    type_name: "usize".into(),
-                })
+                Ok(CapturedValue::new(
+                    reflect::count(world, &registrations).to_string(),
+                    "usize".into(),
+                ))
             }
             Self::Resource { path } => {
                 let (root, field) = root_of(world, &types, None, path)??;
@@ -181,51 +182,5 @@ impl fmt::Display for Measure {
             Self::Resource { path } => write!(f, "`{path}`"),
             Self::Component { target, path } => write!(f, "`{path}` of {target:?}"),
         }
-    }
-}
-
-/// A value a `Capture` step took: RON text and the name of its type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CapturedValue {
-    /// The value, written through its reflected form, as a literal in a
-    /// script would be.
-    ron: String,
-    /// The type's short path, for messages.
-    type_name: String,
-}
-
-impl CapturedValue {
-    /// The value as RON.
-    pub(crate) fn ron(&self) -> &str {
-        &self.ron
-    }
-
-    /// The type's short path.
-    pub(crate) fn type_name(&self) -> &str {
-        &self.type_name
-    }
-
-    /// A value of type `type_name` written as `ron`.
-    pub(crate) const fn new(ron: String, type_name: String) -> Self {
-        Self { ron, type_name }
-    }
-}
-
-/// Everything captured so far in a run, by name.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct CapturedValues {
-    /// The values, ordered by name.
-    values: BTreeMap<String, CapturedValue>,
-}
-
-impl CapturedValues {
-    /// What was captured as `name`, if anything.
-    pub(crate) fn get(&self, name: &str) -> Option<&CapturedValue> {
-        self.values.get(name)
-    }
-
-    /// Keeps `value` as `name`, replacing what was there.
-    pub(crate) fn insert(&mut self, name: String, value: CapturedValue) {
-        self.values.insert(name, value);
     }
 }

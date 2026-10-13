@@ -487,6 +487,7 @@ pub fn index_html(scenarios: &[ScenarioRecording]) -> String {
 mod tests {
     use super::*;
     use crate::{Step, player::ScenarioReport};
+    use bevy::prelude::{Reflect, ReflectResource, Resource};
 
     /// A recording with a finished report that passed or not.
     fn recording(name: &str, group: &str, passed: bool) -> ScenarioRecording {
@@ -559,6 +560,44 @@ mod tests {
         assert!(html.contains("class=\"fail\""), "the failed step is marked");
         assert!(html.contains("Hello &lt;b&gt;"), "the UI tree is escaped");
         assert!(!html.contains("<img"), "no picture was taken");
+    }
+
+    /// A resource a `Capture` step can read.
+    #[derive(Resource, Reflect)]
+    #[reflect(Resource)]
+    struct Tally(u32);
+
+    #[test]
+    fn a_trace_page_lists_what_a_step_captured_escaped() {
+        let scenario = crate::Scenario::new("captures")
+            .setup(|world| {
+                world.insert_resource(Tally(7));
+            })
+            .steps([Step::capture(
+                "a <b>",
+                crate::Measure::resource::<Tally>("0"),
+            )]);
+        let mut app = bevy::prelude::App::new();
+        app.add_plugins(crate::HeadlessPlugins::default())
+            .register_type::<Tally>();
+        app.finish();
+        app.cleanup();
+        let (report, trace) = scenario.run_in_traced(&mut app, crate::NoiseFilter::default());
+        assert!(report.passed(), "{:?}", report.failures());
+        let recording = ScenarioRecording {
+            name: "captures".into(),
+            group: "A".into(),
+            slug: "captures".into(),
+            report,
+            pictures: 0,
+            trace: Some(trace.clone()),
+        };
+        let html = trace_html(&recording, &trace, &[]);
+        assert!(html.contains("<h4>Captured</h4>"), "{html}");
+        assert!(
+            html.contains("&quot;a &lt;b&gt;&quot; = 7 (u32), `Tally.0`"),
+            "{html}"
+        );
     }
 
     #[test]

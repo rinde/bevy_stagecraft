@@ -42,6 +42,8 @@ struct Editor {
     zoom: f32,
     /// How many times it was used.
     uses: u32,
+    /// A number an `f64` cannot hold exactly.
+    big: u64,
 }
 
 /// A gauge with a value, on a node with a "Speed" label inside it.
@@ -89,6 +91,7 @@ fn spawn(world: &mut World) {
         tool: Tool::Draw,
         zoom: 1.5,
         uses: 4,
+        big: 9_007_199_254_740_993,
     });
     world.spawn(Ghost);
     world.spawn(Ghost);
@@ -225,7 +228,7 @@ fn a_field_equals_the_captured_one_plus_an_offset() {
     ));
     let outcomes = outcomes(&report);
     assert_eq!(&outcomes[5..8], [Outcome::Pass, Outcome::Pass, Outcome::Fail(
-        "`Gauge.value` of Text(\"Speed\") is 0.75, expected Captured(\"value\", plus: 0.5) = 1.0".into()
+        "`Gauge.value` of Text(\"Speed\") is 0.75, expected Captured(name: \"value\", plus: 0.5) = 1.0".into()
     )]);
 }
 
@@ -293,7 +296,7 @@ fn adding_to_something_that_is_not_a_number_fails_naming_both() {
         panic!("{:?}", report.steps);
     };
     assert!(message.contains("`Editor.tool`"), "{message}");
-    assert!(message.contains("Captured(\"tool\""), "{message}");
+    assert!(message.contains("Captured(name: \"tool\""), "{message}");
     assert!(message.contains("not a number"), "{message}");
 }
 
@@ -507,7 +510,7 @@ fn a_script_with_captures_plays_from_a_file_like_the_same_one_in_rust() {
             Outcome::Pass,
             Outcome::Pass,
             Outcome::Fail(
-                "count of `Ghost` is 2, expected Captured(\"ghosts\", plus: 1) = 3".into()
+                "count of `Ghost` is 2, expected Captured(name: \"ghosts\", plus: 1) = 3".into()
             ),
         ]
     );
@@ -539,4 +542,67 @@ fn the_trace_shows_what_a_step_captured() {
     assert_eq!(captured[0].type_name, "usize");
     assert!(captured[0].describe().contains("\"ghosts\" = 2"));
     assert!(trace.step(1).is_none_or(|step| step.captured.is_empty()));
+}
+
+#[test]
+fn a_misspelt_key_in_the_long_form_is_a_load_error() {
+    for key in ["pluss", "pls", "Plus"] {
+        let error = load(&format!(
+            r#"steps: [Capture(name: "n", value: Resource(path: "Editor.uses")), Check(Resource(path: "Editor.uses", is: Eq(Captured(name: "n", {key}: 3))))]"#
+        ))
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(key), "{message}");
+        assert!(message.contains("plus"), "{message}");
+    }
+}
+
+#[test]
+fn a_captured_value_in_a_message_is_written_as_the_loader_reads_it() {
+    for value in [
+        Value::captured("views"),
+        Value::captured("views").plus(5.0),
+        Value::captured("a \"b\"").plus(-1.5),
+    ] {
+        let reloaded = Value::from_ron(&value.to_string()).unwrap();
+        assert_eq!(reloaded, value, "{value}");
+    }
+}
+
+#[test]
+fn values_and_comparisons_with_the_same_offset_are_equal() {
+    assert_eq!(
+        Value::captured("n").plus(1.0),
+        Value::captured("n").plus(1.0)
+    );
+    assert_ne!(Value::captured("n").plus(1.0), Value::captured("n"));
+    assert_eq!(
+        Comparison::Gt(Value::captured("n")),
+        Comparison::Gt(Value::captured("n"))
+    );
+}
+
+#[test]
+fn an_offset_that_is_not_finite_makes_the_check_unusable() {
+    let value = Value::captured("n").plus(f64::NAN);
+    assert!(value.captured_name().is_none(), "{value}");
+    assert!(value.to_string().contains("finite"), "{value}");
+}
+
+#[test]
+fn a_whole_number_above_two_to_the_fifty_third_keeps_every_digit_after_an_offset() {
+    let scenario = Scenario::new("big")
+        .setup(spawn)
+        .step(Step::capture("big", Measure::resource::<Editor>("big")))
+        .step(Step::check(
+            Check::resource::<Editor>("big").is(Comparison::Eq(Value::captured("big").plus(0.0))),
+        ))
+        .step(Step::check(
+            Check::resource::<Editor>("big").is(Comparison::Eq(Value::captured("big"))),
+        ))
+        .step(Step::check(
+            Check::resource::<Editor>("big").is(Comparison::Lt(Value::captured("big").plus(1.0))),
+        ));
+    let report = run(&scenario);
+    assert!(report.passed(), "{:?}", report.failures());
 }

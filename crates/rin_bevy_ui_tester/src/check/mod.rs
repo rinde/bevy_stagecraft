@@ -12,7 +12,7 @@
 //! with `#[reflect(AppCheck)]` (see [`AppCheck`]), written inside `App(..)`.
 
 mod app;
-pub mod capture;
+mod capture;
 pub mod pick;
 mod reflect;
 pub mod suggest;
@@ -20,6 +20,7 @@ mod tree;
 mod value;
 mod widget;
 
+use alloc::collections::BTreeMap;
 use core::{fmt, ops::Not};
 
 use bevy::{
@@ -36,7 +37,6 @@ use bevy::{
 use ron::value::RawValue;
 use serde::{Deserialize, Serialize, de::DeserializeSeed};
 
-pub(crate) use self::capture::{CapturedValue, CapturedValues};
 pub use self::{
     app::{AppCheck, ReflectAppCheck},
     capture::Measure,
@@ -1073,6 +1073,52 @@ pub fn tree_snapshot(world: &World, target: &Target) -> Result<String, String> {
 /// otherwise `node` itself.
 pub(crate) fn widget_of(world: &World, node: Entity) -> Entity {
     widget::widget(world, node)
+}
+
+/// A value a `Capture` step took: RON text and the name of its type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapturedValue {
+    /// The value, written through its reflected form, as a literal in a
+    /// script would be.
+    ron: String,
+    /// The type's short path, for messages.
+    type_name: String,
+}
+
+impl CapturedValue {
+    /// The value as RON.
+    pub(crate) fn ron(&self) -> &str {
+        &self.ron
+    }
+
+    /// The type's short path.
+    pub(crate) fn type_name(&self) -> &str {
+        &self.type_name
+    }
+
+    /// A value of type `type_name` written as `ron`.
+    pub(crate) const fn new(ron: String, type_name: String) -> Self {
+        Self { ron, type_name }
+    }
+}
+
+/// Everything captured so far in a run, by name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CapturedValues {
+    /// The values, ordered by name.
+    values: BTreeMap<String, CapturedValue>,
+}
+
+impl CapturedValues {
+    /// What was captured as `name`, if anything.
+    pub(crate) fn get(&self, name: &str) -> Option<&CapturedValue> {
+        self.values.get(name)
+    }
+
+    /// Keeps `value` as `name`, replacing what was there.
+    pub(crate) fn insert(&mut self, name: String, value: CapturedValue) {
+        self.values.insert(name, value);
+    }
 }
 
 /// Something a check names that is not there, or not usable.

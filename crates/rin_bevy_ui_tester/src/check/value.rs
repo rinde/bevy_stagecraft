@@ -7,7 +7,9 @@
 //!
 //! A value may also be a captured one, `Captured("views")`: what an earlier
 //! `Capture` step measured. It is looked up when the check runs and then
-//! compared as the literal it turned out to be.
+//! compared as the literal it turned out to be. Anything written as
+//! `Captured(..)` is read as a captured operand, so a literal of an app enum
+//! with a variant called `Captured` cannot be written as a value.
 
 use core::{cmp::Ordering, fmt};
 
@@ -17,7 +19,7 @@ use bevy::reflect::{
 use ron::value::RawValue;
 use serde::{Deserialize, Serialize};
 
-use super::capture::CapturedValues;
+use super::CapturedValues;
 
 /// What a script spells a captured operand with: `Captured("views")`.
 const CAPTURED: &str = "Captured";
@@ -26,15 +28,21 @@ const CAPTURED: &str = "Captured";
 /// is compared with, or a value captured earlier in the scenario (see
 /// [`Value::captured`]).
 ///
+/// An offset (`plus`) is added to a whole number exactly, so a `u64` above
+/// 2^53 keeps every digit, and to anything else as an `f64`.
+///
 /// ```
 /// use rin_bevy_ui_tester::check::Value;
 ///
 /// assert_eq!(Value::of(&3_u32).ron(), Ok("3"));
 /// assert_eq!(Value::from_ron(" Lay ").unwrap().ron(), Ok("Lay"));
 /// assert!(Value::from_ron("(").is_err());
-/// assert_eq!(Value::captured("views").plus(5.0).to_string(), "Captured(\"views\", plus: 5)");
+/// assert_eq!(
+///     Value::captured("views").plus(5.0).to_string(),
+///     "Captured(name: \"views\", plus: 5)"
+/// );
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Value(Repr);
 
 /// What a [`Value`] is.
@@ -58,6 +66,10 @@ enum Repr {
         ron: String,
     },
 }
+
+/// Sound because the only `f64` a [`Repr`] holds is an offset that is finite
+/// (`from_raw` and [`Value::plus`] refuse any other), so it equals itself.
+impl Eq for Repr {}
 
 impl Value {
     /// `value` as RON, written through its reflected form: the same form the
@@ -98,6 +110,7 @@ impl Value {
         }
         /// `Captured(name: "name", plus: 5)`.
         #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
         enum Long {
             /// The only form.
             Captured {
@@ -153,10 +166,19 @@ impl Value {
     #[must_use]
     pub fn plus(self, amount: f64) -> Self {
         match self.0 {
-            Repr::Captured { name, plus } => Self(Repr::Captured {
-                name,
-                plus: Some(plus.unwrap_or(0.0) + amount),
-            }),
+            Repr::Captured { name, plus } => {
+                let total = plus.unwrap_or(0.0) + amount;
+                if total.is_finite() {
+                    Self(Repr::Captured {
+                        name,
+                        plus: Some(total),
+                    })
+                } else {
+                    Self(Repr::Literal(Err(format!(
+                        "cannot add {amount} to Captured({name:?}): `plus` must be a finite number"
+                    ))))
+                }
+            }
             other => Self(Repr::Literal(Err(format!(
                 "cannot add {amount} to {}: only a captured value takes `plus`",
                 Self(other)
@@ -220,7 +242,8 @@ impl Value {
     }
 }
 
-/// `ron`, a number, plus `plus`, as RON: a whole number stays whole.
+/// `ron`, a number, plus `plus`, as RON: a whole number stays whole, and is
+/// added exactly (an `f64` holds integers only up to 2^53).
 fn add(ron: &str, plus: f64) -> Result<String, &'static str> {
     let options = crate::script::ron_options();
     // Digits alone are an integer, whatever its type; a float is written with
@@ -230,6 +253,18 @@ fn add(ron: &str, plus: f64) -> Result<String, &'static str> {
         .trim_start_matches('-')
         .chars()
         .all(|digit| digit.is_ascii_digit() || digit == '_');
+    if whole && plus.fract() == 0.0 {
+        // `plus` is whole and finite, so printing it without decimals is exact.
+        let exact = format!("{plus:.0}").parse::<i128>();
+        // RON allows `1_000`; reflection never writes it, a literal might.
+        let number = ron.trim().replace('_', "").parse::<i128>();
+        if let (Ok(number), Ok(plus)) = (number, exact) {
+            return number
+                .checked_add(plus)
+                .map(|sum| sum.to_string())
+                .ok_or("the sum is not finite");
+        }
+    }
     let Ok(number) = options.from_str::<f64>(ron) else {
         return Err("it is not a number");
     };
@@ -291,7 +326,7 @@ impl fmt::Display for Value {
             Repr::Captured {
                 name,
                 plus: Some(plus),
-            } => write!(f, "{CAPTURED}({name:?}, plus: {plus})"),
+            } => write!(f, "{CAPTURED}(name: {name:?}, plus: {plus})"),
             Repr::Resolved { from, ron } => write!(f, "{from} = {ron}"),
         }
     }
@@ -307,7 +342,7 @@ impl fmt::Display for Value {
 /// Count(with: ["Ghost"], is: Eq(Captured("ghosts"))),
 /// Resource(path: "Score.0", is: Ge(Captured(name: "score", plus: 1))),
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Comparison {
     /// Equal to the value.
