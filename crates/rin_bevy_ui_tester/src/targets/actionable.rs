@@ -293,7 +293,8 @@ pub(super) fn painted_topmost(world: &World, widget: Entity) -> Result<(), Strin
 
 /// Whether `node` draws something of its own over its whole box: a
 /// background colour that shows, a background gradient, an image or text.
-/// Borders and shadows are left out: they paint the edge or outside of the
+/// A gradient with no stops, or with only transparent ones, still counts as
+/// covering: only its presence is looked at, not what it draws. Borders and shadows are left out: they paint the edge or outside of the
 /// box, not what lies under its middle.
 fn paints(world: &World, node: Entity) -> bool {
     world
