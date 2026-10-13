@@ -212,33 +212,36 @@ fn not_on_top_holds_for_a_widget_that_is_never_laid_out() {
     assert!(report.passed(), "{:?}", report.failures());
 }
 
+/// A "Go" button that lies wholly outside the box its parent clips to.
+fn spawn_clipped_go(world: &mut World) {
+    world.spawn(Camera2d);
+    world.spawn((
+        Node {
+            width: px(50),
+            height: px(50),
+            overflow: Overflow::clip(),
+            ..Node::default()
+        },
+        children![(
+            Button,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(200),
+                top: px(200),
+                width: px(100),
+                height: px(50),
+                ..Node::default()
+            },
+            BackgroundColor(Color::WHITE),
+            children![Text::new("Go")],
+        )],
+    ));
+}
+
 #[test]
 fn a_widget_clipped_away_by_its_parent_is_not_on_top() {
     let scenario = Scenario::new("clipped")
-        .setup(|world| {
-            world.spawn(Camera2d);
-            world.spawn((
-                Node {
-                    width: px(50),
-                    height: px(50),
-                    overflow: Overflow::clip(),
-                    ..Node::default()
-                },
-                children![(
-                    Button,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(200),
-                        top: px(200),
-                        width: px(100),
-                        height: px(50),
-                        ..Node::default()
-                    },
-                    BackgroundColor(Color::WHITE),
-                    children![Text::new("Go")],
-                )],
-            ));
-        })
+        .setup(spawn_clipped_go)
         .step(Step::wait(SETTLE_FRAMES));
     let message = failure_of(scenario, Check::on_top(Target::text("Go")))
         .expect("OnTop should fail for a clipped widget");
@@ -251,29 +254,7 @@ fn a_widget_clipped_away_by_its_parent_is_not_on_top() {
 #[test]
 fn not_on_top_holds_for_a_widget_that_is_clipped_away() {
     let report = Scenario::new("clipped not")
-        .setup(|world| {
-            world.spawn(Camera2d);
-            world.spawn((
-                Node {
-                    width: px(50),
-                    height: px(50),
-                    overflow: Overflow::clip(),
-                    ..Node::default()
-                },
-                children![(
-                    Button,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(200),
-                        top: px(200),
-                        width: px(100),
-                        height: px(50),
-                        ..Node::default()
-                    },
-                    children![Text::new("Go")],
-                )],
-            ));
-        })
+        .setup(spawn_clipped_go)
         .steps([
             Step::wait(SETTLE_FRAMES),
             Step::check(!Check::on_top(Target::text("Go"))),
