@@ -35,7 +35,7 @@ pub mod variant;
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
 pub use check::{
-    AppCheck, Check, Comparison, CountOf, FieldOf, ReflectAppCheck, TextMatch, Value,
+    AppCheck, Check, Comparison, CountOf, FieldOf, Measure, ReflectAppCheck, TextMatch, Value,
     pick::{
         AppCheckForm, FieldValue, Picked, PickedForm, app_check_forms, checks_that_hold, node_at,
         subject_of, target_alternatives,
@@ -93,6 +93,7 @@ pub use targets::{
     DEFAULT_ACTION_TIMEOUT, NotUnderTest, ResolvedTarget, Target, WidgetRole, entity_of, resolve,
 };
 pub use trace::{
-    ScenarioTrace, StepTrace, StepView, TargetTrace, TraceCheck, TracePoint, UiLine, step_title,
+    ScenarioTrace, StepTrace, StepView, TargetTrace, TraceCaptured, TraceCheck, TracePoint, UiLine,
+    step_title,
 };
 pub use variant::Variant;

@@ -34,7 +34,7 @@ use bevy::{
 use rin_bevy_ui_tester::gallery::GalleryPhase;
 use rin_bevy_ui_tester::{
     AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryRunReport,
-    GalleryState, GalleryTab, HeadlessPlugins, NoiseFilter, NoisePreset, Outcome, Probe,
+    GalleryState, GalleryTab, HeadlessPlugins, Measure, NoiseFilter, NoisePreset, Outcome, Probe,
     ReflectAppSetup, Registry, Scenario, ScenarioPlayer, ScenariosCamera, ScenariosWindow, Script,
     SessionHooks, Speed, Step, Target, TraceWorld, Variant, WidgetRole,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
@@ -1987,6 +1987,34 @@ fn the_trace_tab_shows_the_first_failing_step_once_the_run_is_over() {
     assert!(
         all.iter().any(|text| text.starts_with("FAIL 2.")),
         "the failing step is titled with its mark: {all:?}"
+    );
+}
+
+#[test]
+fn the_trace_tab_lists_what_the_step_looked_at_captured() {
+    let capturing = Scenario::new("captures a value")
+        .setup(spawn_app)
+        .window_size(640, 480)
+        .steps([
+            Step::wait(2),
+            Step::capture("clicks", Measure::resource::<Count>(".0")),
+            Step::wait(2),
+        ]);
+    let mut app = app_with(
+        GalleryPlugin::new(Gallery::new().group("All", [capturing]))
+            .with_reset(reset_app)
+            .with_loop_pause(2),
+    );
+    on_the_trace_tab(&mut app);
+    ask(&mut app, GalleryAction::ToggleLoop);
+    run_until(&mut app, 500, finished);
+    app.update();
+    ask(&mut app, GalleryAction::InspectStep(1));
+    let all = texts(&mut app);
+    assert!(
+        all.iter()
+            .any(|text| text.starts_with("captured \"clicks\" = 0 (")),
+        "{all:?}"
     );
 }
 

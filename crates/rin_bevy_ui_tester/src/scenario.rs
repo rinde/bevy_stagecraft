@@ -18,7 +18,7 @@ use bevy::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    check::Check,
+    check::{Check, Measure},
     extension::{AppSetup, AppView, Setup, View},
     script::{FORMAT_VERSION, LoadError, Registry, Script},
     targets::{DEFAULT_ACTION_TIMEOUT, Target},
@@ -150,7 +150,8 @@ impl BitOr for Modifiers {
 /// One thing a scenario does. Time is counted in frames of 1/60 s.
 ///
 /// Every step that touches input takes one frame, except where it says
-/// otherwise; [`Step::Check`], [`Step::Caption`] and [`Step::Group`] take none.
+/// otherwise; [`Step::Check`], [`Step::Capture`], [`Step::Caption`] and [`Step::Group`]
+/// take none.
 ///
 /// A step that acts on a target that names a widget first waits, a frame at
 /// a time, until the target can be acted on, as Playwright does: it exists
@@ -252,6 +253,19 @@ pub enum Step {
     /// Run the check. Takes no frames: it sees the world as the previous step
     /// left it. A failed check fails the step but does not stop the script.
     Check(Check),
+    /// Read something from the world now and keep it as `name`, for later
+    /// checks to compare with by `Captured("name")`: a count that must not
+    /// change, a position that must move by so much. Takes no frames. The
+    /// name is unique in the script, and a check may use it only after the
+    /// capture (the `expect` list, which runs last, may use any). If the
+    /// measurement cannot be read, the script stops there, as for an action
+    /// whose target is missing.
+    Capture {
+        /// What to call the value; not used twice in a script.
+        name: String,
+        /// What to read.
+        value: Measure,
+    },
     /// Show this caption from here on, for the recorder and the gallery.
     Caption(String),
     /// The step, waiting at most this many frames for its target to be
@@ -430,6 +444,15 @@ impl Step {
     #[must_use]
     pub fn check(check: impl Into<Check>) -> Self {
         Self::Check(check.into())
+    }
+
+    /// Keep what `value` reads now as `name` (see [`Step::Capture`]).
+    #[must_use]
+    pub fn capture(name: impl Into<String>, value: Measure) -> Self {
+        Self::Capture {
+            name: name.into(),
+            value,
+        }
     }
 
     /// Show `text` as the caption.

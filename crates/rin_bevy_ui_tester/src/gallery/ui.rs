@@ -42,7 +42,7 @@ use crate::{
     player::{CheckKind, Outcome, ScenarioPlayer, ScenarioReport},
     scenario::{Scenario, Step, flatten, with_group_path},
     targets::NotUnderTest,
-    trace::{ScenarioTrace, StepView, TargetTrace, TraceCheck, step_title},
+    trace::{ScenarioTrace, StepView, TargetTrace, TraceCaptured, TraceCheck, step_title},
 };
 
 /// Default size of the Scenarios window, in logical pixels.
@@ -908,7 +908,7 @@ struct TraceKey {
     points: usize,
     /// What the shown step looked up and checked, which a waiting step keeps
     /// changing.
-    found: (Vec<TargetTrace>, Vec<TraceCheck>),
+    found: (Vec<TargetTrace>, Vec<TraceCheck>, Vec<TraceCaptured>),
 }
 
 /// The step the script is at while it plays, else once it is over the first
@@ -975,7 +975,13 @@ fn trace_key(
         points: trace.map_or(0, |trace| trace.points().len()),
         found: step
             .and_then(|step| trace?.step(step))
-            .map(|step| (step.targets.clone(), step.checks.clone()))
+            .map(|step| {
+                (
+                    step.targets.clone(),
+                    step.checks.clone(),
+                    step.captured.clone(),
+                )
+            })
             .unwrap_or_default(),
     }
 }
@@ -1179,6 +1185,9 @@ fn spawn_trace_panel(
             format!("target {}: {}", target.target, target.answer()),
             tint,
         );
+    }
+    for captured in view.captured {
+        label(panel, format!("captured {}", captured.describe()), TEXT);
     }
     for check in view.checks {
         let (mark, tint) = outcome_mark(&check.outcome, theme);

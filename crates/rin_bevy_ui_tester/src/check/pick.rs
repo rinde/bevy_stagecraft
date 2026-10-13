@@ -33,7 +33,7 @@ use bevy::{
 };
 
 use super::{
-    Check, Comparison, TextMatch, Value,
+    CapturedValues, Check, Comparison, TextMatch, Value,
     reflect::{self, Role},
     suggest::{NoiseFilter, flatten, holds, name_of, ron_of, widget_check},
     widget::{self, WidgetState},
@@ -785,9 +785,12 @@ impl Picked {
             .unwrap_or_default();
         // The lock is let go first: running a check takes it again.
         for (picked, check) in self.forms.iter_mut().zip(built) {
-            picked.holds = check
-                .as_ref()
-                .is_ok_and(|check| matches!(check.poll(world, 0), Some(Ok(()))));
+            picked.holds = check.as_ref().is_ok_and(|check| {
+                matches!(
+                    check.poll(world, &CapturedValues::default(), 0),
+                    Some(Ok(()))
+                )
+            });
             picked.check = check;
         }
     }

@@ -126,6 +126,31 @@ pub struct TraceCheck {
     pub outcome: Outcome,
 }
 
+/// A value a `Capture` step took.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceCaptured {
+    /// The name it was kept under.
+    pub name: String,
+    /// What was measured, in words.
+    pub measured: String,
+    /// The value, as RON.
+    pub value: String,
+    /// The short path of its type.
+    pub type_name: String,
+}
+
+impl TraceCaptured {
+    /// The capture as one line, such as
+    /// ``"views" = 596 (usize), count of `ItemView` ``.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "{:?} = {} ({}), {}",
+            self.name, self.value, self.type_name, self.measured
+        )
+    }
+}
+
 /// What the player recorded about one step apart from the world around it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StepTrace {
@@ -133,6 +158,8 @@ pub struct StepTrace {
     pub targets: Vec<TargetTrace>,
     /// The checks the step ran.
     pub checks: Vec<TraceCheck>,
+    /// The values the step captured.
+    pub captured: Vec<TraceCaptured>,
 }
 
 /// The trace of one run: see the [module documentation](self).
@@ -223,6 +250,11 @@ impl ScenarioTrace {
     pub(crate) fn add_check(&mut self, index: usize, check: TraceCheck) {
         self.steps.entry(index).or_default().checks.push(check);
     }
+
+    /// Remembers a value step `index` captured.
+    pub(crate) fn add_captured(&mut self, index: usize, captured: TraceCaptured) {
+        self.steps.entry(index).or_default().captured.push(captured);
+    }
 }
 
 /// What a step is called in a list: its number (from 1) and its words.
@@ -268,6 +300,8 @@ pub struct StepView<'a> {
     pub targets: &'a [TargetTrace],
     /// The checks it ran.
     pub checks: &'a [TraceCheck],
+    /// The values it captured.
+    pub captured: &'a [TraceCaptured],
     /// The world as the step found it, if the trace has it.
     pub before: Option<&'a TracePoint>,
     /// The world once the step was done; `None` while it is still going.
@@ -316,6 +350,7 @@ impl<'a> StepView<'a> {
             outcome: record.outcome.clone(),
             targets: recorded.map_or(&[], |step| step.targets.as_slice()),
             checks: recorded.map_or(&[], |step| step.checks.as_slice()),
+            captured: recorded.map_or(&[], |step| step.captured.as_slice()),
             before,
             after,
             changes,

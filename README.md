@@ -496,7 +496,7 @@ the same way later in version 3: a `Named(..)` or `File(..)` setup, a view
 given by name (`view: "top_down"`) and a `Custom(resolver: .., argument: ..)`
 target are refused with a load error saying to write `App(..)`. The script's
 `action_timeout` and the `Timeout(..)` and `Force(..)` steps came later in
-version 3 and only add forms, as does `Group(..)` (below). Any other older file
+version 3 and only add forms, as do `Group(..)` and `Capture(..)` (below). Any other older file
 is also a newer one.
 
 ```ron
@@ -534,6 +534,9 @@ is also a newer one.
         Check(TextOf(Text("Score"), StartsWith("Score: "))),
         Check(Tree(of: Name("Toolbar"), matches: "- panel:\n  - button \"Pause\"")),
         Check(Within(30, Shows("Saved"))),
+        Capture(name: "ghosts", value: Count(with: ["Ghost"])), // keep a value
+        Check(Count(with: ["Ghost"], is: Eq(Captured("ghosts")))),
+        Check(Resource(path: "Score.0", is: Ge(Captured(name: "ghosts", plus: 1)))),
     ],
     expect: [
         App(ActivatedOnce),
@@ -689,6 +692,60 @@ failure first and failures first within each. There is no golden-image
 comparison; a failed check fails the scenario, and `any_failed()` tells the
 calling binary to exit non-zero.
 
+### Comparing with a value captured earlier
+
+A check can only compare with a literal, which is no use for "the number of
+views did not change" or "the popup moved 40 pixels to the right". A
+`Capture` step reads something once and keeps it under a name; a later check
+compares with it.
+
+```ron
+Capture(name: "views", value: Count(with: ["ItemView"])),
+Capture(name: "x", value: Component(target: Name("popup"), path: "UiGlobalTransform.0.translation.x")),
+// ... the steps that should change nothing, or one thing ...
+Check(Count(with: ["ItemView"], is: Eq(Captured("views")))),
+Check(Component(target: Name("popup"), path: "UiGlobalTransform.0.translation.x",
+                is: Eq(Captured(name: "x", plus: 40)))),
+```
+
+```rust,ignore
+Step::capture("views", Measure::count::<ItemView>()),
+Step::capture("score", Measure::resource::<Score>("0")),
+Step::check(Check::count::<ItemView>().is(Comparison::Eq(Value::captured("views")))),
+Step::check(Check::resource::<Score>("0").is(Comparison::Ge(Value::captured("score").plus(1.0)))),
+```
+
+- `value` is `Count(with: [..])`, `Resource(path: ..)` or
+  `Component(target: .., path: ..)`: the check of the same name without its
+  `is`, read the same way. A capture takes no frame and sees the world as the
+  step before it left it.
+- Any value of a comparison (`Eq`, `Ne`, `Lt`, `Le`, `Gt`, `Ge`, both ends of
+  `Between`, and `InState`'s value) may be `Captured("name")`, or
+  `Captured(name: "name", plus: n)` to add `n` to a number. (The offset is
+  written with the name as a field because RON does not allow
+  `Captured("name", plus: n)`, a positional and a named field in one.) A whole
+  number stays whole (and is added exactly, even above 2^53); a fractional `plus`
+  on one is an error. Other numbers are added as `f64`. The long form refuses a
+  key it does not know (`pluss`). Anything written `Captured(..)` is read as a
+  captured operand, so an app enum's variant named `Captured` cannot be written
+  as a value.
+- A capture is read as RON written from the reflected field, then against the
+  type of what it is compared with, as a literal is, so a count captured as `3`
+  can be compared with a `u32` field.
+- Names are unique in a script. A check may use a name only after its
+  `Capture` (also inside `Not`, `All`, `Any` and `Within`); the `expect` list
+  runs last and may use any. Loading refuses a name that is not captured
+  before the check, a name captured twice, and a capture of an unknown type or
+  field (with the usual close-name suggestions), each naming the step.
+- At run time a capture whose target is missing, whose resource is not there or
+  whose field cannot be read fails its step, naming the capture, and the rest
+  of the script is skipped. A comparison that does not fit (adding to a
+  non-number, an enum compared with a float) fails naming the check and the
+  captured value. A failure shows the resolved value:
+  `count of `Ghost` is 3, expected Captured("ghosts") = 2`.
+- The trace (`trace.html`, the gallery's Trace tab) lists what a step captured.
+  The session recorder and suggested checks do not write captures.
+
 ### The trace: what the world looked like at each step
 
 Every recorded scenario is also traced (`Recorder::with_noise_filter` chooses
@@ -697,7 +754,7 @@ this crate). Between steps the player takes a point in `Last`, the moment the
 recorder asks for its picture: a `WorldSnapshot` (the one suggested checks are
 made from: reflected resources, counts, UI texts, widget states), the UI tree,
 and the frame. Per step it also keeps the targets it looked up and where it
-found them, and the checks it ran. `trace.html` in each scenario's folder shows,
+found them, the values it captured and the checks it ran. `trace.html` in each scenario's folder shows,
 per step, the failure message, the targets, the checks, the pictures before and
 after, how the snapshot changed, and the UI tree and snapshot afterwards. In
 `index.html` a failed scenario's card lists its steps, each linking to its
