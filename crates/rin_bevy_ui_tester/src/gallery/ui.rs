@@ -34,7 +34,7 @@ use super::{
     Gallery, GalleryAction, GalleryState, Speed,
     input::{ScenariosScroll, scenarios_pointer},
     pick::spelled,
-    state::{GalleryPhase, GalleryTab, NoisePreset, Suggestions, TraceWorld},
+    state::{GalleryPhase, GalleryTab, NoisePreset, ScenarioResult, Suggestions, TraceWorld},
 };
 use crate::{
     check::{Check, pick::Picked, suggest::SnapshotChange},
@@ -724,9 +724,9 @@ pub(super) fn update_labels(
     }
     for (EntryResult(index), mut text, mut colour) in &mut results {
         let (mark, tint) = match state.result(*index) {
-            Some(true) => (theme.pass_mark.clone(), theme.pass_text),
-            Some(false) => (theme.fail_mark.clone(), theme.fail_text),
-            None => (theme.skipped_mark.clone(), DIM),
+            Some(ScenarioResult::Passed) => (theme.pass_mark.clone(), theme.pass_text),
+            Some(ScenarioResult::Failed) => (theme.fail_mark.clone(), theme.fail_text),
+            Some(ScenarioResult::Skipped) | None => (theme.skipped_mark.clone(), DIM),
         };
         if text.0 != mark {
             text.0 = mark;

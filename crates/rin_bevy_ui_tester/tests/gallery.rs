@@ -35,8 +35,8 @@ use rin_bevy_ui_tester::gallery::GalleryPhase;
 use rin_bevy_ui_tester::{
     AppSetup, Check, Gallery, GalleryAction, GalleryEntry, GalleryPlugin, GalleryRunReport,
     GalleryState, GalleryTab, HeadlessPlugins, Measure, NoiseFilter, NoisePreset, Outcome, Probe,
-    ReflectAppSetup, Registry, Scenario, ScenarioPlayer, ScenariosCamera, ScenariosWindow, Script,
-    SessionHooks, Speed, Step, Target, TraceWorld, Variant, WidgetRole,
+    ReflectAppSetup, Registry, Scenario, ScenarioPlayer, ScenarioResult, ScenariosCamera,
+    ScenariosWindow, Script, SessionHooks, Speed, Step, Target, TraceWorld, Variant, WidgetRole,
     overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
     player::ScenarioReport,
     script::Setup,
@@ -371,7 +371,7 @@ fn picking_a_scenario_resets_the_app_and_plays_it_to_a_passing_result() {
     assert_eq!(count(app.world()), 2);
     assert!(app.world().resource::<ScenarioReport>().passed());
     let state = app.world().resource::<GalleryState>();
-    assert_eq!(state.result(0), Some(true));
+    assert_eq!(state.result(0), Some(ScenarioResult::Passed));
     assert_eq!(state.result(1), None, "the other entry has not run");
     assert_eq!(app.world().resource::<Resets>().0, 1);
 }
@@ -386,7 +386,7 @@ fn a_failing_scenario_records_a_failing_result() {
     app.world_mut().insert_resource(Count(100));
     run_until(&mut app, 400, finished);
     let state = app.world().resource::<GalleryState>();
-    assert_eq!(state.result(1), Some(false));
+    assert_eq!(state.result(1), Some(ScenarioResult::Failed));
 }
 
 #[test]
@@ -2283,7 +2283,7 @@ fn the_variant_picker_runs_the_selected_scenario_in_that_variant() {
     assert_eq!(report.name, "add 2 [large]");
     assert!(report.passed(), "{report:#?}");
     let state = app.world().resource::<GalleryState>();
-    assert_eq!(state.result_in(0, 1), Some(true));
+    assert_eq!(state.result_in(0, 1), Some(ScenarioResult::Passed));
     assert_eq!(state.result_in(0, 0), None, "the default has not run");
 }
 
@@ -2358,6 +2358,58 @@ fn a_screen_step_in_a_variant_fails_the_run_naming_the_step() {
         "{:?}",
         outcome.failures
     );
+}
+
+#[test]
+fn a_scenario_restricted_to_another_variant_is_skipped_not_played() {
+    let restricted = adds(2).variants(["default"]);
+    let mut app = variant_app([restricted], default_and_large());
+    ask(&mut app, GalleryAction::SelectVariant(1));
+    ask(&mut app, GalleryAction::Select(0));
+    let state = app.world().resource::<GalleryState>();
+    assert_eq!(state.result_in(0, 1), Some(ScenarioResult::Skipped));
+    assert!(!state.is_playing(), "the player never starts");
+    assert!(state.status().contains("Skipped"), "{}", state.status());
+    let report = app.world().resource::<ScenarioReport>();
+    assert_eq!(report.name, "add 2 [large]");
+    assert_eq!(report.frames, 0, "no frame played");
+    assert_eq!(count(app.world()), 0, "the app was not played");
+}
+
+#[test]
+fn running_everything_skips_a_scenario_that_does_not_name_the_variant() {
+    let restricted = adds(2).variants(["default"]);
+    let mut app = app_with(
+        GalleryPlugin::new(
+            Gallery::new()
+                .group("All", [restricted, adds(3)])
+                .variants(default_and_large()),
+        )
+        .with_reset(reset_app)
+        .with_run_all(),
+    );
+    for _ in 0..4_000 {
+        if exit_asked(&app).is_some() {
+            break;
+        }
+        app.update();
+    }
+    let report = app.world().resource::<GalleryRunReport>();
+    assert!(report.passed(), "{}", report.summary());
+    let names: Vec<_> = report.outcomes.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["add 2", "add 2 [large]", "add 3", "add 3 [large]"]);
+    let skipped = report
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.skipped())
+        .count();
+    assert_eq!(skipped, 1, "{}", report.summary());
+    let summary = report.summary();
+    assert!(
+        summary.starts_with("3 of 4 scenarios passed, 1 skipped"),
+        "{summary}"
+    );
+    assert!(summary.contains("SKIP add 2 [large]"), "{summary}");
 }
 
 #[test]

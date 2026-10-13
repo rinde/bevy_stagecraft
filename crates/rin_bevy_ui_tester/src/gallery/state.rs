@@ -486,21 +486,47 @@ impl Suggestions {
     }
 }
 
+/// How one entry fared in one variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScenarioResult {
+    /// The scenario ran and every check passed.
+    Passed,
+    /// The scenario ran and something failed.
+    Failed,
+    /// The scenario does not run in this variant and was skipped, not run.
+    Skipped,
+}
+
 /// How one scenario fared in a run of the whole catalogue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScenarioOutcome {
     /// The scenario's name.
     pub name: String,
     /// One line per failed step or check, or the setup's failure; empty when
-    /// the scenario passed.
+    /// the scenario passed or was skipped.
     pub failures: Vec<String>,
+    /// Whether the scenario was skipped, because it does not run in this
+    /// variant (see [`crate::Scenario::variant_names`]); the others ran.
+    pub skipped: bool,
 }
 
 impl ScenarioOutcome {
-    /// Whether the scenario passed.
+    /// Whether the scenario ran and passed.
     #[must_use]
     pub const fn passed(&self) -> bool {
-        self.failures.is_empty()
+        self.failures.is_empty() && !self.skipped
+    }
+
+    /// Whether the scenario was skipped instead of run.
+    #[must_use]
+    pub const fn skipped(&self) -> bool {
+        self.skipped
+    }
+
+    /// Whether the scenario ran and failed.
+    #[must_use]
+    pub const fn failed(&self) -> bool {
+        !self.passed() && !self.skipped
     }
 }
 
@@ -516,29 +542,42 @@ pub struct GalleryRunReport {
 }
 
 impl GalleryRunReport {
-    /// Whether every scenario passed.
+    /// Whether every scenario passed or was skipped; a skipped scenario is
+    /// nothing to fail the run over.
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.outcomes.iter().all(ScenarioOutcome::passed)
+        self.outcomes.iter().all(|outcome| !outcome.failed())
     }
 
-    /// The scenarios that failed, in catalogue order.
+    /// The scenarios that ran and failed, in catalogue order.
     pub fn failed(&self) -> impl Iterator<Item = &ScenarioOutcome> {
-        self.outcomes.iter().filter(|outcome| !outcome.passed())
+        self.outcomes.iter().filter(|outcome| outcome.failed())
     }
 
-    /// The report in words: the tally, then every scenario with `PASS` or
-    /// `FAIL`, and under each failure what went wrong.
+    /// The report in words: the tally, then every scenario with `PASS`, `FAIL`
+    /// or `SKIP`, and under each failure what went wrong.
     #[must_use]
     pub fn summary(&self) -> String {
         let failed = self.failed().count();
+        let skipped = self.outcomes.iter().filter(|o| o.skipped()).count();
         let mut lines = vec![format!(
-            "{} of {} scenarios passed",
-            self.outcomes.len() - failed,
-            self.outcomes.len()
+            "{} of {} scenarios passed{}",
+            self.outcomes.len() - failed - skipped,
+            self.outcomes.len(),
+            if skipped == 0 {
+                String::new()
+            } else {
+                format!(", {skipped} skipped")
+            }
         )];
         for outcome in &self.outcomes {
-            let mark = if outcome.passed() { "PASS" } else { "FAIL" };
+            let mark = if outcome.skipped() {
+                "SKIP"
+            } else if outcome.passed() {
+                "PASS"
+            } else {
+                "FAIL"
+            };
             lines.push(format!("{mark} {}", outcome.name));
             lines.extend(
                 outcome
@@ -584,9 +623,9 @@ pub struct GalleryState {
     /// it: logical width, height and scale factor override. Variants and
     /// scenarios that set nothing get it back.
     pub(crate) original_window: Option<(f32, f32, Option<f32>)>,
-    /// Whether each entry passed the last time it finished, per variant: the
+    /// How each entry fared the last time it finished, per variant: the
     /// entry's index and the variant's.
-    pub(crate) results: BTreeMap<(usize, usize), bool>,
+    pub(crate) results: BTreeMap<(usize, usize), ScenarioResult>,
     /// Where exports go.
     pub(crate) export_dir: PathBuf,
     /// The last thing worth telling the person, such as where an export went.
@@ -765,17 +804,17 @@ impl GalleryState {
         self.variant
     }
 
-    /// Whether entry `index` passed the last time it finished in the variant
+    /// How entry `index` fared the last time it finished in the variant
     /// chosen now; `None` if it has not finished there yet.
     #[must_use]
-    pub fn result(&self, index: usize) -> Option<bool> {
+    pub fn result(&self, index: usize) -> Option<ScenarioResult> {
         self.result_in(index, self.variant)
     }
 
-    /// Whether entry `index` passed the last time it finished in variant
-    /// `variant`; `None` if it has not finished there yet.
+    /// How entry `index` fared the last time it finished in variant `variant`;
+    /// `None` if it has not finished there yet.
     #[must_use]
-    pub fn result_in(&self, index: usize, variant: usize) -> Option<bool> {
+    pub fn result_in(&self, index: usize, variant: usize) -> Option<ScenarioResult> {
         self.results.get(&(index, variant)).copied()
     }
 

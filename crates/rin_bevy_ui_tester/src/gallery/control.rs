@@ -17,7 +17,7 @@ use super::{
     pick::spelled,
     state::{
         GalleryAction, GalleryPhase, GalleryState, GalleryTab, PendingStep, Picking, Recording,
-        ScenarioOutcome, Suggestions, TraceWorld,
+        ScenarioOutcome, ScenarioResult, Suggestions, TraceWorld,
     },
     ui::followed_step,
 };
@@ -135,6 +135,28 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         input.forget_cursor();
     }
     fit_window(world, state, &scenario);
+    // A scenario that does not name this variant runs nowhere near it (see
+    // `Scenario::variants`): it is skipped, not failed, and the player never
+    // starts.
+    if variant.skips(&entry.scenario) {
+        world.insert_resource(ScenarioReport {
+            name: scenario.name().into(),
+            ..ScenarioReport::default()
+        });
+        state.selected = Some(index);
+        state
+            .results
+            .insert((index, state.variant), ScenarioResult::Skipped);
+        state.phase = GalleryPhase::Idle;
+        state.playing = false;
+        state.taken_over = false;
+        state.step = None;
+        state.jump = None;
+        state.tick = 0;
+        state.setup = Ok(false);
+        state.status = format!("Skipped: {} does not run in this variant", scenario.name());
+        return;
+    }
     // A variant the scenario cannot run in is a failed setup, as in the
     // recorder: the run is over at once and says why.
     let setup = refused.map_or_else(
@@ -826,7 +848,12 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
             .get_resource::<ScenarioReport>()
             .is_some_and(ScenarioReport::passed);
         if let Some(index) = state.selected {
-            state.results.insert((index, state.variant), passed);
+            let result = if passed {
+                ScenarioResult::Passed
+            } else {
+                ScenarioResult::Failed
+            };
+            state.results.insert((index, state.variant), result);
         }
         state.step = None;
         state.jump = None;
@@ -877,6 +904,7 @@ fn record_outcome(world: &World, state: &mut GalleryState) {
         run.outcomes.push(ScenarioOutcome {
             name: report.name.clone(),
             failures,
+            skipped: false,
         });
     }
 }
@@ -884,19 +912,36 @@ fn record_outcome(world: &World, state: &mut GalleryState) {
 /// Plays the entry after the last one that finished in a run of the whole
 /// catalogue, or ends the run when there is none.
 fn run_next(world: &mut World, state: &mut GalleryState) {
-    let Some(next) = state.run_all.as_ref().map(|run| run.outcomes.len()) else {
-        return;
-    };
-    // Every entry in every variant, entry by entry.
-    let variants = world
-        .get_resource::<Gallery>()
-        .map_or(1, Gallery::variant_count);
-    let (entry, variant) = (next / variants, next % variants);
-    if world
-        .get_resource::<Gallery>()
-        .is_some_and(|gallery| gallery.get(entry).is_some())
-    {
-        state.variant = variant;
+    loop {
+        let Some(next) = state.run_all.as_ref().map(|run| run.outcomes.len()) else {
+            return;
+        };
+        // Every entry in every variant, entry by entry.
+        let variants = world
+            .get_resource::<Gallery>()
+            .map_or(1, Gallery::variant_count);
+        let (entry, at) = (next / variants, next % variants);
+        let Some((scenario, variant)) = world.get_resource::<Gallery>().and_then(|gallery| {
+            let scenario = gallery.get(entry)?.scenario.clone();
+            let variant = gallery.variant(at).cloned().unwrap_or_default();
+            Some((scenario, variant))
+        }) else {
+            break;
+        };
+        // A scenario that does not name this variant is skipped, not failed:
+        // the run records it and moves on without playing it.
+        if variant.skips(&scenario) {
+            let name = variant.label(scenario.name());
+            if let Some(run) = state.run_all.as_mut() {
+                run.outcomes.push(ScenarioOutcome {
+                    name,
+                    failures: Vec::new(),
+                    skipped: true,
+                });
+            }
+            continue;
+        }
+        state.variant = at;
         select(world, state, entry);
         return;
     }
