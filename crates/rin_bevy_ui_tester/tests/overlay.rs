@@ -8,12 +8,13 @@
 )]
 
 use bevy::{
-    camera::visibility::Visibility,
+    camera::{Camera, RenderTarget, visibility::Visibility},
     ecs::query::Or,
     input::keyboard::KeyCode,
     prelude::*,
     ui::{UiTargetCamera, px, widget::Text},
     ui_widgets::{Activate, Button},
+    window::WindowRef,
 };
 use rin_bevy_ui_tester::{
     AppCheck, AppTarget, Check, CheckResult, HeadlessPlugins, Probe, ReflectAppCheck,
@@ -322,7 +323,7 @@ fn naming_an_overlay_camera_aims_every_overlay_node_at_it() {
 }
 
 #[test]
-fn without_an_overlay_camera_the_overlay_leaves_the_target_to_bevy() {
+fn without_an_overlay_camera_the_overlay_aims_at_the_default_ui_camera() {
     let mut app = overlay_app();
     let report = Scenario::new("default")
         .setup(spawn_ui)
@@ -330,8 +331,143 @@ fn without_an_overlay_camera_the_overlay_leaves_the_target_to_bevy() {
         .run_in(&mut app);
     assert!(report.passed(), "{:?}", report.failures());
     let world = app.world_mut();
-    let mut aimed = world.query_filtered::<&UiTargetCamera, With<OverlayRoot>>();
-    assert_eq!(aimed.iter(world).count(), 0, "no explicit target");
+    let camera = world
+        .query_filtered::<Entity, With<Camera2d>>()
+        .single(world)
+        .expect("the app's camera");
+    let mut roots = world.query_filtered::<Option<&UiTargetCamera>, With<OverlayRoot>>();
+    let roots: Vec<_> = roots.iter(world).collect();
+    assert!(!roots.is_empty());
+    assert!(
+        roots
+            .iter()
+            .all(|aimed| aimed.is_some_and(|aimed| aimed.0 == camera)),
+        "every root aims at the default UI camera"
+    );
+}
+
+/// Records every parentless node as it is added: whether it carries a
+/// `UiTargetCamera` and whether it is the overlay's. This is what an app's
+/// `UiRoot` observer sees.
+#[derive(Resource, Default)]
+struct AddedRoots(Vec<AddedRoot>);
+
+/// One parentless node, as it was when `Node` was added.
+struct AddedRoot {
+    /// Whether it already carried a `UiTargetCamera`.
+    aimed: bool,
+    /// Whether it is one of the overlay's.
+    overlay: bool,
+}
+
+/// Notes a parentless node as it appears.
+fn note_root(
+    added: On<Add, Node>,
+    nodes: Query<(Has<ChildOf>, Has<UiTargetCamera>, Has<OverlayRoot>)>,
+    mut roots: ResMut<AddedRoots>,
+) {
+    if let Ok((child, aimed, overlay)) = nodes.get(added.entity)
+        && !child
+    {
+        roots.0.push(AddedRoot { aimed, overlay });
+    }
+}
+
+/// The overlay's roots that were added without a target camera.
+fn unaimed_overlay_roots(app: &App) -> usize {
+    app.world()
+        .resource::<AddedRoots>()
+        .0
+        .iter()
+        .filter(|root| root.overlay && !root.aimed)
+        .count()
+}
+
+/// The overlay's roots now, with the camera each aims at.
+fn overlay_aims(app: &mut App) -> Vec<Option<Entity>> {
+    let world = app.world_mut();
+    let mut roots = world.query_filtered::<Option<&UiTargetCamera>, With<OverlayRoot>>();
+    roots
+        .iter(world)
+        .map(|aimed| aimed.map(|aimed| aimed.0))
+        .collect()
+}
+
+#[test]
+fn the_overlay_never_adds_a_root_without_a_target_camera() {
+    let mut app = App::new();
+    app.add_plugins((HeadlessPlugins::default(), CursorOverlayPlugin))
+        .init_resource::<AddedRoots>()
+        .add_observer(note_root);
+    app.finish();
+    app.cleanup();
+
+    // No camera yet: the overlay waits.
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!(
+        overlay_aims(&mut app).is_empty(),
+        "nothing without a camera"
+    );
+    assert_eq!(unaimed_overlay_roots(&app), 0);
+
+    // A camera spawned in a later frame.
+    let first = app.world_mut().spawn(Camera2d).id();
+    app.update();
+    app.update();
+    let aims = overlay_aims(&mut app);
+    assert!(aims.len() > 10, "the overlay exists now: {}", aims.len());
+    assert!(aims.iter().all(|aim| *aim == Some(first)));
+
+    // Another camera takes over as the default UI camera (a despawned
+    // camera needs the renderer's world to sync to, which this app lacks).
+    let second = app
+        .world_mut()
+        .spawn((
+            Camera2d,
+            Camera {
+                order: 1,
+                ..Camera::default()
+            },
+        ))
+        .id();
+    app.update();
+    app.update();
+    let aims = overlay_aims(&mut app);
+    assert!(aims.len() > 10);
+    assert!(aims.iter().all(|aim| *aim == Some(second)));
+
+    // No camera renders to the window any more: no overlay, so no unaimed root.
+    for camera in [first, second] {
+        app.world_mut()
+            .entity_mut(camera)
+            .insert(RenderTarget::None { size: UVec2::ONE });
+    }
+    app.update();
+    app.update();
+    assert!(overlay_aims(&mut app).is_empty());
+
+    // And back again.
+    app.world_mut()
+        .entity_mut(first)
+        .insert(RenderTarget::Window(WindowRef::Primary));
+    app.update();
+    app.update();
+    let aims = overlay_aims(&mut app);
+    assert!(aims.len() > 10);
+    assert!(aims.iter().all(|aim| *aim == Some(first)));
+
+    let roots = &app.world().resource::<AddedRoots>().0;
+    assert!(
+        roots.iter().any(|root| root.overlay),
+        "the overlay was seen"
+    );
+    assert_eq!(
+        unaimed_overlay_roots(&app),
+        0,
+        "no overlay root was ever added without a UiTargetCamera"
+    );
 }
 
 #[test]
