@@ -429,6 +429,20 @@ fn run_in_leaves_the_window_alone_where_the_scenario_sets_no_size() {
 }
 
 #[test]
+fn run_in_keeps_the_logical_size_where_the_scenario_sets_only_a_scale_factor() {
+    let scenario = press_pause().scale_factor(2.0);
+    let mut app = app_with_window(1280, 720);
+
+    let report = scenario.run_in(&mut app);
+
+    assert!(report.passed(), "{report:#?}");
+    let (width, height, scale, physical_width) = primary_window(&mut app);
+    assert!((width - 1280.0).abs() < 0.5 && (height - 720.0).abs() < 0.5);
+    assert!((scale - 2.0).abs() < f32::EPSILON);
+    assert_eq!(physical_width, 2560);
+}
+
+#[test]
 fn a_scenario_loaded_from_a_file_with_a_window_size_fits_when_played_with_run_in() {
     let text = press_pause()
         .window_size(1280, 720)

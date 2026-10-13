@@ -11,7 +11,7 @@
 use bevy::{
     picking::Pickable,
     prelude::*,
-    ui::{px, widget::Text},
+    ui::{BackgroundGradient, ColorStop, Gradient, LinearGradient, px, widget::Text},
     ui_widgets::Button,
 };
 use rin_bevy_ui_tester::{Check, Outcome, Scenario, Step, Target, WidgetRole};
@@ -90,6 +90,192 @@ fn the_pointer_reaches_a_widget_that_a_popup_covers_without_blocking() {
             Step::check(Check::visible(Target::text("Go"))),
             Step::move_to(Target::text("Go")),
             Step::check(Check::hovered(Target::text("Go"))),
+            Step::check(!Check::on_top(Target::text("Go"))),
+        ])
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+/// A node over the middle of the "Go" button that paints only through
+/// `painter`, whatever it is, and lets the pointer through.
+fn with_painted_popup(name: &str, painter: impl Bundle + Clone) -> Scenario {
+    Scenario::new(name)
+        .setup(move |world| {
+            spawn_go(world);
+            world.spawn((
+                Name::new("Popup"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(80),
+                    top: px(10),
+                    width: px(200),
+                    height: px(100),
+                    ..Node::default()
+                },
+                painter.clone(),
+                GlobalZIndex(10),
+                Pickable {
+                    should_block_lower: false,
+                    is_hoverable: false,
+                },
+            ));
+        })
+        .step(Step::wait(SETTLE_FRAMES))
+}
+
+/// Plays `scenario` with `check` as its last step and returns that step's
+/// failure message, if it failed.
+fn failure_of(scenario: Scenario, check: Check) -> Option<String> {
+    let report = scenario.step(Step::check(check)).run_headless();
+    match &report.steps.last()?.outcome {
+        Outcome::Fail(message) => Some(message.clone()),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_popup_painted_only_with_a_gradient_covers_the_widget_under_it() {
+    let gradient = BackgroundGradient::from(Gradient::Linear(LinearGradient::new(
+        0.0,
+        vec![
+            ColorStop::new(Color::BLACK, Val::Percent(0.0)),
+            ColorStop::new(Color::WHITE, Val::Percent(100.0)),
+        ],
+    )));
+    let message = failure_of(
+        with_painted_popup("gradient", gradient),
+        Check::on_top(Target::text("Go")),
+    )
+    .expect("OnTop should fail");
+    assert!(
+        message.contains("is not on top: it is covered by `Popup`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_popup_with_text_covers_the_widget_under_it() {
+    let message = failure_of(
+        with_painted_popup("text", Text::new("Over")),
+        Check::on_top(Target::text("Go")),
+    )
+    .expect("OnTop should fail");
+    assert!(message.contains("it is covered by `Popup`"), "{message}");
+}
+
+#[test]
+fn a_popup_with_an_image_covers_the_widget_under_it() {
+    let message = failure_of(
+        with_painted_popup("image", ImageNode::default()),
+        Check::on_top(Target::text("Go")),
+    )
+    .expect("OnTop should fail");
+    assert!(message.contains("it is covered by `Popup`"), "{message}");
+}
+
+#[test]
+fn not_on_top_holds_for_a_widget_that_a_covering_popup_hides() {
+    let report = with_popup("covered", 10, Color::BLACK)
+        .step(Step::check(!Check::on_top(Target::text("Go"))))
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+/// A widget with no `Node`, so nothing ever lays it out, around the text "Go".
+fn spawn_unlaid_go(world: &mut World) {
+    world.spawn(Camera2d);
+    world.spawn((Button, children![Text::new("Go")]));
+}
+
+#[test]
+fn a_widget_that_is_never_laid_out_is_not_on_top() {
+    let scenario = Scenario::new("unlaid")
+        .setup(spawn_unlaid_go)
+        .step(Step::wait(SETTLE_FRAMES));
+    let message = failure_of(scenario, Check::on_top(Target::text("Go")))
+        .expect("OnTop should fail for a widget without layout");
+    assert!(
+        message.contains("is not on top: it has not been laid out yet"),
+        "{message}"
+    );
+}
+
+#[test]
+fn not_on_top_holds_for_a_widget_that_is_never_laid_out() {
+    let report = Scenario::new("unlaid not")
+        .setup(spawn_unlaid_go)
+        .steps([
+            Step::wait(SETTLE_FRAMES),
+            Step::check(!Check::on_top(Target::text("Go"))),
+        ])
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+#[test]
+fn a_widget_clipped_away_by_its_parent_is_not_on_top() {
+    let scenario = Scenario::new("clipped")
+        .setup(|world| {
+            world.spawn(Camera2d);
+            world.spawn((
+                Node {
+                    width: px(50),
+                    height: px(50),
+                    overflow: Overflow::clip(),
+                    ..Node::default()
+                },
+                children![(
+                    Button,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(200),
+                        top: px(200),
+                        width: px(100),
+                        height: px(50),
+                        ..Node::default()
+                    },
+                    BackgroundColor(Color::WHITE),
+                    children![Text::new("Go")],
+                )],
+            ));
+        })
+        .step(Step::wait(SETTLE_FRAMES));
+    let message = failure_of(scenario, Check::on_top(Target::text("Go")))
+        .expect("OnTop should fail for a clipped widget");
+    assert!(
+        message.contains("is not on top: nothing is drawn at its middle"),
+        "{message}"
+    );
+}
+
+#[test]
+fn not_on_top_holds_for_a_widget_that_is_clipped_away() {
+    let report = Scenario::new("clipped not")
+        .setup(|world| {
+            world.spawn(Camera2d);
+            world.spawn((
+                Node {
+                    width: px(50),
+                    height: px(50),
+                    overflow: Overflow::clip(),
+                    ..Node::default()
+                },
+                children![(
+                    Button,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(200),
+                        top: px(200),
+                        width: px(100),
+                        height: px(50),
+                        ..Node::default()
+                    },
+                    children![Text::new("Go")],
+                )],
+            ));
+        })
+        .steps([
+            Step::wait(SETTLE_FRAMES),
             Step::check(!Check::on_top(Target::text("Go"))),
         ])
         .run_headless();

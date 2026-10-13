@@ -5,6 +5,7 @@ use bevy::{
     camera::{Camera2d, RenderTarget},
     color::Color,
     ecs::{
+        bundle::Bundle,
         component::Component,
         entity::Entity,
         hierarchy::ChildOf,
@@ -352,13 +353,20 @@ fn button_with(parent: &mut ChildSpawnerCommands<'_>, control: Control, text: St
 }
 
 /// A row of controls.
-fn row(
+fn row(parent: &mut ChildSpawnerCommands<'_>, fill: impl FnOnce(&mut ChildSpawnerCommands<'_>)) {
+    row_with(parent, (), fill);
+}
+
+/// [`row`] with more components on the row itself, such as a marker.
+fn row_with(
     parent: &mut ChildSpawnerCommands<'_>,
+    extra: impl Bundle,
     fill: impl FnOnce(&mut ChildSpawnerCommands<'_>),
-) -> Entity {
+) {
     parent
         .spawn((
             NotUnderTest,
+            extra,
             Node {
                 flex_wrap: FlexWrap::Wrap,
                 column_gap: px(GAP),
@@ -366,8 +374,7 @@ fn row(
                 ..Node::default()
             },
         ))
-        .with_children(fill)
-        .id()
+        .with_children(fill);
 }
 
 /// Puts the Scenarios window directly to the left of the app window, the pair
@@ -533,12 +540,11 @@ pub(super) fn spawn_window(
                         },
                     ))
                     .with_children(|list| spawn_catalogue(list, &gallery));
-                let tabs = row(panels, |row| {
+                row_with(panels, TabRow, |row| {
                     for tab in GalleryTab::ALL {
                         button(row, Control::Tab(tab), &state);
                     }
                 });
-                panels.commands().entity(tabs).insert(TabRow);
                 panels.spawn((
                     Details,
                     NotUnderTest,
@@ -814,7 +820,8 @@ pub(super) fn split_panels(
     if room <= 0.0 {
         return;
     }
-    // The content size leaves out the padding below the last child.
+    // Taffy's content size already includes the top padding but leaves out the
+    // padding below the last child, so only the bottom one is added.
     let wanted =
         |node: &ComputedNode| logical(node.content_size().y + node.padding().max_inset.y, node);
     let (list_height, panel_height) = share_room(wanted(list), wanted(panel), room);

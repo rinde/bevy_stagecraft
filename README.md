@@ -657,6 +657,15 @@ The overlay draws through Bevy's default UI camera, which is never a camera
 that renders to an image. If your cameras have custom targets, set the
 `OverlayCamera` resource to name the one the overlay should use.
 
+The overlay's top-level nodes can be told apart from the app's own: each is
+`NotUnderTest` and `OverlayRoot`, and carries a `UiTargetCamera` from the very
+bundle that adds its `Node`, so an observer on `Add<Node>` (such as one that
+marks the app's UI root) sees it already aimed. For that the overlay only
+exists while there is a camera to aim at: it is spawned the first frame one
+exists, follows the camera if it changes, and is despawned if it goes. An app
+that treats every parentless node without a `UiTargetCamera` as its root can
+therefore ignore the overlay.
+
 ## Recording for review (feature `record`)
 
 ```rust
