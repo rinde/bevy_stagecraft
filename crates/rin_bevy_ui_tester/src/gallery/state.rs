@@ -892,7 +892,7 @@ impl GalleryState {
         let Some(type_path) = self.noise_types.get(index).cloned() else {
             return;
         };
-        let name = type_path.rsplit("::").next().unwrap_or(&type_path);
+        let name = short_type_name(&type_path);
         if self.noise.ignores_path(&type_path) {
             self.noise.reveal(&type_path);
             self.status = format!("Showing the changes of {name}");
@@ -923,5 +923,46 @@ impl GalleryState {
     #[must_use]
     pub const fn input_is_scripted(&self) -> bool {
         self.selected.is_some() && !self.taken_over
+    }
+}
+
+/// A type path as its short name, each path inside it shortened too:
+/// `bevy_time::time::Time<bevy_time::virt::Virtual>` is `Time<Virtual>`.
+fn short_type_name(type_path: &str) -> String {
+    /// Characters that end a path inside a type name.
+    const DELIMITERS: [char; 6] = ['<', '>', ',', ' ', '(', ')'];
+    let mut name = String::with_capacity(type_path.len());
+    let mut rest = type_path;
+    while !rest.is_empty() {
+        let end = rest.find(DELIMITERS).unwrap_or(rest.len());
+        let (path, after) = rest.split_at(end);
+        name.push_str(path.rsplit("::").next().unwrap_or(path));
+        let delimiter_len = after.chars().next().map_or(0, char::len_utf8);
+        let (delimiter, after) = after.split_at(delimiter_len);
+        name.push_str(delimiter);
+        rest = after;
+    }
+    name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_type_name;
+
+    #[test]
+    fn a_plain_type_path_is_shortened_to_its_last_segment() {
+        assert_eq!(short_type_name("my_game::score::Score"), "Score");
+    }
+
+    #[test]
+    fn a_generic_type_path_keeps_its_arguments_shortened() {
+        assert_eq!(
+            short_type_name("bevy_time::time::Time<bevy_time::virt::Virtual>"),
+            "Time<Virtual>"
+        );
+        assert_eq!(
+            short_type_name("a::Pair<b::Left, (c::Right, d::Other)>"),
+            "Pair<Left, (Right, Other)>"
+        );
     }
 }

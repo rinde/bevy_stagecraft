@@ -451,6 +451,10 @@ pub fn resolve(world: &World, target: &Target) -> Result<ResolvedTarget, String>
 /// ambiguous. `Target::Text` names the node showing the text, and
 /// `Target::App(..)` the widget its own resolver reports.
 ///
+/// Matches are counted in document order, and several parentless roots are
+/// counted in `Entity` order (`tree_key` in `targets/locate.rs`), so `Nth(..)`
+/// over bare entities is only predictable when they share a parent.
+///
 /// # Errors
 ///
 /// A message saying why the target names no one entity: nothing matches it
