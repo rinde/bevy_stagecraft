@@ -8,11 +8,14 @@
 //!   - button "Pause"
 //!   - button "Lay" [pressed]
 //!   - slider "Speed" [value=0.5]
+//!   - text-input "Name" [focused] = "Alice"
 //! ```
 //!
 //! Every line is a role (`panel`, `text`, or the [`WidgetRole`] in kebab case,
 //! as `menu-item`), perhaps a quoted label, and perhaps states in brackets
-//! (`disabled`, `checked`, `selected`, `pressed`, `focused`, `value=..`). A line with
+//! (`disabled`, `checked`, `selected`, `pressed`, `focused`, `value=..`). A text input
+//! also shows the text it holds after its states, as `= "Alice"` (quoted like a
+//! label, and an expected line that leaves it out matches any value). A line with
 //! lines below it ends in a colon.
 //!
 //! An expected tree is partial: it lists only what matters. A line matches an
@@ -34,12 +37,12 @@ use bevy::{
         world::{EntityRef, World},
     },
     input_focus::InputFocus,
-    text::TextSpan,
+    text::{EditableText, TextSpan},
     ui::{Display, InteractionDisabled, Node, Pressed, widget::Text},
     ui_widgets::SliderValue,
 };
 
-use super::{reflect::close_names, widget::text_of};
+use super::{reflect::close_names, widget::label_of};
 use crate::{probe::is_within, targets::WidgetRole, targets::is_tooling};
 
 /// How far each level of the tree is indented.
@@ -58,7 +61,7 @@ enum Kind {
 
 impl Kind {
     /// Every kind, in the order a hint lists them.
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Panel,
         Self::Text,
         Self::Widget(WidgetRole::Button),
@@ -68,6 +71,7 @@ impl Kind {
         Self::Widget(WidgetRole::MenuButton),
         Self::Widget(WidgetRole::MenuItem),
         Self::Widget(WidgetRole::ListItem),
+        Self::Widget(WidgetRole::TextInput),
     ];
 
     /// The name a tree writes: `panel`, `text`, `button`, `menu-item`.
@@ -82,6 +86,7 @@ impl Kind {
                 WidgetRole::MenuButton => "menu-button",
                 WidgetRole::MenuItem => "menu-item",
                 WidgetRole::ListItem => "list-item",
+                WidgetRole::TextInput => "text-input",
                 WidgetRole::Button => "button",
             },
         }
@@ -156,6 +161,22 @@ impl State {
     }
 }
 
+/// Appends `text` to `out` in double quotes, escaping `"`, `\\` and newlines.
+fn push_quoted(out: &mut String, text: &str) {
+    out.push('"');
+    for character in text.chars() {
+        if matches!(character, '"' | '\\') {
+            out.push('\\');
+        }
+        if character == '\n' {
+            out.push_str("\\n");
+        } else {
+            out.push(character);
+        }
+    }
+    out.push('"');
+}
+
 /// One line of a tree and the lines below it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Line {
@@ -165,6 +186,8 @@ struct Line {
     label: Option<String>,
     /// Its states.
     states: Vec<State>,
+    /// The text a text input holds.
+    value: Option<String>,
     /// The lines below it, in document order.
     children: Vec<Self>,
 }
@@ -175,22 +198,16 @@ impl Line {
     fn head(&self, colon: bool) -> String {
         let mut head = self.kind.name().to_owned();
         if let Some(label) = &self.label {
-            head.push_str(" \"");
-            for character in label.chars() {
-                if matches!(character, '"' | '\\') {
-                    head.push('\\');
-                }
-                if character == '\n' {
-                    head.push_str("\\n");
-                } else {
-                    head.push(character);
-                }
-            }
-            head.push('"');
+            head.push(' ');
+            push_quoted(&mut head, label);
         }
         for state in &self.states {
             // Writing to a `String` cannot fail.
             let _ = write!(head, " [{}]", state.text());
+        }
+        if let Some(value) = &self.value {
+            head.push_str(" = ");
+            push_quoted(&mut head, value);
         }
         if colon {
             head.push(':');
@@ -210,6 +227,10 @@ impl Line {
                 .states
                 .iter()
                 .all(|wanted| actual.states.iter().any(|held| wanted.is_held_by(held)))
+            && self
+                .value
+                .as_ref()
+                .is_none_or(|value| actual.value.as_ref() == Some(value))
     }
 
     /// Whether this expected line and everything below it is satisfied by
@@ -258,6 +279,7 @@ fn root_line(world: &World, root: Entity) -> Line {
         kind: Kind::Panel,
         label: None,
         states: Vec::new(),
+        value: None,
         children: Vec::new(),
     })
 }
@@ -297,11 +319,17 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
     };
     let label = match kind {
         Kind::Text | Kind::Widget(_) => {
-            Some(text_of(world, entity)).filter(|text| !text.is_empty())
+            Some(label_of(world, entity)).filter(|text| !text.is_empty())
         }
         Kind::Panel => None,
     }
     .or_else(|| this.get::<Name>().map(|name| name.as_str().to_owned()));
+    let value = (kind == Kind::Widget(WidgetRole::TextInput))
+        .then(|| {
+            this.get::<EditableText>()
+                .map(|text| text.value().to_string())
+        })
+        .flatten();
     let children = if kind == Kind::Text {
         Vec::new()
     } else {
@@ -318,6 +346,7 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
         kind,
         label,
         states,
+        value,
         children,
     }]
 }
@@ -478,16 +507,27 @@ fn parse_line(text: &str) -> Result<Line, String> {
         }
         rest = after.trim_start();
     }
+    let mut value = None;
+    if let Some(after) = rest.strip_prefix('=') {
+        let after = after
+            .trim_start()
+            .strip_prefix('"')
+            .ok_or("a value is quoted: `= \"text\"`")?;
+        let (text, after) = read_quoted(after)?;
+        value = Some(text);
+        rest = after.trim_start();
+    }
     if !rest.is_empty() {
         return Err(format!(
             "`{rest}` is not understood after the role; write a quoted label, then states in \
-             brackets"
+             brackets, then `= \"value\"`"
         ));
     }
     Ok(Line {
         kind,
         label,
         states,
+        value,
         children: Vec::new(),
     })
 }
@@ -590,6 +630,7 @@ mod tests {
             kind: Kind::Text,
             label: Some("say \"hi\"\\\nnow".into()),
             states: Vec::new(),
+            value: None,
             children: Vec::new(),
         };
         let written = line.head(false);

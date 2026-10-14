@@ -231,7 +231,7 @@ fn is_test_id(registration: &TypeRegistration, filter: &NoiseFilter) -> bool {
 fn role_target(world: &World, subject: Entity) -> Option<Target> {
     let entity = world.get_entity(subject).ok()?;
     let role = WidgetRole::of(&entity)?;
-    let label = widget::text_of(world, subject);
+    let label = widget::label_of(world, subject);
     Some(if label.is_empty() {
         Target::of_role(role)
     } else {

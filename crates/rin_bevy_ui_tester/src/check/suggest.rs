@@ -38,6 +38,7 @@ use bevy::{
         PartialReflect, ReflectRef, TypePathTable, TypeRegistration, TypeRegistry,
         serde::TypedReflectSerializer,
     },
+    text::EditableText,
     ui::widget::Text,
 };
 
@@ -353,6 +354,22 @@ impl WorldSnapshot {
             })
             .unwrap_or_default();
         labels.sort();
+        // What a text input holds is shown too; it names no widget, so it
+        // only counts as a text, for `Shows` and its `Not`.
+        let values: Vec<String> = world
+            .try_query::<(Entity, &EditableText)>()
+            .map(|query| {
+                query
+                    .iter_manual(world)
+                    .filter(|(entity, _)| !is_tooling(world, *entity))
+                    .map(|(_, field)| field.value().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for value in values {
+            *self.texts.entry(value).or_default() += 1;
+        }
         for (text, _) in &labels {
             *self.texts.entry(text.clone()).or_default() += 1;
         }
