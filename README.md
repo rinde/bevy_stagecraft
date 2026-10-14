@@ -300,7 +300,7 @@ Check(Tree(of: Name("Toolbar"), matches: r#"
   follow below. Roles are `panel` (a node that groups others, labelled by its
   `Name` if it has one), `text`, and the widget roles written in kebab case:
   `button`, `checkbox`, `radio`, `slider`, `menu-button`, `menu-item`,
-  `list-item`, `text-input`, read from the same components as `Role(..)` targets, not from
+  `list-item`, `text-input`, `tab`, `tab-list`, read from the same components as `Role(..)` targets, not from
   AccessKit. A widget's label is its text, as `TextOf` reads it, and the text
   nodes inside a widget are not lines of their own. Widgets show states:
   `disabled`, `checked`, `selected`, `pressed`, `focused`, and `value=..` on a
@@ -358,7 +358,7 @@ two registered types share the short one); a misspelt or non-component type is
 a load error naming the step, with close names. Roles come from the
 components of `bevy_ui_widgets`, not from AccessKit, so they work headless:
 `Button` (`bevy_ui_widgets` or `bevy_ui`'s `Button`), `Checkbox`,
-`RadioButton`, `Slider`, `MenuButton`, `MenuItem`, `ListItem` and `TextInput`. A label is
+`RadioButton`, `Slider`, `MenuButton`, `MenuItem`, `ListItem`, `TextInput`, `Tab` and `TabList`. A label is
 every text at or below the widget, joined by spaces, as `TextOf` reads it, except
 that a `TextInput`'s label is the text below it and never the value it holds:
 `Role(role: TextInput, label: "Name")` names a field, and `TextOf` of it (or

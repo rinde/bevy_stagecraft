@@ -18,7 +18,7 @@ use bevy::{
         Checkable, Checked, ComputedNode, InteractionDisabled, Pressed, Selectable, Selected,
         widget::Text,
     },
-    ui_widgets::{Button, MenuButton, MenuItem, Slider, TextInput},
+    ui_widgets::{Button, MenuButton, MenuItem, SelectedTab, Slider, Tab, TextInput},
 };
 
 /// A state a widget can be in, as Bevy's widgets record it.
@@ -91,6 +91,7 @@ pub(super) fn is_widget(world: &World, entity: Entity) -> bool {
         || entity.contains::<Selectable>()
         || entity.contains::<Slider>()
         || entity.contains::<MenuItem>()
+        || entity.contains::<Tab>()
         || entity.contains::<MenuButton>()
         || entity.contains::<TextInput>()
 }
@@ -115,7 +116,7 @@ pub(super) fn in_state(
             "is not disabled",
         ),
         WidgetState::Checked => holds(world.get::<Checked>(widget).is_some(), "is not checked"),
-        WidgetState::Selected => holds(world.get::<Selected>(widget).is_some(), "is not selected"),
+        WidgetState::Selected => holds(is_selected(world, widget), "is not selected"),
         WidgetState::Pressed => holds(world.get::<Pressed>(widget).is_some(), "is not pressed"),
         WidgetState::Focused => {
             match world.get_resource::<InputFocus>().and_then(InputFocus::get) {
@@ -131,6 +132,18 @@ pub(super) fn in_state(
         WidgetState::OnTop => on_top(world, widget, label),
         WidgetState::Exists => Ok(()),
     }
+}
+
+/// Whether `widget` carries `Selected`, or is the tab its list's
+/// `SelectedTab` names (Bevy derives `Selected` from it only in `PostUpdate`).
+fn is_selected(world: &World, widget: Entity) -> bool {
+    world.get::<Selected>(widget).is_some()
+        || (world.get::<Tab>(widget).is_some()
+            && world.get::<ChildOf>(widget).is_some_and(|parent| {
+                world
+                    .get::<SelectedTab>(parent.parent())
+                    .is_some_and(|selected| selected.0 == Some(widget))
+            }))
 }
 
 /// Whether `widget` is visible in the hierarchy and has a size.

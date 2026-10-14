@@ -9,7 +9,8 @@
 use bevy::{
     ecs::world::EntityRef,
     ui_widgets::{
-        Button, Checkbox, ListItem, MenuButton, MenuItem, RadioButton, Slider, TextInput,
+        Button, Checkbox, ListItem, MenuButton, MenuItem, RadioButton, Slider, Tab, TabList,
+        TextInput,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,8 @@ use serde::{Deserialize, Serialize};
 /// | `MenuButton`  | `MenuButton` (which is a `Button` as well)          |
 /// | `MenuItem`    | `MenuItem`                                          |
 /// | `ListItem`    | `ListItem`                                          |
+/// | `Tab`         | `Tab`                                               |
+/// | `TabList`     | `TabList`                                           |
 /// | `TextInput`   | `TextInput` (its value is in `EditableText`)        |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -46,6 +49,10 @@ pub enum WidgetRole {
     MenuItem,
     /// An item in a list box.
     ListItem,
+    /// A tab header in a tab list.
+    Tab,
+    /// The container of tab headers.
+    TabList,
     /// A text field. Its label is the text beside or below it, not the value
     /// it holds: read the value with `TextOf` or `Shows`.
     TextInput,
@@ -54,13 +61,15 @@ pub enum WidgetRole {
 impl WidgetRole {
     /// Every role, the most specific first: a menu button is a button too,
     /// and is named by the more specific role.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::MenuButton,
         Self::Checkbox,
         Self::RadioButton,
         Self::Slider,
         Self::MenuItem,
         Self::ListItem,
+        Self::Tab,
+        Self::TabList,
         Self::TextInput,
         Self::Button,
     ];
@@ -76,6 +85,8 @@ impl WidgetRole {
             Self::MenuButton => entity.contains::<MenuButton>(),
             Self::MenuItem => entity.contains::<MenuItem>(),
             Self::ListItem => entity.contains::<ListItem>(),
+            Self::Tab => entity.contains::<Tab>(),
+            Self::TabList => entity.contains::<TabList>(),
             Self::TextInput => entity.contains::<TextInput>(),
         }
     }
