@@ -10,7 +10,7 @@
 
 use core::fmt;
 
-use bevy::reflect::{FromType, Reflect, TypeRegistry};
+use bevy::reflect::{CreateTypeData, Reflect, TypeRegistry};
 
 use crate::{
     extension::{AppCheckValue, AppValue, CheckPoint, registration},
@@ -124,8 +124,8 @@ impl ReflectAppCheck {
     }
 }
 
-impl<T: AppCheck + Reflect> FromType<T> for ReflectAppCheck {
-    fn from_type() -> Self {
+impl<T: AppCheck + Reflect> CreateTypeData<T> for ReflectAppCheck {
+    fn create_type_data((): ()) -> Self {
         Self {
             get: |value| {
                 value

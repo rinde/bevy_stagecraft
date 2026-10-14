@@ -109,9 +109,9 @@ probes over the world. This is the same rule as `rail_ui` and `rin-bevy-ui`.
 
 ## Bevy version policy
 
-The Bevy version is the same as rails and is upgraded together with it, never
-in one repository alone. It is pinned exactly (`=0.19.1`) in the workspace
-`Cargo.toml`.
+The tester upgrades Bevy first, on its own. Rails and `rinde/rin-bevy-ui`
+follow once the tester's upgrade is complete, each moving to the version the
+tester is on. It is pinned exactly (`=0.20.0`) in the workspace `Cargo.toml`.
 
 The Bevy feature list in `crates/rin_bevy_ui_tester/Cargo.toml` is curated by
 hand, with `default-features = false` in the workspace. Do not "simplify" it to

@@ -67,7 +67,7 @@ fn spawn_ui(world: &mut World) {
             BackgroundColor(Color::BLACK),
         ))
         .observe(
-            |drag: On<Pointer<Drag>>, mut total: ResMut<Dragged>, mut count: ResMut<DragEvents>| {
+            |drag: On<PointerDrag>, mut total: ResMut<Dragged>, mut count: ResMut<DragEvents>| {
                 total.0 += drag.delta;
                 count.0 += 1;
             },

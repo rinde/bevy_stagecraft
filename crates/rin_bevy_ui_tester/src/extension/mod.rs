@@ -47,7 +47,7 @@ use bevy::{
     ecs::{reflect::AppTypeRegistry, world::World},
     math::Vec2,
     reflect::{
-        FromType, GetTypeRegistration, PartialReflect, Reflect, ReflectDeserialize,
+        CreateTypeData, GetTypeRegistration, PartialReflect, Reflect, ReflectDeserialize,
         ReflectFromReflect, ReflectMut, ReflectSerialize, TypeData, TypeInfo, TypePath,
         TypeRegistration, TypeRegistry,
         enums::VariantInfo,
@@ -244,7 +244,7 @@ impl<K: ExtensionPoint> AppValue<K> {
     pub fn of<T>(value: T) -> Self
     where
         T: Reflect + GetTypeRegistration + TypePath,
-        K::Data: FromType<T>,
+        K::Data: CreateTypeData<T>,
     {
         let mut types = TypeRegistry::new();
         types.register::<T>();
@@ -254,7 +254,7 @@ impl<K: ExtensionPoint> AppValue<K> {
             ron,
             typed: Some(Typed {
                 value: Arc::new(value),
-                data: <K::Data as FromType<T>>::from_type(),
+                data: <K::Data as CreateTypeData<T>>::create_type_data(()),
             }),
         }
     }

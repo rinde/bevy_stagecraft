@@ -15,7 +15,7 @@ use bevy::{
     },
     math::{DVec2, IVec2, Vec2},
     picking::{
-        events::{Click, Pointer},
+        events::PointerClick,
         hover::HoverMap,
         pointer::{PointerButton, PointerId},
     },
@@ -334,7 +334,7 @@ fn button_with(parent: &mut ChildSpawnerCommands<'_>, control: Control, text: St
             BackgroundColor(BUTTON),
         ))
         .observe(
-            move |click: On<Pointer<Click>>, mut state: ResMut<GalleryState>| {
+            move |click: On<PointerClick>, mut state: ResMut<GalleryState>| {
                 if click.button == PointerButton::Primary {
                     let action = control_action(control, &state);
                     state.request(action);
@@ -494,6 +494,11 @@ pub(super) fn spawn_window(
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
+                // Bevy places a root node in an implicit grid, whose auto row
+                // would otherwise grow to the root's content (taffy follows
+                // CSS here since Bevy 0.20), so a long catalogue would stretch
+                // the root past the window instead of the lists scrolling.
+                min_height: px(0),
                 flex_direction: FlexDirection::Column,
                 row_gap: px(GAP),
                 padding: UiRect::all(px(PADDING * 2.0)),
@@ -584,7 +589,7 @@ fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
                 BackgroundColor(BUTTON),
             ))
             .observe(
-                move |click: On<Pointer<Click>>, mut state: ResMut<GalleryState>| {
+                move |click: On<PointerClick>, mut state: ResMut<GalleryState>| {
                     if click.button == PointerButton::Primary {
                         state.request(GalleryAction::Select(at));
                     }
@@ -1499,7 +1504,7 @@ fn spawn_rows<'a>(
                 BackgroundColor(if ticked { BUTTON_ON } else { BUTTON }),
             ))
             .observe(
-                move |click: On<Pointer<Click>>, mut state: ResMut<GalleryState>| {
+                move |click: On<PointerClick>, mut state: ResMut<GalleryState>| {
                     if click.button == PointerButton::Primary {
                         let action = control_action(control, &state);
                         state.request(action);
@@ -1540,7 +1545,7 @@ fn panel_button(
             BackgroundColor(if on { BUTTON_ON } else { BUTTON }),
         ))
         .observe(
-            move |click: On<Pointer<Click>>, mut state: ResMut<GalleryState>| {
+            move |click: On<PointerClick>, mut state: ResMut<GalleryState>| {
                 if click.button == PointerButton::Primary {
                     let action = control_action(control, &state);
                     state.request(action);

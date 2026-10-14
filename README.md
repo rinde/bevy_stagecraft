@@ -447,12 +447,13 @@ whatever has keyboard focus, like Playwright's `pressSequentially`. For every
 character it sends a key press and release with the logical key and the text
 the character produces, one character per frame, with Shift pressed and
 released in the same frame around the characters that need it (capitals and
-the shifted symbols of a US layout), so Bevy's own `EditableText` ends up
-holding exactly that text. A character no key of the US layout types is sent
-on an unidentified physical key, carrying the text, which text fields read
-all the same. `Step::type_into("Alpha", Target::text("Name"))`
+the shifted symbols of a US layout), so a Bevy text field (`TextInput`, with
+its `EditableText`) ends up holding exactly that text. A character no key of
+the US layout types is sent on an unidentified physical key, carrying the
+text, which text fields read all the same. `Step::type_into("Alpha", Target::text("Name"))`
 (`Type(text: "Alpha", into: Text("Name"))`, Playwright's `fill`) first moves
-to the target and clicks it, which focuses a text field, waiting for it to be
+to the target and clicks it, which focuses a text field (Bevy focuses a
+clicked field only if it has a `TabIndex`), waiting for it to be
 actionable as a click does (so `Timeout(..)` and `Force(..)` may wrap a `Type`
 that has an `into`, and no other).
 
@@ -1216,7 +1217,7 @@ are refused in the gallery while recording.
 ## Depending on it from a private git repository
 
 In the Bevy app's `Cargo.toml`, as a dev-dependency, pinned to a revision (the
-Bevy version must match the one the crate uses, `=0.19.1`):
+Bevy version must match the one the crate uses, `=0.20.0`):
 
 ```toml
 [dev-dependencies]

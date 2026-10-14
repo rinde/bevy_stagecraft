@@ -147,7 +147,7 @@ fn button<M>(
     world: &mut World,
     label: &str,
     top: i32,
-    on_press: impl IntoObserverSystem<Activate, (), M>,
+    on_press: impl IntoObserverSystem<Activate, M>,
 ) {
     world
         .spawn((

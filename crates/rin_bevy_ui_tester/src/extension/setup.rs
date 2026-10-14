@@ -5,7 +5,7 @@ use std::path::Path;
 
 use bevy::{
     ecs::world::World,
-    reflect::{FromType, GetTypeRegistration, Reflect, TypePath, TypeRegistry},
+    reflect::{CreateTypeData, GetTypeRegistration, Reflect, TypePath, TypeRegistry},
 };
 use serde::{Deserialize, Serialize, de::Error as _};
 
@@ -133,8 +133,8 @@ impl ReflectAppSetup {
     }
 }
 
-impl<T: AppSetup + Reflect> FromType<T> for ReflectAppSetup {
-    fn from_type() -> Self {
+impl<T: AppSetup + Reflect> CreateTypeData<T> for ReflectAppSetup {
+    fn create_type_data((): ()) -> Self {
         Self {
             get: |value| {
                 value

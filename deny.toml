@@ -44,15 +44,12 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 skip = [
-    { crate = "accesskit_consumer", reason = "bevy_a11y and winit pull different accesskit generations" },
     { crate = "bitflags", reason = "1.x and 2.x both in the Bevy graphics/windowing stack" },
     { crate = "block2", reason = "macOS bindings, objc2 generations differ between winit and wgpu" },
-    { crate = "codespan-reporting", reason = "naga (wgpu) and Bevy shader tooling use different releases" },
     { crate = "downcast-rs", reason = "Bevy and its asset/ECS crates straddle 1.x and 2.x" },
-    { crate = "foldhash", reason = "hashbrown 0.15 and 0.16 each pin their own foldhash" },
-    { crate = "font-types", reason = "read-fonts/skrifa generations used by cosmic-text and parley" },
     { crate = "getrandom", reason = "0.3 and 0.4 both used across rand and uuid/ahash stacks" },
     { crate = "hashbrown", reason = "Bevy, wgpu and indexmap each pin a different hashbrown" },
+    { crate = "itertools", reason = "bevy_render and bevy_curve use 0.14, the wesl shader tooling 0.15" },
     { crate = "jni-sys", reason = "Android bindings differ between winit and its dependencies" },
     { crate = "linux-raw-sys", reason = "rustix 0.38 and 1.x each use their own" },
     { crate = "miniz_oxide", reason = "png pulls 0.8 directly and 0.9 via flate2" },
@@ -60,10 +57,9 @@ skip = [
     { crate = "objc2-app-kit", reason = "winit and accesskit use 0.2, our window-tabbing code uses 0.3" },
     { crate = "objc2-foundation", reason = "macOS bindings, generations differ between winit and wgpu" },
     { crate = "r-efi", reason = "UEFI target support, versions pinned by getrandom generations" },
-    { crate = "read-fonts", reason = "font stack generations differ between cosmic-text and parley" },
     { crate = "redox_syscall", reason = "Redox target only, several generations in the windowing stack" },
+    { crate = "rustc-hash", reason = "naga and wgpu-core use 1.x, the variadics_please macros 2.x" },
     { crate = "rustix", reason = "0.38 via older winit/polling deps, 1.x elsewhere" },
-    { crate = "skrifa", reason = "font stack generations differ between cosmic-text and parley" },
     { crate = "syn", reason = "syn 2 and 3 coexist among proc-macro dependencies" },
     { crate = "thiserror", reason = "1.x and 2.x both in the Bevy dependency tree" },
     { crate = "thiserror-impl", reason = "follows thiserror" },

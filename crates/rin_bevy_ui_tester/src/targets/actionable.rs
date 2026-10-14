@@ -136,7 +136,7 @@ fn visible(world: &World, widget: Entity, at: Vec2, label: &str) -> Result<(), N
     let physical = at / node.inverse_scale_factor;
     if world
         .get::<CalculatedClip>(widget)
-        .is_some_and(|clip| !clip.clip.contains(physical))
+        .is_some_and(|clip| !clip.contains_point(physical))
     {
         return Err(not_visible("its middle is clipped away"));
     }
@@ -333,6 +333,6 @@ fn is_hit(world: &World, node: Entity, at: Vec2) -> bool {
     computed.contains_point(*transform, point)
         && world
             .get::<CalculatedClip>(node)
-            .is_none_or(|clip| clip.clip.contains(point))
+            .is_none_or(|clip| clip.contains_point(point))
         && !is_tooling(world, node)
 }

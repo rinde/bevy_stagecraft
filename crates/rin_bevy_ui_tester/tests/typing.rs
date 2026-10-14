@@ -9,10 +9,11 @@
 
 use bevy::{
     input::keyboard::KeyboardInput,
-    input_focus::{FocusCause, FocusedInput, InputFocus},
+    input_focus::{FocusCause, FocusedInput, InputFocus, tab_navigation::TabIndex},
     prelude::*,
     text::EditableText,
     ui::px,
+    ui_widgets::TextInput,
 };
 use rin_bevy_ui_tester::{HeadlessPlugins, Outcome, Scenario, Step, Target, keystroke};
 
@@ -26,6 +27,11 @@ fn spawn_fields(world: &mut World) {
     for (name, top) in [("First", 20), ("Second", 120)] {
         world.spawn((
             Name::new(name),
+            // Since Bevy 0.20 `EditableText` only holds the text; `TextInput`
+            // is the widget that takes keys, and a click focuses only a node
+            // with a `TabIndex`.
+            TextInput,
+            TabIndex(0),
             EditableText::new(""),
             Node {
                 position_type: PositionType::Absolute,
