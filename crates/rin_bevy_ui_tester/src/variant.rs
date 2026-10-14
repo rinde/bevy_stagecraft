@@ -1,5 +1,5 @@
 //! Running one scenario in several environments: window sizes, scale
-//! factors, themes.
+//! factors, text sizes, themes.
 //!
 //! A [`Variant`] is a runner's setting, not part of a scenario: the same file
 //! is played once per variant the runner lists, which is what Playwright calls
@@ -19,7 +19,8 @@
 //! A step that aims at a fixed screen position ([`Target::Screen`]) is in
 //! logical pixels, so it only makes sense where the logical window is the one
 //! the position was written for. A variant that only changes the scale factor
-//! or the app's setup or view leaves that window alone and runs the step; a
+//! or rem size, or the app's setup or view, leaves that window alone and runs
+//! the step; a
 //! variant that sets another window size is an error naming the step unless
 //! the scenario [restricts itself](Scenario::variants) to the variants it is
 //! valid in, where the others are skipped rather than failed.
@@ -30,7 +31,7 @@ use bevy::reflect::{GetTypeRegistration, Reflect, TypePath};
 
 use crate::{
     extension::{AppSetup, AppView, Setup, View},
-    scenario::{Scenario, Step, flatten, with_group_path},
+    scenario::{Scenario, Step, check_rem_size, flatten, with_group_path},
     script::{LoadError, check_scale_factor},
     targets::Target,
 };
@@ -57,6 +58,8 @@ pub struct Variant {
     window: Option<(u32, u32)>,
     /// The scale factor to run at, instead of the scenario's.
     scale_factor: Option<f32>,
+    /// The root font size (Bevy's `RemSize`) to run at, in logical pixels.
+    rem_size: Option<f32>,
     /// The app's setup to run instead of the scenario's.
     setup: Option<Setup>,
     /// The app's view to arrange instead of the scenario's.
@@ -94,6 +97,19 @@ impl Variant {
     #[must_use]
     pub const fn scale_factor(mut self, scale_factor: f32) -> Self {
         self.scale_factor = Some(scale_factor);
+        self
+    }
+
+    /// Runs with this root font size, in logical pixels, set on the app's
+    /// `RemSize` before the scenario's setup (Bevy's default is 20), so text
+    /// and layout in `Rem` units grow or shrink as with a larger or smaller
+    /// text size setting. The window keeps its logical size, so a `Screen`
+    /// target or a `MoveBurst` stays valid. It must be finite and above zero,
+    /// or [`Variant::apply`] refuses it. The runner puts the size back where
+    /// it changed it; text the app sizes in `Px` does not follow it.
+    #[must_use]
+    pub const fn rem_size(mut self, rem_size: f32) -> Self {
+        self.rem_size = Some(rem_size);
         self
     }
 
@@ -228,9 +244,17 @@ impl Variant {
                 message,
             });
         }
+        if let Some(rem_size) = self.rem_size
+            && let Err(message) = check_rem_size(rem_size)
+        {
+            return Some(LoadError::Invalid {
+                used_by: format!("variant `{}`", self.name),
+                message,
+            });
+        }
         // A fixed position is in logical pixels, so it stays valid wherever
         // the logical window is the one it was written for: a scale factor, a
-        // setup or a view leaves that window alone.
+        // rem size, a setup or a view leaves that window alone.
         if !self.changes_window(scenario) {
             return None;
         }
@@ -265,6 +289,7 @@ impl Variant {
             self.label(scenario.name()),
             self.window,
             self.scale_factor,
+            self.rem_size,
             self.setup.as_ref(),
             self.view.as_ref(),
         )
