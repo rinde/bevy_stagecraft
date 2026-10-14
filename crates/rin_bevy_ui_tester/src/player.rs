@@ -3,9 +3,10 @@
 use alloc::collections::VecDeque;
 
 use bevy::{
-    app::{App, Last, Plugin, PreUpdate},
+    app::{App, First, Last, Plugin, PreUpdate},
     ecs::{
         entity::Entity,
+        error::ErrorHandler,
         query::With,
         resource::Resource,
         schedule::common_conditions::{not, resource_exists},
@@ -20,6 +21,8 @@ use bevy::{
     math::{UVec2, Vec2},
     window::{PrimaryWindow, Window},
 };
+
+mod catch;
 
 use crate::{
     check::{CapturedValues, Check, Measure, suggest::NoiseFilter},
@@ -178,7 +181,14 @@ impl Plugin for ScenarioPlayerPlugin {
             .add_systems(
                 Last,
                 trace_point.in_set(ScenarioSystems::Trace).run_if(tracing),
-            );
+            )
+            .add_systems(
+                Last,
+                fail_caught_errors
+                    .after(ScenarioSystems::Trace)
+                    .run_if(catching),
+            )
+            .add_systems(First, sync_error_handler);
     }
 }
 
@@ -289,6 +299,9 @@ pub struct ScenarioPlayer {
     halt_before: Option<usize>,
     /// Whether the run has stopped at `halt_before`.
     halted: bool,
+    /// The app's own error handler, while the player's catching one is in
+    /// the world.
+    previous_handler: Option<ErrorHandler>,
 }
 
 impl ScenarioPlayer {
@@ -327,6 +340,19 @@ impl ScenarioPlayer {
             && running.expected.is_none()
         {
             running.scenario.push_expect(check);
+        }
+    }
+
+    /// Installs the catching error handler while a scenario is active and
+    /// restores the app's own when it is not.
+    fn sync_error_handler(&mut self, world: &mut World) {
+        match (self.is_active(), self.previous_handler) {
+            (true, None) => self.previous_handler = Some(catch::install(world)),
+            (false, Some(previous)) => {
+                catch::restore(world, previous);
+                self.previous_handler = None;
+            }
+            (true, Some(_)) | (false, None) => {}
         }
     }
 
@@ -429,6 +455,58 @@ fn trace_point(world: &mut World) {
         {
             let point = TracePoint::take(world, &filter, frame, started, finished);
             trace.push(point);
+        }
+    }
+    world.insert_resource(player);
+}
+
+/// Whether the player's error handler is in the world.
+fn catching(player: Option<bevy::ecs::system::Res<ScenarioPlayer>>) -> bool {
+    player.is_some_and(|player| player.previous_handler.is_some())
+}
+
+/// Installs the catching error handler while a scenario is active and puts
+/// the app's own back once it is not, so a panic in the app fails the step
+/// it happened in instead of ending the run.
+fn sync_error_handler(world: &mut World) {
+    let Some(mut player) = world.remove_resource::<ScenarioPlayer>() else {
+        return;
+    };
+    player.sync_error_handler(world);
+    world.insert_resource(player);
+}
+
+/// Fails the step during which the app panicked, once the frame is over, and
+/// stops the script there.
+fn fail_caught_errors(world: &mut World) {
+    let caught = catch::take();
+    if caught.is_empty() {
+        return;
+    }
+    let Some(mut player) = world.remove_resource::<ScenarioPlayer>() else {
+        return;
+    };
+    if let Some(mut report) = world.get_resource_mut::<ScenarioReport>() {
+        let message = caught.join("; ");
+        // The step last started is the last one not skipped.
+        let index = report
+            .steps
+            .iter()
+            .rposition(|record| record.outcome != Outcome::Skipped);
+        if let Some(index) = index {
+            let message = match report.steps.get(index).map(|record| &record.outcome) {
+                Some(Outcome::Fail(earlier)) => format!("{earlier}; {message}"),
+                _ => message,
+            };
+            if let Some(run) = player.running.as_mut() {
+                run.abort(&mut report, index, message);
+            } else {
+                fail_step(&mut report, index, message);
+            }
+        } else {
+            report.setup_failure = Some(message);
+            report.finished = true;
+            player.running = None;
         }
     }
     world.insert_resource(player);
@@ -1196,6 +1274,8 @@ impl Scenario {
             }
             player.start_after_setup(self.clone(), setup);
         }
+        // Not left to the first update: a panic in it should be caught too.
+        sync_error_handler(app.world_mut());
         while app
             .world()
             .get_resource::<ScenarioPlayer>()
@@ -1203,6 +1283,7 @@ impl Scenario {
         {
             app.update();
         }
+        sync_error_handler(app.world_mut());
         let trace = app
             .world_mut()
             .get_resource_mut::<ScenarioPlayer>()

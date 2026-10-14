@@ -481,6 +481,18 @@ not read. Enter, Tab and Backspace are not text: use `Tap`. Typing with no
 focused widget does nothing and does not fail. `Type` only adds a form to
 format version 3, so every older file still loads.
 
+### A panic in the app
+
+Since Bevy 0.20 a panic in a system, command or observer reaches the world's
+`FallbackErrorHandler`. While a scenario plays (`run_headless`, `run_in`, so
+`run_ron_tests` and its variants, the recorder and the gallery) the player
+installs a handler that keeps such errors, and puts the app's own back
+afterwards. The step during which the app panicked fails, naming the system,
+command or observer and the message; the rest of the steps are skipped, and
+the runner goes on with the next scenario. Errors of lower severity go to
+Bevy's default handler as before. The errors are kept per thread, so this
+holds where the app updates on the thread that plays it (the default here).
+
 ### Several pointer moves in one frame
 
 A real mouse can report several moves before the app reads them. A handler
