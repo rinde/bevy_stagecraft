@@ -234,10 +234,15 @@ impl Plugin for RecorderSupport {
             .add_systems(Startup, create_target)
             .add_systems(
                 PostUpdate,
+                // Every set that reads a camera's target is named on its own:
+                // Bevy chains them only weakly, so being before the first of
+                // them would no longer say anything about the others.
                 retarget_cameras
                     .in_set(RecorderSystems::Retarget)
                     .before(CameraUpdateSystems)
-                    .before(UiSystems::Prepare),
+                    .before(UiSystems::Prepare)
+                    .before(UiSystems::Propagate)
+                    .before(UiSystems::Layout),
             )
             .add_systems(
                 Last,
