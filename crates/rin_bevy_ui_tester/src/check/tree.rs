@@ -58,7 +58,7 @@ enum Kind {
 
 impl Kind {
     /// Every kind, in the order a hint lists them.
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 11] = [
         Self::Panel,
         Self::Text,
         Self::Widget(WidgetRole::Button),
@@ -68,6 +68,8 @@ impl Kind {
         Self::Widget(WidgetRole::MenuButton),
         Self::Widget(WidgetRole::MenuItem),
         Self::Widget(WidgetRole::ListItem),
+        Self::Widget(WidgetRole::Tab),
+        Self::Widget(WidgetRole::TabList),
     ];
 
     /// The name a tree writes: `panel`, `text`, `button`, `menu-item`.
@@ -82,6 +84,8 @@ impl Kind {
                 WidgetRole::MenuButton => "menu-button",
                 WidgetRole::MenuItem => "menu-item",
                 WidgetRole::ListItem => "list-item",
+                WidgetRole::Tab => "tab",
+                WidgetRole::TabList => "tab-list",
                 WidgetRole::Button => "button",
             },
         }

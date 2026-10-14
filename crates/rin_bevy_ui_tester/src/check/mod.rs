@@ -150,7 +150,7 @@ pub enum Check {
     /// The target's widget carries `Checked`.
     Checked(Target),
     /// The target's widget carries `Selected`, as a list item or a swatch
-    /// that is the chosen one.
+    /// that is the chosen one, or a tab its list's `SelectedTab` names.
     Selected(Target),
     /// The target's widget carries `Pressed`.
     Pressed(Target),
