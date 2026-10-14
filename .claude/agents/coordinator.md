@@ -161,6 +161,33 @@ request again in this run, and report what stopped CI for a human to fix.
 Fold each report into the next pass. When a merge closes an issue, the issues
 it blocked may now be ready: that is what the next pass is for.
 
+### 5. Clean up worktrees
+
+Every pass ends here, whatever else it did, `dry-run` aside (then list what
+you would remove). Each implementer and reviewer leaves a worktree under
+`.claude/worktrees/`, a Bevy build of several gigabytes each, so remove the
+ones nothing needs any more:
+
+1. `git worktree prune`, then `git worktree list --porcelain`. Look only at
+   worktrees under `.claude/worktrees/`, never the main checkout, and skip a
+   `locked` one.
+2. Skip any worktree of an agent you dispatched that has not returned yet.
+3. Remove it when its work is finished:
+   - its branch's pull request is merged or closed, or
+   - it is a reviewer's detached worktree, and its review is posted or
+     that reviewer returned, or
+   - it has no pull request and nothing to lose (below), so it is left over.
+4. Never lose work: if `git -C <path> status --porcelain` shows anything, or
+   its branch has commits that are on no remote branch
+   (`git -C <path> log --oneline @{upstream}..` or, with no upstream,
+   `git -C <path> log --oneline --not --remotes`), keep it and report it.
+   A worktree whose pull request is still open is kept: a follow-up may need it.
+5. `git worktree remove <path>` (no `--force`; if it refuses, keep it and
+   report why). Do not delete branches, local or remote.
+
+Remove the worktree of a merged pull request as soon as you merge it, as
+step 2 above says; this step catches the rest.
+
 ## Rules
 
 - Never write or review code, approve a pull request, or push a commit
@@ -189,3 +216,4 @@ End with a short table: each issue you looked at, its pull request, and its
 state — dispatched, in review, changes requested, waiting for CI, waiting for
 a human, merged, blocked by `#N`, stalled or needs refinement — then anything
 a human must decide.
+Name the worktrees you removed and any you kept, with why.
