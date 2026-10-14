@@ -306,6 +306,10 @@ Check(Tree(of: Name("Toolbar"), matches: r#"
   `disabled`, `checked`, `selected`, `pressed`, `focused`, and `value=..` on a
   slider. A text input also shows the text it holds, after its states, as
   `= "Alice"` (quoted like a label; leave it out to match any value).
+- An image or box set inline in text (`InlineImage`, `InlineBox`) is a line of
+  its own under its text, `image` or `inline-box`, so a snapshot can say an
+  icon is there. The label of a widget with one is its text alone, with no
+  gap or stray character, and nothing inside an inline box is read as text.
 - The expected tree is partial. A line matches an actual line of the same
   role, with the same label if it gives one, and at least its states (a
   value compares as a number, so `0.50` is `0.5`); the lines below it match

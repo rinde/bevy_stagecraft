@@ -37,8 +37,11 @@ use bevy::{
         world::{EntityRef, World},
     },
     input_focus::InputFocus,
-    text::{EditableText, TextSpan},
-    ui::{Display, InteractionDisabled, Node, Pressed, widget::Text},
+    text::{EditableText, InlineBox, TextSpan},
+    ui::{
+        Display, InteractionDisabled, Node, Pressed,
+        widget::{InlineImage, Text},
+    },
     ui_widgets::SliderValue,
 };
 
@@ -55,15 +58,21 @@ enum Kind {
     Panel,
     /// A node showing text.
     Text,
+    /// An image set inline in text (`InlineImage`).
+    Image,
+    /// Room reserved inline in text for something else (`InlineBox`).
+    InlineBox,
     /// A widget of this role.
     Widget(WidgetRole),
 }
 
 impl Kind {
     /// Every kind, in the order a hint lists them.
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 14] = [
         Self::Panel,
         Self::Text,
+        Self::Image,
+        Self::InlineBox,
         Self::Widget(WidgetRole::Button),
         Self::Widget(WidgetRole::Checkbox),
         Self::Widget(WidgetRole::RadioButton),
@@ -81,6 +90,8 @@ impl Kind {
         match self {
             Self::Panel => "panel",
             Self::Text => "text",
+            Self::Image => "image",
+            Self::InlineBox => "inline-box",
             Self::Widget(role) => match role {
                 WidgetRole::Checkbox => "checkbox",
                 WidgetRole::RadioButton => "radio",
@@ -297,12 +308,16 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
     if !is_root && (is_tooling(world, entity) || is_hidden(&this)) {
         return Vec::new();
     }
+    if let Some(line) = inline_line(&this) {
+        return vec![line];
+    }
     let is_text = this.contains::<Text>();
     let is_node = this.contains::<Node>();
     if !is_root && !is_node && !is_text {
-        // A span is part of the text above it; anything else groups.
+        // A span is part of the text above it, so only what sits inline
+        // below it shows; anything else groups.
         if this.contains::<TextSpan>() {
-            return Vec::new();
+            return inline_lines(world, entity);
         }
         return children_of(world, entity, below_widget);
     }
@@ -313,8 +328,9 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
         (None, false) => Kind::Panel,
     };
     if below_widget && kind == Kind::Text {
-        // The widget's label already has this text.
-        return Vec::new();
+        // The widget's label already has this text, but not what sits
+        // inline in it.
+        return inline_lines(world, entity);
     }
     let states = if matches!(kind, Kind::Widget(_)) {
         states_of(world, &this)
@@ -325,7 +341,7 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
         Kind::Text | Kind::Widget(_) => {
             Some(label_of(world, entity)).filter(|text| !text.is_empty())
         }
-        Kind::Panel => None,
+        Kind::Panel | Kind::Image | Kind::InlineBox => None,
     }
     .or_else(|| this.get::<Name>().map(|name| name.as_str().to_owned()));
     let value = (kind == Kind::Widget(WidgetRole::TextInput))
@@ -335,7 +351,7 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
         })
         .flatten();
     let children = if kind == Kind::Text {
-        Vec::new()
+        inline_lines(world, entity)
     } else {
         children_of(
             world,
@@ -353,6 +369,50 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
         value,
         children,
     }]
+}
+
+/// The line for an inline image or box, or `None` for anything else. Nothing
+/// inside it is read: Bevy lays out no text below an inline box.
+fn inline_line(entity: &EntityRef<'_>) -> Option<Line> {
+    let kind = if entity.contains::<InlineImage>() {
+        Kind::Image
+    } else if entity.contains::<InlineBox>() {
+        Kind::InlineBox
+    } else {
+        return None;
+    };
+    Some(Line {
+        kind,
+        label: None,
+        states: Vec::new(),
+        value: None,
+        children: Vec::new(),
+    })
+}
+
+/// The lines of the images and boxes set inline in the text of `entity`, in
+/// order, found through its spans.
+fn inline_lines(world: &World, entity: Entity) -> Vec<Line> {
+    let Some(children) = world.get::<Children>(entity) else {
+        return Vec::new();
+    };
+    children
+        .iter()
+        .flat_map(|child| {
+            let Ok(this) = world.get_entity(*child) else {
+                return Vec::new();
+            };
+            if is_tooling(world, *child) || is_hidden(&this) {
+                Vec::new()
+            } else if let Some(line) = inline_line(&this) {
+                vec![line]
+            } else if this.contains::<TextSpan>() {
+                inline_lines(world, *child)
+            } else {
+                Vec::new()
+            }
+        })
+        .collect()
 }
 
 /// The lines of everything directly below `entity`, in order.

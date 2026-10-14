@@ -13,7 +13,7 @@ use bevy::{
     camera::visibility::InheritedVisibility,
     ecs::{entity::Entity, hierarchy::ChildOf, hierarchy::Children, world::World},
     input_focus::InputFocus,
-    text::{EditableText, TextSpan},
+    text::{EditableText, InlineBox, TextSpan},
     ui::{
         Checkable, Checked, ComputedNode, InteractionDisabled, Pressed, Selectable, Selected,
         widget::Text,
@@ -206,6 +206,11 @@ fn collect_below(world: &World, entity: Entity, blocks: &mut Vec<String>) {
 
 /// Adds the text of `entity` and of everything below it to `blocks`.
 fn collect_text(world: &World, entity: Entity, blocks: &mut Vec<String>) {
+    if world.get::<InlineBox>(entity).is_some() {
+        // An inline box is room in the text, not text, and Bevy lays out
+        // nothing below it.
+        return;
+    }
     if let Some(text) = world.get::<Text>(entity) {
         blocks.push(text.0.clone());
     } else if let Some(editable) = world.get::<EditableText>(entity) {
