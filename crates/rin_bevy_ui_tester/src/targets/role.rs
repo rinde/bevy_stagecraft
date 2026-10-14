@@ -1,14 +1,13 @@
 //! Widget roles: what kind of widget a node is, read from the components
 //! Bevy's own widgets keep.
 //!
-//! Roles come from `bevy_ui_widgets` (and `bevy_ui`'s `Button`), not from
+//! Roles come from `bevy_ui_widgets`, not from
 //! AccessKit: the widget components are there in every app that uses the
 //! widgets, headless or not, while the accessibility tree is only built where
 //! an accessibility backend runs.
 
 use bevy::{
     ecs::world::EntityRef,
-    ui::widget::Button as UiButton,
     ui_widgets::{Button, Checkbox, ListItem, MenuButton, MenuItem, RadioButton, Slider},
 };
 use serde::{Deserialize, Serialize};
@@ -20,7 +19,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// | Role          | Component                                           |
 /// | ------------- | --------------------------------------------------- |
-/// | `Button`      | `bevy_ui_widgets::Button` or `bevy_ui`'s `Button`   |
+/// | `Button`      | `bevy_ui_widgets::Button`                           |
 /// | `Checkbox`    | `Checkbox`                                          |
 /// | `RadioButton` | `RadioButton`                                       |
 /// | `Slider`      | `Slider`                                            |
@@ -63,7 +62,7 @@ impl WidgetRole {
     #[must_use]
     pub fn fits(self, entity: &EntityRef<'_>) -> bool {
         match self {
-            Self::Button => entity.contains::<Button>() || entity.contains::<UiButton>(),
+            Self::Button => entity.contains::<Button>(),
             Self::Checkbox => entity.contains::<Checkbox>(),
             Self::RadioButton => entity.contains::<RadioButton>(),
             Self::Slider => entity.contains::<Slider>(),

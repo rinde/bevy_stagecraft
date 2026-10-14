@@ -152,8 +152,7 @@ pub enum Check {
     /// The target's widget carries `Selected`, as a list item or a swatch
     /// that is the chosen one.
     Selected(Target),
-    /// The target's widget carries `Pressed`, or its `Interaction` is
-    /// `Pressed`.
+    /// The target's widget carries `Pressed`.
     Pressed(Target),
     /// The target's widget, or something below it, has input focus.
     Focused(Target),

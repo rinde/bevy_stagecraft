@@ -2,7 +2,7 @@
 //! focused, visible, and the text it shows.
 //!
 //! These read the components Bevy's own widgets keep (`bevy_ui_widgets`) and
-//! the interaction components of `bevy_ui`, so they work for any toolkit that
+//! `bevy_ui`'s layout and interaction components, so they work for any toolkit that
 //! uses them.
 
 use crate::{
@@ -15,8 +15,8 @@ use bevy::{
     input_focus::InputFocus,
     text::TextSpan,
     ui::{
-        Checkable, Checked, ComputedNode, Interaction, InteractionDisabled, Pressed, Selectable,
-        Selected, widget::Text,
+        Checkable, Checked, ComputedNode, InteractionDisabled, Pressed, Selectable, Selected,
+        widget::Text,
     },
     ui_widgets::{Button, MenuButton, MenuItem, Slider},
 };
@@ -30,7 +30,7 @@ pub(super) enum WidgetState {
     Checked,
     /// Carries `Selected`.
     Selected,
-    /// Carries `Pressed`, or its `Interaction` is `Pressed`.
+    /// Carries `Pressed`.
     Pressed,
     /// Has input focus, or something below it has.
     Focused,
@@ -92,7 +92,6 @@ pub(super) fn is_widget(world: &World, entity: Entity) -> bool {
         || entity.contains::<Slider>()
         || entity.contains::<MenuItem>()
         || entity.contains::<MenuButton>()
-        || entity.contains::<Interaction>()
 }
 
 /// Whether `widget` is in `state`; the error says what it is instead.
@@ -116,11 +115,7 @@ pub(super) fn in_state(
         ),
         WidgetState::Checked => holds(world.get::<Checked>(widget).is_some(), "is not checked"),
         WidgetState::Selected => holds(world.get::<Selected>(widget).is_some(), "is not selected"),
-        WidgetState::Pressed => holds(
-            world.get::<Pressed>(widget).is_some()
-                || world.get::<Interaction>(widget) == Some(&Interaction::Pressed),
-            "is not pressed",
-        ),
+        WidgetState::Pressed => holds(world.get::<Pressed>(widget).is_some(), "is not pressed"),
         WidgetState::Focused => {
             match world.get_resource::<InputFocus>().and_then(InputFocus::get) {
                 Some(focus) if is_within(world, focus, widget) => Ok(()),
