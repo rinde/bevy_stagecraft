@@ -13,12 +13,12 @@ use bevy::{
     camera::visibility::InheritedVisibility,
     ecs::{entity::Entity, hierarchy::ChildOf, hierarchy::Children, world::World},
     input_focus::InputFocus,
-    text::TextSpan,
+    text::{EditableText, TextSpan},
     ui::{
         Checkable, Checked, ComputedNode, InteractionDisabled, Pressed, Selectable, Selected,
         widget::Text,
     },
-    ui_widgets::{Button, MenuButton, MenuItem, SelectedTab, Slider, Tab},
+    ui_widgets::{Button, MenuButton, MenuItem, SelectedTab, Slider, Tab, TextInput},
 };
 
 /// A state a widget can be in, as Bevy's widgets record it.
@@ -93,6 +93,7 @@ pub(super) fn is_widget(world: &World, entity: Entity) -> bool {
         || entity.contains::<MenuItem>()
         || entity.contains::<Tab>()
         || entity.contains::<MenuButton>()
+        || entity.contains::<TextInput>()
 }
 
 /// Whether `widget` is in `state`; the error says what it is instead.
@@ -169,16 +170,49 @@ fn on_top(world: &World, widget: Entity, label: &str) -> Result<(), String> {
 
 /// The text `widget` shows: each text node at or below it, in hierarchy
 /// order, with its spans, joined by single spaces.
+///
+/// The text of a text input is the value it holds, what was typed, and
+/// nothing else: its label is [`label_of`].
 pub(super) fn text_of(world: &World, widget: Entity) -> String {
+    if let Some(field) = world.get::<EditableText>(widget) {
+        return field.value().to_string();
+    }
     let mut blocks: Vec<String> = Vec::new();
     collect_text(world, widget, &mut blocks);
     blocks.join(" ")
+}
+
+/// What names `widget`: its text as [`text_of`] reads it, except that a text
+/// input's own value is left out, as it changes with every key and is what a
+/// check reads, not what a target finds the field by.
+pub(super) fn label_of(world: &World, widget: Entity) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    if world.get::<EditableText>(widget).is_some() {
+        collect_below(world, widget, &mut blocks);
+    } else {
+        collect_text(world, widget, &mut blocks);
+    }
+    blocks.join(" ")
+}
+
+/// Adds the text of everything below `entity`, not of `entity` itself.
+fn collect_below(world: &World, entity: Entity, blocks: &mut Vec<String>) {
+    if let Some(children) = world.get::<Children>(entity) {
+        for child in children {
+            collect_text(world, *child, blocks);
+        }
+    }
 }
 
 /// Adds the text of `entity` and of everything below it to `blocks`.
 fn collect_text(world: &World, entity: Entity, blocks: &mut Vec<String>) {
     if let Some(text) = world.get::<Text>(entity) {
         blocks.push(text.0.clone());
+    } else if let Some(editable) = world.get::<EditableText>(entity) {
+        let value = editable.value().to_string();
+        if !value.is_empty() {
+            blocks.push(value);
+        }
     } else if let Some(span) = world.get::<TextSpan>(entity) {
         // A span continues the text it sits below.
         match blocks.last_mut() {

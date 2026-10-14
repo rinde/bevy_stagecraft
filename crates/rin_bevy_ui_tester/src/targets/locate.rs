@@ -17,7 +17,7 @@ use bevy::{
 
 use super::{Lookup, Target, is_tooling, resolve};
 use crate::{
-    check::{close_matches, component_id, text_of},
+    check::{close_matches, component_id, label_of},
     probe::describe_entity,
 };
 
@@ -76,7 +76,7 @@ fn matches(world: &World, target: &Target) -> Matches {
             role.fits(entity)
                 && label
                     .as_ref()
-                    .is_none_or(|label| text_of(world, entity.id()) == *label)
+                    .is_none_or(|label| label_of(world, entity.id()) == *label)
         })),
         Target::Component(name) => match component_id(world, name) {
             Ok(Some(id)) => Matches::Nodes(app_nodes(world, |entity| entity.contains_id(id))),
@@ -209,7 +209,7 @@ fn nothing_matches(world: &World, target: &Target) -> String {
         } => {
             let labels = app_values(world, |entity| {
                 role.fits(entity)
-                    .then(|| text_of(world, entity.id()))
+                    .then(|| label_of(world, entity.id()))
                     .filter(|text| !text.is_empty())
             });
             format!(

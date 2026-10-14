@@ -243,6 +243,8 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
   laid-out size. A text target names the nearest widget at or above the text.
 - `TextOf` reads every text node at or below the target's widget, spans
   included, joined by spaces, and matches `Exact`, `Contains` or `StartsWith`.
+  For a text input (`TextInput`) it reads the value the field holds, and
+  `Shows(..)` finds a field by its value too.
 - `Tree(of: .., matches: "..")` compares the UI at and below the target's node
   with an expected tree, a snapshot in the manner of Playwright's aria
   snapshots (see "Tree snapshots" below).
@@ -290,6 +292,7 @@ Check(Tree(of: Name("Toolbar"), matches: r#"
       - button "Pause"
       - button "Lay" [pressed]
       - slider "Speed" [value=0.5]
+      - text-input "Name" = "Alice"
 "#)),
 ```
 
@@ -297,11 +300,12 @@ Check(Tree(of: Name("Toolbar"), matches: r#"
   follow below. Roles are `panel` (a node that groups others, labelled by its
   `Name` if it has one), `text`, and the widget roles written in kebab case:
   `button`, `checkbox`, `radio`, `slider`, `menu-button`, `menu-item`,
-  `list-item`, `tab`, `tab-list`, read from the same components as `Role(..)` targets, not from
+  `list-item`, `text-input`, `tab`, `tab-list`, read from the same components as `Role(..)` targets, not from
   AccessKit. A widget's label is its text, as `TextOf` reads it, and the text
   nodes inside a widget are not lines of their own. Widgets show states:
   `disabled`, `checked`, `selected`, `pressed`, `focused`, and `value=..` on a
-  slider.
+  slider. A text input also shows the text it holds, after its states, as
+  `= "Alice"` (quoted like a label; leave it out to match any value).
 - The expected tree is partial. A line matches an actual line of the same
   role, with the same label if it gives one, and at least its states (a
   value compares as a number, so `0.50` is `0.5`); the lines below it match
@@ -354,8 +358,11 @@ two registered types share the short one); a misspelt or non-component type is
 a load error naming the step, with close names. Roles come from the
 components of `bevy_ui_widgets`, not from AccessKit, so they work headless:
 `Button` (`bevy_ui_widgets` or `bevy_ui`'s `Button`), `Checkbox`,
-`RadioButton`, `Slider`, `MenuButton`, `MenuItem`, `ListItem`, `Tab` and `TabList`. A label is
-every text at or below the widget, joined by spaces, as `TextOf` reads it.
+`RadioButton`, `Slider`, `MenuButton`, `MenuItem`, `ListItem`, `TextInput`, `Tab` and `TabList`. A label is
+every text at or below the widget, joined by spaces, as `TextOf` reads it, except
+that a `TextInput`'s label is the text below it and never the value it holds:
+`Role(role: TextInput, label: "Name")` names a field, and `TextOf` of it (or
+`Shows("Alice")`) reads what it holds.
 Every target that names a widget is strict, like Playwright's strict mode: if
 it matches several, the step or check fails listing each match and where it
 is, unless it is wrapped in `Nth(..)`; if it matches none, the failure
