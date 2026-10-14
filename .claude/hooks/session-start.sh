@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Brings a fresh Claude Code cloud session up able to run `just ci` and
-# `just test-gpu`. Idempotent: every step is skipped when already done.
+# `just test-gpu-headless`. Idempotent: every step is skipped when already done.
 #
 # Runs as the SessionStart hook in cloud sessions only. Run it by hand with
 # `.claude/hooks/session-start.sh --force`.
