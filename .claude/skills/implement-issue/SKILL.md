@@ -70,8 +70,9 @@ note anything else worth doing in the pull request rather than doing it.
 
 1. `just fmt`
 2. `just ci` (lint, test, features, unused-deps, deny)
-3. `just test-gpu` if the change touches the recorder, capture, index, overlay
-   or anything a GPU test covers (lavapipe: `WGPU_BACKEND=vulkan`)
+3. `just test-gpu-headless` if the change touches the recorder, capture, index, overlay
+   or anything a GPU test covers (`just test-gpu-headless` on lavapipe, or `just test-gpu` on a machine
+   with a GPU and a display)
 4. New behaviour has a test, headless where possible
 5. `README.md` updated if usage changed, and `AGENTS.md` (its module table
    included) if a module, convention or command changed

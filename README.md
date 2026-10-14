@@ -836,7 +836,8 @@ image. Do not add the player or the overlay plugin yourself.
 
 It needs a GPU, or lavapipe without one: `WGPU_BACKEND=vulkan` after
 `sudo apt-get install -y mesa-vulkan-drivers libvulkan1`. `just test-gpu` runs
-the recorder's tests.
+the recorder's tests on the backend wgpu picks, and `just test-gpu-headless`
+forces Vulkan.
 
 ## The gallery (feature `gallery`)
 

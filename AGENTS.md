@@ -61,10 +61,10 @@ dependency closed as not planned waits for a human.
 
 **The review verdict.** A reviewer approves only when CI passed on the pull
 request's head: GitHub's **lint**, **test**, **features**, **unused-deps** and
-**deny** jobs, which together are `just ci`, and **gpu** (`just test-gpu`).
+**deny** jobs, which together are `just ci`, and **gpu** (`just test-gpu-headless`).
 Where one did not run (missing, cancelled, queued, or failed for billing
 reasons; see [CI billing failures](#ci-billing-failures)) the reviewer runs
-`just ci` and `just test-gpu` on the head itself. Every agent review starts
+`just ci` and `just test-gpu-headless` on the head itself. Every agent review starts
 with a marker the coordinator reads:
 
 ```
@@ -164,11 +164,12 @@ lands.
 | `just features`    | Check none, `record`, `gallery`, all features   | `cargo check --workspace --all-targets --no-default-features [--features ...]`    |
 | `just unused-deps` | Fail on unused dependencies                     | `cargo machete --with-metadata`                                                   |
 | `just deny`        | Licences, advisories, bans                      | `cargo deny check`                                                                |
-| `just test-gpu`    | Tests needing a (software) GPU                  | `WGPU_BACKEND=vulkan cargo test --workspace --features record gpu -- --include-ignored` |
+| `just test-gpu`    | Tests needing a GPU, on the backend wgpu picks (needs a display) | `cargo test --workspace --features record gpu -- --include-ignored` |
+| `just test-gpu-headless` | The same on a software GPU (lavapipe), forcing Vulkan | `WGPU_BACKEND=vulkan cargo test --workspace --features record gpu -- --include-ignored` |
 | `just gallery-test` | Play every gallery scenario in a real window, exit non-zero naming failures (needs a display, not part of `ci`) | `cargo run --example gallery --features gallery -- --run-all` |
-| `just ci`          | Everything CI runs                              | all of the above except `test-gpu`                                                |
+| `just ci`          | Everything CI runs                              | all of the above except `test-gpu` and `test-gpu-headless`                                                |
 
-`just test-gpu` needs a Vulkan driver. On a machine without a GPU, install
+`just test-gpu-headless` needs a Vulkan driver. On a machine without a GPU, install
 lavapipe: `sudo apt-get install -y mesa-vulkan-drivers libvulkan1`. CI does the
 same in its `gpu` job. Linux builds also need
 `libwayland-dev libx11-dev libxkbcommon-dev`.
@@ -222,8 +223,8 @@ reaches behaviour (use ordered collections or sort first).
   `clicking_a_disabled_button_does_nothing`.
 - Tests drive a plain Bevy UI, never a game.
 - GPU tests have `gpu` in their name, need feature `record`, are `#[ignore]`d,
-  and run only via `just test-gpu` (which passes `--include-ignored`; also
-  CI's `gpu` job, on lavapipe). `just test` must pass on a machine without a
+  and run only via `just test-gpu` or `just test-gpu-headless` (which pass
+  `--include-ignored`; CI's `gpu` job runs the latter, on lavapipe). `just test` must pass on a machine without a
   GPU.
 - Look at what the recorder renders: the PNGs of a GPU test land in
   `target/tmp/` (`recorder-*`). Anything drawn with text should be viewed once;

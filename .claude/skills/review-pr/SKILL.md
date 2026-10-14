@@ -2,7 +2,7 @@
 name: review-pr
 description: Review a pull request on rinde/rin-bevy-ui-tester against its issue and the repository's rules and make sure CI passed, running it locally where GitHub did not, then approve it or request changes with detailed inline comments. The reviewer agents the coordinator dispatches run this; run it by hand as /review-pr <number> [sonnet|opus].
 argument-hint: <pr-number> [sonnet|opus]
-allowed-tools: Read, Grep, Glob, Write, Bash(gh api:*), Bash(git fetch:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git switch:*), Bash(git status:*), Bash(git rev-parse:*), Bash(just ci:*), Bash(just test-gpu:*)
+allowed-tools: Read, Grep, Glob, Write, Bash(gh api:*), Bash(git fetch:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git switch:*), Bash(git status:*), Bash(git rev-parse:*), Bash(just ci:*), Bash(just test-gpu-headless:*), Bash(just test-gpu:*)
 ---
 
 # Review a pull request
@@ -51,7 +51,7 @@ friends may fail where `gh api repos/...` works.
 An approval means CI passed on exactly `head.sha`, on GitHub or on your
 machine. GitHub's CI is the jobs **lint**, **test**, **features**,
 **unused-deps** and **deny** in the check runs of `head.sha`, which together are
-`just ci`, and **gpu**, which is `just test-gpu` on lavapipe.
+`just ci`, and **gpu**, which is `just test-gpu-headless` on lavapipe.
 
 - **All six succeeded** → CI passed on GitHub: `ci=github` in the marker.
 - **One failed** with a step's output → a blocking finding: name the job and
@@ -61,15 +61,16 @@ machine. GitHub's CI is the jobs **lint**, **test**, **features**,
 - **One did not run** — missing, cancelled, skipped, or failed for billing
   reasons without a step's output (see **CI billing failures** in
   `AGENTS.md`) — or is still queued or running → run CI yourself, in the
-  checkout of the head: `just ci`, then `just test-gpu` (lavapipe, which the
-  session-start hook installs). They build Bevy, so give each command a long
+  checkout of the head: `just ci`, then `just test-gpu-headless` (lavapipe, which the
+  session-start hook installs) or, on a machine with a GPU and a display such
+  as a Mac, `just test-gpu`. They build Bevy, so give each command a long
   timeout (up to 45 minutes). In a worktree, reuse the main checkout's build
   rather than compiling Bevy from cold, and keep debug info small:
   `CARGO_TARGET_DIR="$(git rev-parse --path-format=absolute --git-common-dir)/../target" CARGO_PROFILE_DEV_DEBUG=line-tables-only just ci`
-  (and the same for `just test-gpu`).
+  (and the same for the GPU recipe).
   - Both pass → CI passed locally: `ci=local` in the marker, and say in the
-    body that GitHub's CI did not run and `just ci` and `just test-gpu`
-    passed on `head.sha`.
+    body that GitHub's CI did not run and `just ci` and the GPU recipe you ran
+    (`just test-gpu-headless` or `just test-gpu`) passed on `head.sha`.
   - A format, clippy, doc, test, feature, unused-dependency, `cargo deny` or
     GPU check fails → a blocking finding, as above, with the failing output.
   - It cannot run at all — a missing toolchain, tool or system library,
