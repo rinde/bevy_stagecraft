@@ -89,7 +89,7 @@ fn is_hit(world: &World, entity: Entity, position: Vec2) -> bool {
     node.contains_point(*transform, point)
         && world
             .get::<CalculatedClip>(entity)
-            .is_none_or(|clip| clip.clip.contains(point))
+            .is_none_or(|clip| clip.contains_point(point))
         && !is_tooling(world, entity)
 }
 
@@ -206,7 +206,7 @@ fn marker_targets(world: &World, subject: Entity) -> Vec<Target> {
         .inspect_entity(subject)
         .map(|infos| {
             infos
-                .filter_map(|info| types.get(info.type_id()?))
+                .filter_map(|(_, info)| types.get(info.type_id()?))
                 .filter(|registration| is_test_id(registration, &filter))
                 .map(|registration| name_of(&types, registration))
                 .collect()
@@ -333,7 +333,7 @@ fn component_checks(
             .inspect_entity(entity)
             .map(|infos| {
                 infos
-                    .filter_map(|info| types.get(info.type_id()?))
+                    .filter_map(|(_, info)| types.get(info.type_id()?))
                     .filter(|registration| {
                         Role::Component.fits(registration)
                             && !Role::Resource.fits(registration)

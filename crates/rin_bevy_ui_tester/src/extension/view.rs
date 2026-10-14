@@ -4,7 +4,7 @@ use core::fmt;
 
 use bevy::{
     ecs::world::World,
-    reflect::{FromType, GetTypeRegistration, Reflect, TypePath, TypeRegistry},
+    reflect::{CreateTypeData, GetTypeRegistration, Reflect, TypePath, TypeRegistry},
 };
 use serde::{Deserialize, Serialize, de::Error as _};
 
@@ -91,8 +91,8 @@ impl ReflectAppView {
     }
 }
 
-impl<T: AppView + Reflect> FromType<T> for ReflectAppView {
-    fn from_type() -> Self {
+impl<T: AppView + Reflect> CreateTypeData<T> for ReflectAppView {
+    fn create_type_data((): ()) -> Self {
         Self {
             get: |value| {
                 value

@@ -21,7 +21,7 @@ use bevy::{
         mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
         touch::TouchPhase,
     },
-    picking::events::{Over, Pointer},
+    picking::events::PointerOver,
     picking::input::PointerInputSettings,
     prelude::*,
     ui::InteractionDisabled,
@@ -1452,7 +1452,7 @@ struct SeenOvers(u32);
 
 /// Counts the pointer going over the app's buttons or their labels.
 fn count_overs(
-    over: On<Pointer<Over>>,
+    over: On<PointerOver>,
     roots: Query<(), With<AppRoot>>,
     mut seen: ResMut<SeenOvers>,
 ) {

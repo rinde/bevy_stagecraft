@@ -363,7 +363,7 @@ struct AddedRoot {
 
 /// Notes a parentless node as it appears.
 fn note_root(
-    added: On<Add, Node>,
+    added: On<Add<Node>>,
     nodes: Query<(Has<ChildOf>, Has<UiTargetCamera>, Has<OverlayRoot>)>,
     mut roots: ResMut<AddedRoots>,
 ) {

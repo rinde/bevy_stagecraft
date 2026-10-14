@@ -5,7 +5,7 @@ use core::fmt;
 use bevy::{
     ecs::world::World,
     math::Vec2,
-    reflect::{FromType, Reflect},
+    reflect::{CreateTypeData, Reflect},
 };
 
 use super::{AppValue, TargetPoint};
@@ -102,8 +102,8 @@ impl ReflectAppTarget {
     }
 }
 
-impl<T: AppTarget + Reflect> FromType<T> for ReflectAppTarget {
-    fn from_type() -> Self {
+impl<T: AppTarget + Reflect> CreateTypeData<T> for ReflectAppTarget {
+    fn create_type_data((): ()) -> Self {
         Self {
             get: |value| {
                 value

@@ -9,10 +9,10 @@ rust-version = "1.98.1"
 repository = "https://github.com/rinde/rin-bevy-ui-tester"
 publish = false
 
-# Bevy version: must stay exactly in step with rinde/rails. Bevy upgrades land
-# here and in rails together, never in one without the other.
+# Bevy version: the tester upgrades first, on its own; rinde/rails and
+# rinde/rin-bevy-ui follow once the tester's upgrade is complete.
 [workspace.dependencies]
-bevy = { version = "=0.19.1", default-features = false }
+bevy = { version = "=0.20.0", default-features = false }
 
 # Bevy is unusably slow unoptimised, so dependencies get full optimisation
 # even in dev builds, while our own code stays quick to compile.

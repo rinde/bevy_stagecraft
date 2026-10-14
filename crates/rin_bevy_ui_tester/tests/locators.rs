@@ -9,7 +9,8 @@
     clippy::indexing_slicing,
     clippy::disallowed_methods,
     clippy::panic,
-    reason = "tests may panic on a broken setup"
+    unreachable_pub,
+    reason = "tests may panic on a broken setup; the twin components are `pub` in private modules"
 )]
 
 mod common;
@@ -38,6 +39,26 @@ struct Row;
 /// A reflected type that is not a component.
 #[derive(Reflect, Debug, Default)]
 struct NotAComponent;
+
+/// One of two reflected components with the same short name.
+mod first {
+    use bevy::prelude::*;
+
+    /// A component whose short name [`super::second::Twin`] shares.
+    #[derive(Component, Reflect, Debug, Default)]
+    #[reflect(Component)]
+    pub struct Twin;
+}
+
+/// The other of two reflected components with the same short name.
+mod second {
+    use bevy::prelude::*;
+
+    /// A component whose short name [`super::first::Twin`] shares.
+    #[derive(Component, Reflect, Debug, Default)]
+    #[reflect(Component)]
+    pub struct Twin;
+}
 
 /// What was clicked: how often "Pause", and which rows were deleted, in
 /// order.
@@ -418,12 +439,11 @@ fn a_component_target_must_name_one_reflected_component_and_nesting_must_name_wi
         error.to_string(),
         "step 1: `NotAComponent` is not a reflected component; add `#[reflect(Component)]`"
     );
-    // Bevy UI and Bevy's widgets both have a `Button`.
-    let error = load("MoveTo(Component(\"Button\"))").unwrap_err();
+    let error = load("MoveTo(Component(\"Twin\"))").unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("`Button` names more than one registered type"),
+            .contains("`Twin` names more than one registered type"),
         "{error}"
     );
     let error = load("MoveTo(Nth(0, Screen((1.0, 2.0))))").unwrap_err();
@@ -491,7 +511,28 @@ fn targets_rank_a_test_id_then_role_and_label_then_text_then_name_then_the_posit
 #[test]
 fn a_bevy_ui_button_is_no_button_role_and_a_widgets_button_is() {
     let mut world = World::new();
-    let ui_button = world.spawn(bevy::ui::widget::Button).id();
+    // Since Bevy 0.20 the deprecated `bevy_ui` `Button` is an alias of a
+    // crate-private struct that cannot be named here, so it is built and
+    // inserted through reflection, as a scene would.
+    let registry = AppTypeRegistry::new_with_derived_types();
+    let registration = registry
+        .read()
+        .get_with_type_path("bevy_ui::widget::button::DeprecatedButton")
+        .cloned()
+        .expect("bevy_ui's deprecated Button is reflected");
+    let value = registration
+        .data::<ReflectDefault>()
+        .expect("it has a default")
+        .default();
+    let ui_button = world.spawn_empty().id();
+    registration
+        .data::<ReflectComponent>()
+        .expect("it is a component")
+        .insert(
+            &mut world.entity_mut(ui_button),
+            value.as_partial_reflect(),
+            &registry.read(),
+        );
     let widget_button = world.spawn(Button).id();
     let fits = |entity: Entity| {
         world
