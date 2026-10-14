@@ -239,6 +239,16 @@ reaches behaviour (use ordered collections or sort first).
 - Register systems in the plugin, in named system sets.
 - Take `Commands` by value.
 - Never call the disallowed methods listed above.
+- Order a system against every Bevy set it depends on, each with its own
+  `.before`/`.after`. Since Bevy 0.20 Bevy's own set chains (`UiSystems` in
+  `PostUpdate`, the UI extract sets, the render sets) are weak: they order
+  only systems whose tracked data access conflicts, so being before
+  `UiSystems::Prepare` no longer implies being before `UiSystems::Layout`.
+  A dependency through anything the scheduler cannot see (a channel, a
+  global, an asset read by id) needs an explicit edge.
+  `tests/determinism.rs` and the recorder's
+  `gpu_a_recorded_scenario_gives_identical_frames_on_every_run` play the same
+  scenario twice and compare the results.
 
 ## Before you call it done
 

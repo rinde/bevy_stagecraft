@@ -203,7 +203,7 @@ fn gpu_a_failed_scenario_gets_a_trace_page_with_snapshots_and_pictures_per_step(
 
 #[test]
 #[ignore = "needs a GPU: run by `just test-gpu`"]
-fn gpu_recorded_frame_zero_is_the_same_on_every_run() {
+fn gpu_a_recorded_scenario_gives_identical_frames_on_every_run() {
     let first = output_dir("recorder-determinism-a");
     let second = output_dir("recorder-determinism-b");
     for dir in [&first, &second] {
@@ -212,13 +212,46 @@ fn gpu_recorded_frame_zero_is_the_same_on_every_run() {
             .record(dir)
             .expect("recording works");
     }
-    let frame_zero =
-        |dir: &PathBuf| fs::read(dir.join("determinism/frame-00000.png")).expect("frame 0");
-    assert_eq!(
-        frame_zero(&first),
-        frame_zero(&second),
-        "frame 0 is identical"
+    // Every picture the run wrote, by name, in name order.
+    let frames = |dir: &PathBuf| {
+        let mut frames: Vec<(String, Vec<u8>)> = fs::read_dir(dir.join("determinism"))
+            .expect("the scenario's folder")
+            .map(|entry| entry.expect("a directory entry").path())
+            .filter(|path| {
+                path.extension().is_some_and(|extension| extension == "png")
+                    && path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .is_some_and(|stem| stem.starts_with("frame-"))
+            })
+            .map(|path| {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("a file name")
+                    .to_owned();
+                (name, fs::read(&path).expect("a frame"))
+            })
+            .collect();
+        frames.sort();
+        frames
+    };
+    let (first, second) = (frames(&first), frames(&second));
+    assert!(
+        first.len() > 1,
+        "the run wrote more than one frame: {}",
+        first.len()
     );
+    let names = |frames: &[(String, Vec<u8>)]| {
+        frames
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&first), names(&second), "the same frames were taken");
+    for ((name, a), (_, b)) in first.iter().zip(&second) {
+        assert!(a == b, "{name} is identical on both runs");
+    }
 }
 
 /// The colour of `colour` as 8-bit sRGB, as a picture holds it.
