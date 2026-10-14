@@ -8,6 +8,10 @@
 )]
 
 use bevy::{
+    ecs::{
+        intern::Interned,
+        schedule::{ScheduleLabel, SingleThreadedExecutor},
+    },
     prelude::*,
     ui::px,
     ui_widgets::{Activate, Button},
@@ -159,4 +163,30 @@ impl AppTarget for UiTarget {
 /// every type the tests read is found by Bevy.
 pub fn registry() -> Registry {
     Registry::default()
+}
+
+/// Fixed seeds for shuffling a schedule: never the clock, so a failure
+/// reproduces from the seed it names.
+pub const SHUFFLE_SEEDS: [u64; 4] = [1, 2, 3, 0x5eed_cafe];
+
+/// The schedules the crate adds systems to, by name.
+pub fn shuffled_schedules() -> [(&'static str, Interned<dyn ScheduleLabel>); 4] {
+    [
+        ("PreUpdate", PreUpdate.intern()),
+        ("Update", Update.intern()),
+        ("PostUpdate", PostUpdate.intern()),
+        ("Last", Last.intern()),
+    ]
+}
+
+/// Has `schedule` run its systems in an order shuffled by `seed` wherever
+/// nothing orders them, on the single-threaded executor so the order is the
+/// seed's alone.
+pub fn shuffle(app: &mut App, schedule: Interned<dyn ScheduleLabel>, seed: u64) {
+    app.edit_schedule(schedule, |schedule| {
+        let mut settings = schedule.get_build_settings();
+        settings.shuffle_seed = Some(seed);
+        schedule.set_build_settings(settings);
+        schedule.set_executor(SingleThreadedExecutor::new());
+    });
 }
