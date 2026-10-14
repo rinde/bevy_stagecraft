@@ -14,6 +14,7 @@ use bevy::{
     input::{keyboard::KeyCode, mouse::MouseButton},
     math::Vec2,
     reflect::{GetTypeRegistration, Reflect, TypePath},
+    text::RemSize,
 };
 use serde::{Deserialize, Serialize};
 
@@ -536,6 +537,10 @@ pub struct Scenario {
     /// The scale factor of the window the scenario wants: physical pixels per
     /// logical pixel.
     scale_factor: Option<f32>,
+    /// The root font size (Bevy's `RemSize`) a [`crate::Variant`] runs the scenario
+    /// at, in logical pixels. Only a variant sets it, so it is not in the
+    /// script.
+    rem_size: Option<f32>,
     /// How many frames a step waits for its target to be actionable, when
     /// the scenario says.
     action_timeout: Option<u16>,
@@ -563,6 +568,7 @@ impl fmt::Debug for Scenario {
             .field("view", &self.view.is_some())
             .field("window", &self.window)
             .field("scale_factor", &self.scale_factor)
+            .field("rem_size", &self.rem_size)
             .field("action_timeout", &self.action_timeout)
             .field("app_setup", &self.app_setup)
             .field("base_dir", &self.base_dir)
@@ -584,6 +590,7 @@ impl Scenario {
             view: None,
             window: None,
             scale_factor: None,
+            rem_size: None,
             action_timeout: None,
             app_setup: None,
             base_dir: None,
@@ -754,6 +761,7 @@ impl Scenario {
         name: String,
         window: Option<(u32, u32)>,
         scale_factor: Option<f32>,
+        rem_size: Option<f32>,
         setup: Option<&Setup>,
         view: Option<&View>,
     ) -> Self {
@@ -761,6 +769,7 @@ impl Scenario {
         varied.name = name;
         varied.window = window.or(varied.window);
         varied.scale_factor = scale_factor.or(varied.scale_factor);
+        varied.rem_size = rem_size.or(varied.rem_size);
         if let Some(setup) = setup {
             varied.app_setup = Some(setup.clone());
         }
@@ -786,6 +795,26 @@ impl Scenario {
     #[must_use]
     pub const fn scale(&self) -> Option<f32> {
         self.scale_factor
+    }
+
+    /// The root font size a variant runs the scenario at, in logical pixels,
+    /// if it sets one.
+    #[must_use]
+    pub const fn rem_size(&self) -> Option<f32> {
+        self.rem_size
+    }
+
+    /// Puts the app's `RemSize` at the scenario's rem size, where it has one
+    /// (a variant's, so `Val::Rem` and `FontSize::Rem` follow it), and returns
+    /// what the world had so the caller can put it back with
+    /// [`restore_rem_size`]. `None` where the scenario sets none or the rem
+    /// size is not usable (finite and above zero), in which case nothing is
+    /// changed.
+    pub(crate) fn fit_rem_size(&self, world: &mut World) -> Option<RemSize> {
+        let rem = self.rem_size.filter(|rem| check_rem_size(*rem).is_ok())?;
+        let before = world.get_resource::<RemSize>().copied().unwrap_or_default();
+        world.insert_resource(RemSize(rem));
+        Some(before)
     }
 
     /// The app's setup, which the script carries, if any.
@@ -919,6 +948,7 @@ impl Scenario {
             view: None,
             window: script.window_size,
             scale_factor: script.scale_factor,
+            rem_size: None,
             action_timeout: script.action_timeout,
             app_setup: script.setup,
             base_dir: None,
@@ -932,3 +962,21 @@ impl Scenario {
 
 /// The pointer position a script starts from when nothing has moved it.
 pub(crate) const ORIGIN: Vec2 = Vec2::ZERO;
+
+/// Puts the `RemSize` a [`Scenario::fit_rem_size`] returned back.
+pub(crate) fn restore_rem_size(world: &mut World, before: Option<RemSize>) {
+    if let Some(before) = before {
+        world.insert_resource(before);
+    }
+}
+
+/// Refuses a rem size that is not finite and above zero, saying why.
+pub(crate) fn check_rem_size(rem_size: f32) -> Result<(), String> {
+    if rem_size.is_finite() && rem_size > 0.0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the rem size is {rem_size}; it must be finite and above zero"
+        ))
+    }
+}

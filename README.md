@@ -306,6 +306,10 @@ Check(Tree(of: Name("Toolbar"), matches: r#"
   `disabled`, `checked`, `selected`, `pressed`, `focused`, and `value=..` on a
   slider. A text input also shows the text it holds, after its states, as
   `= "Alice"` (quoted like a label; leave it out to match any value).
+- An image or box set inline in text (`InlineImage`, `InlineBox`) is a line of
+  its own under its text, `image` or `inline-box`, so a snapshot can say an
+  icon is there. The label of a widget with one is its text alone, with no
+  gap or stray character, and nothing inside an inline box is read as text.
 - The expected tree is partial. A line matches an actual line of the same
   role, with the same label if it gives one, and at least its states (a
   value compares as a number, so `0.50` is `0.5`); the lines below it match
@@ -487,6 +491,18 @@ not read. Enter, Tab and Backspace are not text: use `Tap`. Typing with no
 focused widget does nothing and does not fail. `Type` only adds a form to
 format version 3, so every older file still loads.
 
+### A panic in the app
+
+Since Bevy 0.20 a panic in a system, command or observer reaches the world's
+`FallbackErrorHandler`. While a scenario plays (`run_headless`, `run_in`, so
+`run_ron_tests` and its variants, the recorder and the gallery) the player
+installs a handler that keeps such errors, and puts the app's own back
+afterwards. The step during which the app panicked fails, naming the system,
+command or observer and the message; the rest of the steps are skipped, and
+the runner goes on with the next scenario. Errors of lower severity go to
+Bevy's default handler as before. The errors are kept per thread, so this
+holds where the app updates on the thread that plays it (the default here).
+
 ### Several pointer moves in one frame
 
 A real mouse can report several moves before the app reads them. A handler
@@ -638,7 +654,7 @@ path in `StepRecord::group`. `flatten(steps)` gives the leaf steps with their
 paths for code that walks a script, and `with_group_path(path, text)` puts a
 path in front of a line. A group adds a form to version 3, not a version.
 
-## Window sizes, scale factors and themes: variants
+## Window sizes, scale factors, text sizes and themes: variants
 
 A layout that works at 1280x720 may break at 640x480, on a high-density display
 or in the dark theme. Rather than copy every scenario, list **variants** in the
@@ -646,7 +662,11 @@ runner (what Playwright calls projects) and each scenario is played once per
 variant. A `Variant` has a name and any of a window size (logical pixels), a
 scale factor (physical pixels per logical pixel; the window keeps its logical
 size, so the layout is the same as at 1.0 and the pictures have that many times
-the pixels) and the app's own setup or view (a value of its `#[reflect(AppSetup)]`
+the pixels), a rem size (the root font size, Bevy's `RemSize`, applied before
+the setup so `Val::Rem` and `FontSize::Rem` text and layout follow it; the
+window keeps its logical size, so `Screen` targets and `MoveBurst` stay valid;
+text the app sizes in `Px` does not follow it; the runner puts the size back)
+and the app's own setup or view (a value of its `#[reflect(AppSetup)]`
 or `#[reflect(AppView)]` enum, for example to switch the theme).
 
 ```rust,ignore
@@ -654,6 +674,7 @@ let variants = [
     Variant::new("wide").window_size(1280, 720),
     Variant::new("narrow").window_size(640, 480),
     Variant::new("retina").window_size(1280, 720).scale_factor(2.0),
+    Variant::new("large text").rem_size(40.0),
     Variant::new("dark").app_setup(MySetup::Dark),
 ];
 ```
