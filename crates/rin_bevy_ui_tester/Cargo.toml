@@ -83,6 +83,13 @@ features = [
     "bevy_log",
 ]
 
+# `debug` is Bevy's switch for `ScheduleBuildSettings::shuffle_seed`, which the
+# shuffled-schedule tests use. Dev-only, so nobody who depends on the crate
+# gets it.
+[dev-dependencies.bevy]
+workspace = true
+features = ["debug"]
+
 # Plays every .ron file in tests/ron, one test per file.
 [[test]]
 name = "ron_scenarios"

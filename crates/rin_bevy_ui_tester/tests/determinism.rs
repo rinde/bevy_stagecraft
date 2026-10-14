@@ -12,12 +12,15 @@
     reason = "tests may panic on a broken setup"
 )]
 
+mod common;
+
 use bevy::{
     prelude::*,
     ui::px,
     ui_widgets::{Activate, Button},
 };
-use rin_bevy_ui_tester::{Check, Scenario, Step, Target};
+use common::{SHUFFLE_SEEDS, shuffle, shuffled_schedules};
+use rin_bevy_ui_tester::{Check, NoiseFilter, Scenario, Step, Target};
 
 /// How far the button moves to the right each time it is activated.
 const HOP: f32 = 60.0;
@@ -106,6 +109,55 @@ fn the_same_scenario_played_twice_headless_gives_identical_reports_and_traces() 
         assert_eq!(
             first_trace, second_trace,
             "at scale {scale_factor}, the traces are identical"
+        );
+    }
+}
+
+#[test]
+fn shuffling_the_order_of_unordered_systems_changes_no_report_or_trace() {
+    for scale_factor in [1.0, 1.5] {
+        let scenario = hop_three_times(scale_factor);
+        let (expected_report, expected_trace) = scenario.run_headless_traced();
+        assert!(
+            expected_report.passed(),
+            "at scale {scale_factor}: {:?}",
+            expected_report.failures()
+        );
+        for (name, schedule) in shuffled_schedules() {
+            for seed in SHUFFLE_SEEDS {
+                let mut app = scenario.headless_app();
+                shuffle(&mut app, schedule, seed);
+                let (report, trace) = scenario.run_in_traced(&mut app, NoiseFilter::default());
+                assert_eq!(
+                    report, expected_report,
+                    "at scale {scale_factor}, the report with {name} shuffled by seed {seed}"
+                );
+                assert_eq!(
+                    trace, expected_trace,
+                    "at scale {scale_factor}, the trace with {name} shuffled by seed {seed}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn shuffling_every_schedule_at_once_changes_no_report_or_trace() {
+    let scenario = hop_three_times(1.0);
+    let (expected_report, expected_trace) = scenario.run_headless_traced();
+    for seed in SHUFFLE_SEEDS {
+        let mut app = scenario.headless_app();
+        for (_, schedule) in shuffled_schedules() {
+            shuffle(&mut app, schedule, seed);
+        }
+        let (report, trace) = scenario.run_in_traced(&mut app, NoiseFilter::default());
+        assert_eq!(
+            report, expected_report,
+            "the report with every schedule shuffled by seed {seed}"
+        );
+        assert_eq!(
+            trace, expected_trace,
+            "the trace with every schedule shuffled by seed {seed}"
         );
     }
 }

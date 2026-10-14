@@ -14,8 +14,12 @@ mod common;
 
 use std::{fs, path::PathBuf};
 
-use bevy::{camera::RenderTarget, prelude::*};
-use common::{Activations, spawn_ui};
+use bevy::{
+    camera::RenderTarget,
+    ecs::{intern::Interned, schedule::ScheduleLabel},
+    prelude::*,
+};
+use common::{Activations, SHUFFLE_SEEDS, shuffle, shuffled_schedules, spawn_ui};
 use rin_bevy_ui_tester::{
     CaptureMeta, Captures, Check, Frame, Recorder, RecorderPlugins, Scenario, Step, Target,
     Variant,
@@ -201,56 +205,88 @@ fn gpu_a_failed_scenario_gets_a_trace_page_with_snapshots_and_pictures_per_step(
     );
 }
 
+/// Every picture of the "determinism" scenario recorded into `dir` by name, in
+/// name order, with `shuffled` schedules shuffled by its seed.
+fn record_frames(
+    dir: &str,
+    shuffled: Vec<(Interned<dyn ScheduleLabel>, u64)>,
+) -> Vec<(String, Vec<u8>)> {
+    let dir = output_dir(dir);
+    Recorder::new(move |app| {
+        for &(schedule, seed) in &shuffled {
+            shuffle(app, schedule, seed);
+        }
+    })
+    .scenario(click_pause("determinism", false))
+    .record(&dir)
+    .expect("recording works");
+    let mut frames: Vec<(String, Vec<u8>)> = fs::read_dir(dir.join("determinism"))
+        .expect("the scenario's folder")
+        .map(|entry| entry.expect("a directory entry").path())
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "png")
+                && path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| stem.starts_with("frame-"))
+        })
+        .map(|path| {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a file name")
+                .to_owned();
+            (name, fs::read(&path).expect("a frame"))
+        })
+        .collect();
+    frames.sort();
+    frames
+}
+
+/// The picture names of `frames`.
+fn frame_names(frames: &[(String, Vec<u8>)]) -> Vec<String> {
+    frames.iter().map(|(name, _)| name.clone()).collect()
+}
+
 #[test]
 #[ignore = "needs a GPU: run by `just test-gpu`"]
 fn gpu_a_recorded_scenario_gives_identical_frames_on_every_run() {
-    let first = output_dir("recorder-determinism-a");
-    let second = output_dir("recorder-determinism-b");
-    for dir in [&first, &second] {
-        Recorder::new(|_app| {})
-            .scenario(click_pause("determinism", false))
-            .record(dir)
-            .expect("recording works");
-    }
-    // Every picture the run wrote, by name, in name order.
-    let frames = |dir: &PathBuf| {
-        let mut frames: Vec<(String, Vec<u8>)> = fs::read_dir(dir.join("determinism"))
-            .expect("the scenario's folder")
-            .map(|entry| entry.expect("a directory entry").path())
-            .filter(|path| {
-                path.extension().is_some_and(|extension| extension == "png")
-                    && path
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .is_some_and(|stem| stem.starts_with("frame-"))
-            })
-            .map(|path| {
-                let name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .expect("a file name")
-                    .to_owned();
-                (name, fs::read(&path).expect("a frame"))
-            })
-            .collect();
-        frames.sort();
-        frames
-    };
-    let (first, second) = (frames(&first), frames(&second));
+    let first = record_frames("recorder-determinism-a", Vec::new());
+    let second = record_frames("recorder-determinism-b", Vec::new());
     assert!(
         first.len() > 1,
         "the run wrote more than one frame: {}",
         first.len()
     );
-    let names = |frames: &[(String, Vec<u8>)]| {
-        frames
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(names(&first), names(&second), "the same frames were taken");
+    assert_eq!(
+        frame_names(&first),
+        frame_names(&second),
+        "the same frames were taken"
+    );
     for ((name, a), (_, b)) in first.iter().zip(&second) {
         assert!(a == b, "{name} is identical on both runs");
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU: run by `just test-gpu`"]
+fn gpu_shuffling_the_order_of_unordered_systems_changes_no_recorded_frame() {
+    let expected = record_frames("recorder-determinism-unshuffled", Vec::new());
+    for (name, schedule) in shuffled_schedules() {
+        for seed in &SHUFFLE_SEEDS[..2] {
+            let frames = record_frames("recorder-determinism-shuffled", vec![(schedule, *seed)]);
+            assert_eq!(
+                frame_names(&frames),
+                frame_names(&expected),
+                "the same frames were taken with {name} shuffled by seed {seed}"
+            );
+            for ((frame, a), (_, b)) in frames.iter().zip(&expected) {
+                assert!(
+                    a == b,
+                    "{frame} is identical with {name} shuffled by seed {seed}"
+                );
+            }
+        }
     }
 }
 

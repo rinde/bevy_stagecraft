@@ -29,6 +29,7 @@ use crate::{
     headless::HeadlessPlugins,
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems, character_events},
     probe::check_hover,
+    scenario::restore_rem_size,
     scenario::{ORIGIN, Scenario, Step, flatten, with_group_path},
     script::check_scale_factor,
     targets::{Action, NotActionable, ResolvedTarget, Target, actionable, pressable, resolve},
@@ -1262,6 +1263,7 @@ impl Scenario {
             Plugin::build(&ScenarioPlayerPlugin, app);
         }
         self.fit_primary_window(app.world_mut());
+        let rem_before = self.fit_rem_size(app.world_mut());
         let setup = self.run_setup(app.world_mut());
         for _ in 0..SETTLE_FRAMES {
             app.update();
@@ -1291,6 +1293,8 @@ impl Scenario {
             .get_resource::<ScenarioReport>()
             .cloned()
             .unwrap_or_default();
+        // The app was handed to us, so it gets its own text size back.
+        restore_rem_size(app.world_mut(), rem_before);
         (report, trace)
     }
 

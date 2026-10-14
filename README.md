@@ -640,7 +640,7 @@ path in `StepRecord::group`. `flatten(steps)` gives the leaf steps with their
 paths for code that walks a script, and `with_group_path(path, text)` puts a
 path in front of a line. A group adds a form to version 3, not a version.
 
-## Window sizes, scale factors and themes: variants
+## Window sizes, scale factors, text sizes and themes: variants
 
 A layout that works at 1280x720 may break at 640x480, on a high-density display
 or in the dark theme. Rather than copy every scenario, list **variants** in the
@@ -648,7 +648,11 @@ runner (what Playwright calls projects) and each scenario is played once per
 variant. A `Variant` has a name and any of a window size (logical pixels), a
 scale factor (physical pixels per logical pixel; the window keeps its logical
 size, so the layout is the same as at 1.0 and the pictures have that many times
-the pixels) and the app's own setup or view (a value of its `#[reflect(AppSetup)]`
+the pixels), a rem size (the root font size, Bevy's `RemSize`, applied before
+the setup so `Val::Rem` and `FontSize::Rem` text and layout follow it; the
+window keeps its logical size, so `Screen` targets and `MoveBurst` stay valid;
+text the app sizes in `Px` does not follow it; the runner puts the size back)
+and the app's own setup or view (a value of its `#[reflect(AppSetup)]`
 or `#[reflect(AppView)]` enum, for example to switch the theme).
 
 ```rust,ignore
@@ -656,6 +660,7 @@ let variants = [
     Variant::new("wide").window_size(1280, 720),
     Variant::new("narrow").window_size(640, 480),
     Variant::new("retina").window_size(1280, 720).scale_factor(2.0),
+    Variant::new("large text").rem_size(40.0),
     Variant::new("dark").app_setup(MySetup::Dark),
 ];
 ```

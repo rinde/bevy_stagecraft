@@ -8,6 +8,7 @@ use bevy::{
     input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
     log::{error, info, warn},
     picking::input::PointerInputSettings,
+    text::RemSize,
     window::{PrimaryWindow, Window},
 };
 
@@ -74,9 +75,15 @@ fn chosen_variant(world: &World, state: &GalleryState) -> Variant {
 }
 
 /// Puts the primary window at the size and scale factor the scenario runs in,
-/// and back to what the app had where it sets none. The first call remembers
-/// what the app had.
+/// and the root font size at its rem size, and back to what the app had where
+/// it sets none. The first call remembers what the app had.
 fn fit_window(world: &mut World, state: &mut GalleryState, scenario: &Scenario) {
+    let original_rem = *state
+        .original_rem
+        .get_or_insert_with(|| world.get_resource::<RemSize>().copied().unwrap_or_default());
+    if scenario.fit_rem_size(world).is_none() {
+        world.insert_resource(original_rem);
+    }
     let scale = scenario
         .scale()
         .filter(|scale| check_scale_factor(*scale).is_ok());

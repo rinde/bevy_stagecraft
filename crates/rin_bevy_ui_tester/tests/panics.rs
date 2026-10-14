@@ -14,7 +14,7 @@ use bevy::{
     ui::px,
     ui_widgets::{Activate, Button},
 };
-use rin_bevy_ui_tester::{Outcome, Scenario, Step, Target};
+use rin_bevy_ui_tester::{Outcome, Registry, Scenario, Step, Target, files::run_ron_files};
 
 /// A camera and a "Boom" button whose observer panics.
 fn spawn_panicking_button(world: &mut World) {
@@ -79,10 +79,33 @@ fn a_panicking_observer_fails_the_click_step_and_skips_the_rest() {
 }
 
 #[test]
-fn the_scenario_after_a_panicking_one_still_passes() {
-    assert!(!boom().run_headless().passed());
-    let report = calm().run_headless();
-    assert!(report.passed(), "{:?}", report.failures());
+fn the_runner_goes_on_to_the_file_after_a_panicking_one() {
+    let dir = std::env::temp_dir().join(format!("rin-tester-panics-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the temporary directory should be writable");
+    // Named so that the panicking file is played first.
+    for name in ["a_boom", "b_calm"] {
+        std::fs::write(
+            dir.join(format!("{name}.ron")),
+            format!("(format_version: 3, name: \"{name}\", steps: [])"),
+        )
+        .expect("the file should be writable");
+    }
+
+    let results = run_ron_files(&dir, &Registry::default(), "", |scenario| {
+        if scenario.name() == "a_boom" {
+            boom().run_headless()
+        } else {
+            calm().run_headless()
+        }
+    })
+    .expect("the directory should be readable");
+    std::fs::remove_dir_all(&dir).expect("the temporary directory should be removable");
+
+    let passed: Vec<_> = results
+        .iter()
+        .map(|result| (result.name.as_str(), result.passed()))
+        .collect();
+    assert_eq!(passed, [("a_boom", false), ("b_calm", true)]);
 }
 
 #[test]
