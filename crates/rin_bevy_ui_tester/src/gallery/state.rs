@@ -3,7 +3,7 @@
 use alloc::collections::BTreeMap;
 use std::path::PathBuf;
 
-use bevy::ecs::resource::Resource;
+use bevy::{ecs::resource::Resource, text::RemSize};
 
 use crate::{
     check::{Check, pick::Picked, suggest::NoiseFilter},
@@ -623,6 +623,9 @@ pub struct GalleryState {
     /// it: logical width, height and scale factor override. Variants and
     /// scenarios that set nothing get it back.
     pub(crate) original_window: Option<(f32, f32, Option<f32>)>,
+    /// The app's `RemSize` as it was before the gallery first changed it, for
+    /// the scenarios and variants that set none.
+    pub(crate) original_rem: Option<RemSize>,
     /// How each entry fared the last time it finished, per variant: the
     /// entry's index and the variant's.
     pub(crate) results: BTreeMap<(usize, usize), ScenarioResult>,
@@ -693,6 +696,7 @@ impl GalleryState {
             pending: Vec::new(),
             variant: 0,
             original_window: None,
+            original_rem: None,
             results: BTreeMap::new(),
             export_dir,
             status: String::new(),

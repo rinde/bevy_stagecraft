@@ -768,6 +768,8 @@ impl Recorder {
         app.finish();
         app.cleanup();
 
+        // A fresh app, so there is nothing to put back afterwards.
+        scenario.fit_rem_size(app.world_mut());
         let setup = refused.map_or_else(|| scenario.run_setup(app.world_mut()), Err);
         if setup.is_ok()
             && let Err(error) = scenario.run_view(app.world_mut())
