@@ -35,7 +35,7 @@ use bevy::{
     },
     input_focus::InputFocus,
     text::TextSpan,
-    ui::{Display, Interaction, InteractionDisabled, Node, Pressed, widget::Text},
+    ui::{Display, InteractionDisabled, Node, Pressed, widget::Text},
     ui_widgets::SliderValue,
 };
 
@@ -358,7 +358,7 @@ fn states_of(world: &World, entity: &EntityRef<'_>) -> Vec<State> {
     if entity.contains::<bevy::ui::Selected>() {
         states.insert(State::Selected);
     }
-    if entity.contains::<Pressed>() || entity.get::<Interaction>() == Some(&Interaction::Pressed) {
+    if entity.contains::<Pressed>() {
         states.insert(State::Pressed);
     }
     if world

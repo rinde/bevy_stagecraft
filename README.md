@@ -238,8 +238,7 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
 - `Component` reads the component on the target's node or, failing that, the
   nearest node above it that has one, so a label finds the widget it sits in.
 - The widget states read the components Bevy's widgets keep:
-  `InteractionDisabled`, `Checked`, `Selected`, `Pressed` (or
-  `Interaction::Pressed`),
+  `InteractionDisabled`, `Checked`, `Selected`, `Pressed`,
   `InputFocus` (the widget or something below it), `InheritedVisibility` and a
   laid-out size. A text target names the nearest widget at or above the text.
 - `TextOf` reads every text node at or below the target's widget, spans

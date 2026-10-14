@@ -487,3 +487,17 @@ fn targets_rank_a_test_id_then_role_and_label_then_text_then_name_then_the_posit
         [Target::name("first row"), Target::screen(at)]
     );
 }
+
+#[test]
+fn a_bevy_ui_button_is_no_button_role_and_a_widgets_button_is() {
+    let mut world = World::new();
+    let ui_button = world.spawn(bevy::ui::widget::Button).id();
+    let widget_button = world.spawn(Button).id();
+    let fits = |entity: Entity| {
+        world
+            .get_entity(entity)
+            .is_ok_and(|entity| WidgetRole::Button.fits(&entity))
+    };
+    assert!(!fits(ui_button), "bevy_ui's Button is deprecated");
+    assert!(fits(widget_button));
+}
