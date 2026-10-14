@@ -431,6 +431,16 @@ and in every runner. A step waiting for its target is in the middle of its
 step, so the gallery's **Step** runs until it has acted. `Check` steps do not
 wait unless they say so with `Within(..)`.
 
+A setup that spawns a BSN scene with assets (`World::queue_spawn_scene`, whose
+dependencies may still be loading) needs no `Within` either: before the first
+step the player waits, a frame at a time, until every scene the app holds
+(`Assets<ScenePatch>` and scene lists) has loaded with its dependencies and
+been applied, for at most the scenario's action timeout. This is always on,
+with no script option, and costs nothing where no scene is queued: a setup that
+spawns nothing, `Setup::Scene` and `World::spawn_scene` do not wait. When the
+time runs out the report has a `setup_failure` naming what was not ready (for
+example `scene .. waits for inner.bsn`) and no step plays.
+
 Condition 5 follows how Bevy delivers pointer events, so a node with
 `Pickable { should_block_lower: false, .. }` (a floating popup or list that
 lets the pointer through) never counts as covering what lies below it. To

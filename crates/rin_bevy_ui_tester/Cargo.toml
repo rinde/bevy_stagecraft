@@ -63,6 +63,9 @@ features = [
     "default_font",
     # Assets, cameras, and the types UI layout and rendering refer to.
     "bevy_asset",
+    # BSN scenes, so the player can wait for the scene a setup spawned to be
+    # loaded (`player` module) and tests can spawn one.
+    "bevy_scene",
     "bevy_camera",
     "bevy_render",
     "bevy_image",

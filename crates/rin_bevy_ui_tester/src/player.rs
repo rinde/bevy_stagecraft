@@ -4,6 +4,7 @@ use alloc::collections::VecDeque;
 
 use bevy::{
     app::{App, Last, Plugin, PreUpdate},
+    asset::{AssetServer, Assets, UntypedAssetId, UntypedHandle},
     ecs::{
         entity::Entity,
         query::With,
@@ -18,6 +19,7 @@ use bevy::{
         mouse::{MouseButton, MouseScrollUnit},
     },
     math::{UVec2, Vec2},
+    scene::{SceneListPatch, ScenePatch},
     window::{PrimaryWindow, Window},
 };
 
@@ -266,6 +268,10 @@ struct Running {
     /// The expectations' outcomes so far, once the steps are done: `None`
     /// for one still waiting to hold.
     expected: Option<Vec<Option<Outcome>>>,
+    /// Frames the first step has waited for the setup's scenes to be loaded.
+    scenes_waited: u32,
+    /// Whether every scene is loaded, so the steps may begin.
+    scenes_ready: bool,
     /// Frames the expectations have waited.
     expect_waited: u32,
 }
@@ -537,6 +543,8 @@ impl ScenarioPlayer {
             captures: CapturedValues::default(),
             captured: Vec::new(),
             expected: None,
+            scenes_waited: 0,
+            scenes_ready: false,
             expect_waited: 0,
         });
     }
@@ -565,6 +573,14 @@ impl ScenarioPlayer {
             return;
         }
         report.frames += 1;
+        match run.await_scenes(world, report) {
+            SceneWait::Ready => {}
+            SceneWait::Waiting => return,
+            SceneWait::TimedOut => {
+                self.running = None;
+                return;
+            }
+        }
         loop {
             let Some(op) = run.ops.pop_front() else {
                 if self.halt_before.is_some_and(|index| run.next_step >= index) {
@@ -647,6 +663,113 @@ impl ScenarioPlayer {
                 Op::Caption(text) => report.caption = Some(text),
             }
         }
+    }
+}
+
+/// Where a run stands on the scenes the setup spawned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SceneWait {
+    /// Every scene is loaded, or there is none: the steps may play.
+    Ready,
+    /// Some are not: the first step waits one more frame.
+    Waiting,
+    /// Some still are after the timeout: the report says so and is finished.
+    TimedOut,
+}
+
+impl Running {
+    /// Holds the first step while a scene is not loaded, up to the
+    /// scenario's action timeout, then fails the report's setup.
+    fn await_scenes(&mut self, world: &World, report: &mut ScenarioReport) -> SceneWait {
+        if self.scenes_ready {
+            return SceneWait::Ready;
+        }
+        let unready = unready_scenes(world);
+        if unready.is_empty() {
+            self.scenes_ready = true;
+            SceneWait::Ready
+        } else if self.scenes_waited < u32::from(self.scenario.action_timeout_frames()) {
+            self.scenes_waited += 1;
+            SceneWait::Waiting
+        } else {
+            report.setup_failure = Some(format!(
+                "scenes not ready after {} frames: {}",
+                self.scenes_waited,
+                unready.join(", ")
+            ));
+            report.finished = true;
+            SceneWait::TimedOut
+        }
+    }
+}
+
+/// What of the scenes the app spawned is not loaded yet, one line each, in a
+/// fixed order: the assets a scene still waits for, else the scene itself.
+/// Empty where there are none, or every scene and its dependencies are loaded.
+/// A scene is applied in the frame it resolves, so a resolved scene is a
+/// spawned one.
+fn unready_scenes(world: &World) -> Vec<String> {
+    let Some(server) = world.get_resource::<AssetServer>() else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    if let Some(patches) = world.get_resource::<Assets<ScenePatch>>() {
+        for (id, patch) in patches.iter() {
+            if patch.resolved.is_none() {
+                lines.push(waiting_for(
+                    server,
+                    "scene",
+                    id.untyped(),
+                    &patch.dependencies,
+                ));
+            }
+        }
+    }
+    if let Some(lists) = world.get_resource::<Assets<SceneListPatch>>() {
+        for (id, list) in lists.iter() {
+            if list.resolved.is_none() {
+                lines.push(waiting_for(
+                    server,
+                    "scene list",
+                    id.untyped(),
+                    &list.dependencies,
+                ));
+            }
+        }
+    }
+    lines.sort();
+    lines
+}
+
+/// The asset's path where it has one, else its id.
+fn asset_name(server: &AssetServer, id: UntypedAssetId) -> String {
+    server
+        .get_path(id)
+        .map_or_else(|| id.to_string(), |path| path.to_string())
+}
+
+/// One line saying an unresolved scene is waiting, for which assets if any
+/// of them is not loaded.
+fn waiting_for(
+    server: &AssetServer,
+    kind: &str,
+    id: UntypedAssetId,
+    dependencies: &[UntypedHandle],
+) -> String {
+    let mut missing: Vec<String> = dependencies
+        .iter()
+        .filter(|handle| !server.is_loaded_with_dependencies(handle.id()))
+        .map(|handle| asset_name(server, handle.id()))
+        .collect();
+    missing.sort();
+    if missing.is_empty() {
+        format!("{kind} {} (not resolved)", asset_name(server, id))
+    } else {
+        format!(
+            "{kind} {} waits for {}",
+            asset_name(server, id),
+            missing.join(", ")
+        )
     }
 }
 
