@@ -10,6 +10,7 @@ use bevy::{
         world::World,
     },
     picking::{hover::HoverMap, pointer::PointerId},
+    text::EditableText,
     ui::widget::Text,
 };
 
@@ -57,16 +58,27 @@ impl<'w> Probe<'w> {
         hovered_entities(self.world)
     }
 
-    /// Whether some UI node shows exactly `text`.
+    /// Whether some UI node shows exactly `text`: a text node, or a text input
+    /// holding it.
     #[must_use]
     pub fn has_text(&self, text: &str) -> bool {
-        self.world
+        let in_text = self
+            .world
             .try_query::<(Entity, &Text)>()
             .is_some_and(|query| {
                 query.iter_manual(self.world).any(|(entity, shown)| {
                     shown.0 == text && !crate::targets::is_tooling(self.world, entity)
                 })
-            })
+            });
+        in_text
+            || self
+                .world
+                .try_query::<(Entity, &EditableText)>()
+                .is_some_and(|query| {
+                    query.iter_manual(self.world).any(|(entity, field)| {
+                        field.value() == text && !crate::targets::is_tooling(self.world, entity)
+                    })
+                })
     }
 }
 

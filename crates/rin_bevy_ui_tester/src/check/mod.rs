@@ -1096,10 +1096,10 @@ pub(crate) fn close_matches<'a>(
     reflect::close_names(wanted, candidates)
 }
 
-/// The text the widget `entity` shows: every text node at or below it, in
-/// order, joined by spaces, as [`Check::TextOf`] reads it.
-pub(crate) fn text_of(world: &World, entity: Entity) -> String {
-    widget::text_of(world, entity)
+/// What names the widget `entity`: its text without a text input's own
+/// value, which a target never finds the field by.
+pub(crate) fn label_of(world: &World, entity: Entity) -> String {
+    widget::label_of(world, entity)
 }
 
 /// The tree of the UI at and below the node `target` names, written as

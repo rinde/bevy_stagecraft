@@ -8,7 +8,9 @@
 
 use bevy::{
     ecs::world::EntityRef,
-    ui_widgets::{Button, Checkbox, ListItem, MenuButton, MenuItem, RadioButton, Slider},
+    ui_widgets::{
+        Button, Checkbox, ListItem, MenuButton, MenuItem, RadioButton, Slider, TextInput,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +28,7 @@ use serde::{Deserialize, Serialize};
 /// | `MenuButton`  | `MenuButton` (which is a `Button` as well)          |
 /// | `MenuItem`    | `MenuItem`                                          |
 /// | `ListItem`    | `ListItem`                                          |
+/// | `TextInput`   | `TextInput` (its value is in `EditableText`)        |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum WidgetRole {
@@ -43,18 +46,22 @@ pub enum WidgetRole {
     MenuItem,
     /// An item in a list box.
     ListItem,
+    /// A text field. Its label is the text beside or below it, not the value
+    /// it holds: read the value with `TextOf` or `Shows`.
+    TextInput,
 }
 
 impl WidgetRole {
     /// Every role, the most specific first: a menu button is a button too,
     /// and is named by the more specific role.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::MenuButton,
         Self::Checkbox,
         Self::RadioButton,
         Self::Slider,
         Self::MenuItem,
         Self::ListItem,
+        Self::TextInput,
         Self::Button,
     ];
 
@@ -69,6 +76,7 @@ impl WidgetRole {
             Self::MenuButton => entity.contains::<MenuButton>(),
             Self::MenuItem => entity.contains::<MenuItem>(),
             Self::ListItem => entity.contains::<ListItem>(),
+            Self::TextInput => entity.contains::<TextInput>(),
         }
     }
 
