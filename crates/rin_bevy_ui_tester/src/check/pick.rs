@@ -789,7 +789,7 @@ impl Picked {
             picked.holds = check.as_ref().is_ok_and(|check| {
                 matches!(
                     check.poll(world, &CapturedValues::default(), 0),
-                    Some(Ok(()))
+                    Some(crate::Outcome::Pass)
                 )
             });
             picked.check = check;

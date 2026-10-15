@@ -252,6 +252,9 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
   `frames` frames (Playwright's `expect.poll`), so a step waits for something
   without a guessed `Wait`, and takes only the frames it waited. It works in
   the expect list too.
+- `Screenshot(name: "..", of: .., tolerance: (..))` compares the frame, or the
+  rectangle of the target's node, with a stored picture (see "Screenshot
+  checks" below).
 
 #### Reading physical pixels as logical
 
@@ -784,9 +787,46 @@ Per scenario it writes `frame-NNNNN.png`, `filmstrip.png` (thumbnails with a
 tick or cross band and the frame number; the step and checks are in the
 pictures, drawn by the overlay) and `scenario.gif`. Overall it writes
 `index.html`, a contact sheet grouped by the groups you gave, groups with a
-failure first and failures first within each. There is no golden-image
-comparison; a failed check fails the scenario, and `any_failed()` tells the
-calling binary to exit non-zero.
+failure first and failures first within each. A failed check fails the
+scenario, and `any_failed()` tells the calling binary to exit non-zero.
+
+### Screenshot checks
+
+```ron
+Check(Screenshot(name: "home")),
+Check(Screenshot(name: "toolbar", of: Name("Toolbar"), tolerance: (colour: 4, pixels: 0.01))),
+```
+
+`Check::screenshot("home")` and `Check::screenshot_of("toolbar", target)` (with
+`.with_tolerance(Tolerance::default().with_colour(4).with_pixels(0.01))`)
+compare the frame, or the rectangle the target's node covers, with the
+baseline `<base dir>/<scenario name as a slug>/<name>.png`. The base directory
+is the one set with `Scenario::with_base_dir`, and for a `.ron` file the
+directory the file is in. A pixel differs when a channel is further than
+`colour` (default 2, of 255) from the baseline's; the check fails when more
+than the share `pixels` (default 0, so none) of the pixels differ.
+
+- A missing baseline fails the first time and is written, for you to look at,
+  commit and run again.
+- On a mismatch the picture taken (`<name>.actual.png`) and one of what
+  differs (`<name>.diff.png`, differing pixels magenta, the rest dimmed) are
+  written beside the baseline, and `index.html` links them.
+- `RIN_UPDATE_SNAPSHOTS=1` (or inserting `ScreenshotSettings { update: true }`)
+  rewrites every baseline with the picture taken, and the check passes.
+- The overlay (cursor, caption, pick outlines) is hidden from the picture.
+
+Pixels need the renderer, so only the recorder (feature `record`: the
+`Recorder`, or `Scenario::run_in` on an app with `RecorderPlugins`) takes
+them. In a plain headless run, in the gallery or anywhere else the check is
+**skipped**: it is recorded as `Outcome::Skipped`, which does not fail the
+scenario (`ScenarioReport::passed` only counts failed checks), and nothing is
+written.
+
+Render the baselines on the same kind of GPU as the one that checks them: CI's
+`gpu` job uses lavapipe (software Vulkan), so baselines made there are the
+reference. A local GPU draws edges and text a little differently; use
+`just test-gpu-headless` (lavapipe) to compare, or loosen the tolerance. Text
+depends on the font and the driver, so give a picture with text a tolerance.
 
 ### Comparing with a value captured earlier
 

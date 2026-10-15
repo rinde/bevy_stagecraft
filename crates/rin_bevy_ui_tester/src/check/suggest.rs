@@ -692,7 +692,7 @@ pub(super) fn holds(world: &World, check: &Check) -> bool {
     loads
         && matches!(
             check.poll(world, &CapturedValues::default(), 0),
-            Some(Ok(()))
+            Some(crate::Outcome::Pass)
         )
 }
 

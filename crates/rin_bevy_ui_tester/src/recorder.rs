@@ -14,17 +14,18 @@ use core::fmt;
 use std::{fs, io, path::Path, path::PathBuf};
 
 use bevy::{
-    app::{App, Last, Plugin, PluginGroup, PluginGroupBuilder, PostUpdate, Startup},
+    app::{App, First, Last, Plugin, PluginGroup, PluginGroupBuilder, PostUpdate, Startup},
     asset::{Assets, Handle, RenderAssetUsages},
     camera::{
         Camera, CameraUpdateSystems, ImageRenderTarget, NormalizedRenderTarget, RenderTarget,
+        visibility::{Visibility, VisibilitySystems},
     },
     core_pipeline::CorePipelinePlugin,
     ecs::{
         component::Component,
         entity::Entity,
         observer::On,
-        query::With,
+        query::{Added, With},
         resource::Resource,
         schedule::{IntoScheduleConfigs, SystemSet},
         system::{Commands, ParamSet, Query, Res, ResMut},
@@ -45,11 +46,15 @@ use bevy::{
 
 use crate::{
     capture::{CaptureError, Frame},
-    check::suggest::NoiseFilter,
+    check::{
+        ScreenshotSettings,
+        screenshot::{Picture, Pictures},
+        suggest::NoiseFilter,
+    },
     headless::{DEFAULT_SCALE_FACTOR, DEFAULT_WINDOW_SIZE, HeadlessPlugins, RenderCameraSupport},
     index,
     input::SyntheticInput,
-    overlay::{CursorOverlayPlugin, TargetDescriptions, current_step_text},
+    overlay::{CursorOverlayPlugin, OverlayRoot, TargetDescriptions, current_step_text},
     player::{Outcome, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport, ScenarioSystems},
     scenario::Scenario,
     trace::ScenarioTrace,
@@ -223,6 +228,8 @@ struct RecorderSupport;
 impl Plugin for RecorderSupport {
     fn build(&self, app: &mut App) {
         app.init_resource::<Captures>()
+            .init_resource::<Pictures>()
+            .init_resource::<ScreenshotSettings>()
             // The synthetic pointer writes `PointerInput` itself; Bevy's own
             // mouse picking would add a second one aimed at the window, which
             // nothing renders to, and the last one wins.
@@ -231,12 +238,19 @@ impl Plugin for RecorderSupport {
                 is_touch_enabled: false,
             })
             .add_observer(store_capture)
+            .add_observer(store_check_picture)
+            .add_systems(First, show_overlay_again)
             .add_systems(Startup, create_target)
             .add_systems(
                 PostUpdate,
                 // Every set that reads a camera's target is named on its own:
                 // Bevy chains them only weakly, so being before the first of
                 // them would no longer say anything about the others.
+                hide_overlay_for_picture
+                    .before(VisibilitySystems::VisibilityPropagate),
+            )
+            .add_systems(
+                PostUpdate,
                 retarget_cameras
                     .in_set(RecorderSystems::Retarget)
                     .before(CameraUpdateSystems)
@@ -250,7 +264,91 @@ impl Plugin for RecorderSupport {
                 request_frames
                     .in_set(RecorderSystems::Capture)
                     .after(ScenarioSystems::Trace),
+            )
+            .add_systems(
+                Last,
+                request_check_picture.after(RecorderSystems::Capture),
             );
+    }
+}
+
+/// Marks the screenshot taken for a screenshot check, with the request it
+/// answers.
+#[derive(Component, Debug, Clone, Copy)]
+struct CheckPicture(u32);
+
+/// Takes the picture a screenshot check wants, of the frame just played.
+fn request_check_picture(
+    mut commands: Commands,
+    mut pictures: ResMut<Pictures>,
+    target: Option<Res<RecorderTarget>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    already: Query<Entity, (With<CaptureMeta>, Added<Screenshot>)>,
+) {
+    let Some(target) = target else {
+        return;
+    };
+    let Some(token) = pictures.begin_taking() else {
+        return;
+    };
+    // Bevy keeps one screenshot of a target a frame: a second would replace or
+    // lose the first, so the recording's picture of this frame answers both.
+    if let Some(entity) = already.iter().next() {
+        commands.entity(entity).insert(CheckPicture(token));
+        return;
+    }
+    let scale_factor = windows
+        .iter()
+        .next()
+        .map_or(DEFAULT_SCALE_FACTOR, |window| {
+            window.resolution.scale_factor()
+        });
+    commands.spawn((screenshot(&target.0, scale_factor), CheckPicture(token)));
+}
+
+/// Hands a screenshot check the picture that came back for it.
+fn store_check_picture(
+    event: On<ScreenshotCaptured>,
+    requests: Query<&CheckPicture>,
+    mut pictures: ResMut<Pictures>,
+) {
+    let Ok(request) = requests.get(event.entity) else {
+        return;
+    };
+    let picture = Frame::from_image(&event.image)
+        .map(|frame| Picture {
+            width: frame.width(),
+            height: frame.height(),
+            rgba: frame.rgba().to_vec(),
+        })
+        .map_err(|error| format!("the picture could not be read: {error}"));
+    pictures.deliver(request.0, picture);
+}
+
+/// Hides the cursor, caption and the other overlay from the frame a screenshot
+/// check is about to take, before visibility is worked out, so a baseline
+/// holds the app and not the tooling.
+fn hide_overlay_for_picture(
+    mut pictures: ResMut<Pictures>,
+    mut roots: Query<(Entity, &mut Visibility), With<OverlayRoot>>,
+) {
+    if !pictures.is_wanted() {
+        return;
+    }
+    let mut hidden = Vec::new();
+    for (entity, mut visibility) in &mut roots {
+        hidden.push((entity, *visibility));
+        *visibility = Visibility::Hidden;
+    }
+    pictures.hide(hidden);
+}
+
+/// Puts the overlay back after a picture was taken without it.
+fn show_overlay_again(mut pictures: ResMut<Pictures>, mut roots: Query<&mut Visibility>) {
+    for (entity, before) in pictures.take_hidden() {
+        if let Ok(mut visibility) = roots.get_mut(entity) {
+            *visibility = before;
+        }
     }
 }
 

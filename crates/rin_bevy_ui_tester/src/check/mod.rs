@@ -15,6 +15,7 @@ mod app;
 mod capture;
 pub mod pick;
 mod reflect;
+pub mod screenshot;
 pub mod suggest;
 mod tree;
 mod value;
@@ -37,6 +38,7 @@ use bevy::{
 use ron::value::RawValue;
 use serde::{Deserialize, Serialize, de::DeserializeSeed};
 
+pub use self::screenshot::{ScreenshotRecord, ScreenshotResult, ScreenshotSettings, Tolerance};
 pub use self::{
     app::{AppCheck, ReflectAppCheck},
     capture::Measure,
@@ -51,6 +53,7 @@ use crate::{
     extension::{
         AppCheckValue, Extension, NO_CUSTOM_TARGET, bad_app_value, no_app_type, several_message,
     },
+    player::Outcome,
     probe::{Probe, check_hover},
     scenario::CheckResult,
     targets::{Lookup, Target, resolve},
@@ -190,6 +193,21 @@ pub enum Check {
         /// The expected tree.
         matches: String,
     },
+    /// The frame, or the target's node rectangle of it, looks like the
+    /// baseline `<scenario>/<name>.png` next to the scenario's files, within
+    /// the tolerance. Needs the recorder (feature `record`); anywhere else the
+    /// check is skipped. A missing baseline fails and is written; on a
+    /// mismatch the picture and a diff are written beside the baseline.
+    /// `RIN_UPDATE_SNAPSHOTS=1` rewrites every baseline. Written
+    /// `Screenshot(name: "home", of: Name("Toolbar"), tolerance: (colour: 4))`.
+    Screenshot {
+        /// The baseline's file name, without `.png`.
+        name: String,
+        /// The node whose rectangle is compared; the whole frame when `None`.
+        of: Option<Target>,
+        /// How far the picture may be from the baseline.
+        tolerance: Tolerance,
+    },
     /// The check inside does not hold. A check that cannot run at all, such
     /// as a name nobody defined, still fails.
     Not(Box<Self>),
@@ -276,6 +294,17 @@ enum Spelled {
         /// See [`Check::Tree`].
         matches: String,
     },
+    /// See [`Check::Screenshot`].
+    Screenshot {
+        /// See [`Check::Screenshot`].
+        name: String,
+        /// See [`Check::Screenshot`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        of: Option<Target>,
+        /// See [`Check::Screenshot`].
+        #[serde(default, skip_serializing_if = "Tolerance::is_default")]
+        tolerance: Tolerance,
+    },
     /// See [`Check::Not`].
     Not(Box<Check>),
     /// See [`Check::All`].
@@ -289,7 +318,7 @@ enum Spelled {
 /// The forms a check can take, for a check that does not parse.
 const FORMS: &str = "a check: App(..), Shows(..), Hovered(..), Count(..), Resource(..), \
     Component(..), InState(..), Disabled(..), Checked(..), Selected(..), Pressed(..), \
-    Focused(..), Visible(..), OnTop(..), Exists(..), TextOf(..), Tree(..), Not(..), All(..), Any(..) or Within(..)";
+    Focused(..), Visible(..), OnTop(..), Exists(..), TextOf(..), Tree(..), Screenshot(..), Not(..), All(..), Any(..) or Within(..)";
 
 /// What a file that refers to a check by name, as format versions 1 and 2
 /// could, is told.
@@ -658,6 +687,38 @@ impl Check {
         Self::All(checks.into_iter().map(Into::into).collect())
     }
 
+    /// The whole frame looks like the baseline `name` (`<name>.png`, in the
+    /// scenario's directory), within the default [`Tolerance`]. See
+    /// [`Check::Screenshot`].
+    #[must_use]
+    pub fn screenshot(name: impl Into<String>) -> Self {
+        Self::Screenshot {
+            name: name.into(),
+            of: None,
+            tolerance: Tolerance::default(),
+        }
+    }
+
+    /// The rectangle `target`'s node covers looks like the baseline `name`.
+    #[must_use]
+    pub fn screenshot_of(name: impl Into<String>, target: Target) -> Self {
+        Self::Screenshot {
+            name: name.into(),
+            of: Some(target),
+            tolerance: Tolerance::default(),
+        }
+    }
+
+    /// This screenshot check with another tolerance; any other check is
+    /// returned as it is.
+    #[must_use]
+    pub const fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
+        if let Self::Screenshot { tolerance: own, .. } = &mut self {
+            *own = tolerance;
+        }
+        self
+    }
+
     /// At least one of `checks` holds.
     #[must_use]
     pub fn any(checks: impl IntoIterator<Item = impl Into<Self>>) -> Self {
@@ -715,6 +776,7 @@ impl Check {
             | Self::Exists(target)
             | Self::TextOf(target, _)
             | Self::Tree { of: target, .. } => Some(target),
+            Self::Screenshot { of, .. } => of.as_mut(),
             _ => None,
         }
     }
@@ -770,23 +832,38 @@ impl Check {
                 reflect::read_value(types, registration, value).map(|_| ())
             }
             Self::Tree { matches, .. } => tree::parse(matches).map(|_| ()).map_err(Problem::Other),
+            Self::Screenshot {
+                name, tolerance, ..
+            } => screenshot::name_problem(name)
+                .or_else(|| tolerance.problem())
+                .map_or(Ok(()), |message| Err(Problem::Other(message))),
             _ => Ok(()),
         }
     }
 
+    /// Whether this check, or one inside it, compares a screenshot, which
+    /// needs a picture taken before it is polled.
+    pub(crate) fn has_screenshot(&self) -> bool {
+        self.parts()
+            .into_iter()
+            .any(|part| matches!(part, Self::Screenshot { .. }))
+    }
+
     /// Runs the check against `world`, which has waited `waited` frames for
     /// it: `None` while a [`Check::Within`] inside still waits for it to
-    /// hold.
+    /// hold. A check that cannot run here (a screenshot without the
+    /// recorder) is [`Outcome::Skipped`].
     pub(crate) fn poll(
         &self,
         world: &World,
         captures: &CapturedValues,
         waited: u32,
-    ) -> Option<CheckResult> {
+    ) -> Option<Outcome> {
         match self.verdict(world, captures, waited) {
-            Verdict::Holds => Some(Ok(())),
-            Verdict::Fails(message) | Verdict::Broken(message) => Some(Err(message)),
+            Verdict::Holds => Some(Outcome::Pass),
+            Verdict::Fails(message) | Verdict::Broken(message) => Some(Outcome::Fail(message)),
             Verdict::Pending(_) => None,
+            Verdict::Unavailable(_) => Some(Outcome::Skipped),
         }
     }
 
@@ -806,6 +883,11 @@ impl Check {
                 first_broken(&verdicts)
                     .or_else(|| verdicts.iter().find(|v| matches!(v, Verdict::Fails(_))))
                     .or_else(|| verdicts.iter().find(|v| matches!(v, Verdict::Pending(_))))
+                    .or_else(|| {
+                        verdicts
+                            .iter()
+                            .find(|v| matches!(v, Verdict::Unavailable(_)))
+                    })
                     .cloned()
                     .unwrap_or(Verdict::Holds)
             }
@@ -823,6 +905,12 @@ impl Check {
                 if let Some(pending) = verdicts.iter().find(|v| matches!(v, Verdict::Pending(_))) {
                     return pending.clone();
                 }
+                if let Some(skipped) = verdicts
+                    .iter()
+                    .find(|v| matches!(v, Verdict::Unavailable(_)))
+                {
+                    return skipped.clone();
+                }
                 let reasons: Vec<&str> = verdicts.iter().map(Verdict::message).collect();
                 Verdict::Fails(if reasons.is_empty() {
                     "there is no check to hold".into()
@@ -837,6 +925,7 @@ impl Check {
                 }
                 other => other,
             },
+            screen @ Self::Screenshot { .. } => screenshot::verdict(world, screen),
             leaf => match leaf.evaluate(world, captures) {
                 Ok(Ok(())) => Verdict::Holds,
                 Ok(Err(message)) => Verdict::Fails(message),
@@ -914,6 +1003,9 @@ impl Check {
                 Ok(expected.compare(world, node).map_err(|diff| {
                     format!("the tree of {of:?} differs (- expected, + actual):\n{diff}")
                 }))
+            }
+            Self::Screenshot { .. } => {
+                Err("a screenshot is judged from a picture, not read from the world".into())
             }
             Self::Not(_) | Self::All(_) | Self::Any(_) | Self::Within(..) => {
                 Err("a check with checks inside it is not a leaf".into())
@@ -1375,6 +1467,9 @@ enum Verdict {
     Pending(String),
     /// It cannot run at all, and why; nothing inverts or waits that out.
     Broken(String),
+    /// It cannot run here (no renderer for a screenshot), and why; the check
+    /// is skipped rather than failed.
+    Unavailable(String),
 }
 
 impl Verdict {
@@ -1382,7 +1477,10 @@ impl Verdict {
     fn message(&self) -> &str {
         match self {
             Self::Holds => "",
-            Self::Fails(message) | Self::Pending(message) | Self::Broken(message) => message,
+            Self::Fails(message)
+            | Self::Pending(message)
+            | Self::Broken(message)
+            | Self::Unavailable(message) => message,
         }
     }
 }
@@ -1416,6 +1514,16 @@ impl fmt::Display for Check {
             Self::OnTop(target) => write!(f, "{target:?} {}", WidgetState::OnTop.words()),
             Self::Exists(target) => write!(f, "{target:?} {}", WidgetState::Exists.words()),
             Self::TextOf(target, matching) => write!(f, "text of {target:?} {matching}"),
+            Self::Screenshot {
+                name,
+                of: None,
+                tolerance,
+            } => write!(f, "screenshot `{name}` matches ({tolerance})"),
+            Self::Screenshot {
+                name,
+                of: Some(target),
+                tolerance,
+            } => write!(f, "screenshot `{name}` of {target:?} matches ({tolerance})"),
             Self::Tree { of, .. } => write!(f, "tree of {of:?} matches"),
             Self::Not(inner) => write!(f, "not: {inner}"),
             Self::All(checks) => write!(f, "all of [{}]", list(checks)),
