@@ -4,6 +4,7 @@ use core::fmt::Write as _;
 use std::path::Path;
 
 use crate::{
+    annotation::Disabled,
     capture::{FilmstripCell, Frame, Mark, encode_gif, filmstrip},
     check::suggest::SnapshotChange,
     overlay::TargetDescriptions,
@@ -120,12 +121,13 @@ fn escape(text: &str) -> String {
 
 /// One scenario's card in the contact sheet.
 fn card(out: &mut String, scenario: &ScenarioRecording) {
-    let (class, verdict) = if scenario.skipped() {
-        ("skipped", "SKIPPED")
-    } else if scenario.passed() {
-        ("pass", "passed")
-    } else {
-        ("fail", "FAILED")
+    let (class, verdict) = match &scenario.disabled {
+        Some(Disabled::Fixme(_)) => ("fixme", "FIXME"),
+        Some(Disabled::Skip(_)) => ("skipped", "SKIPPED"),
+        None if scenario.skipped() => ("skipped", "SKIPPED"),
+        None if scenario.failed_as_expected() => ("pass", "failed as expected"),
+        None if scenario.passed() => ("pass", "passed"),
+        None => ("fail", "FAILED"),
     };
     let slug = escape(&scenario.slug);
     let _ = write!(
@@ -133,9 +135,33 @@ fn card(out: &mut String, scenario: &ScenarioRecording) {
         "<article class=\"card {class}\" id=\"{slug}\"><h3>{name} <small>{verdict}</small></h3>",
         name = escape(&scenario.name),
     );
+    if !scenario.tags.is_empty() {
+        let _ = write!(
+            out,
+            "<p class=\"tags\">{}</p>",
+            scenario
+                .tags
+                .iter()
+                .map(|tag| format!("#{}", escape(tag)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
+    if let Some(disabled) = &scenario.disabled {
+        let _ = write!(out, "<p>{}</p></article>", escape(&disabled.describe()));
+        return;
+    }
     if scenario.skipped() {
         out.push_str("<p>does not run in this variant</p></article>");
         return;
+    }
+    if let Some(reason) = &scenario.should_fail {
+        let note = if scenario.failed_as_expected() {
+            "failed as expected"
+        } else {
+            "passed, so the bug is fixed: remove should_fail"
+        };
+        let _ = write!(out, "<p>should fail: {} ({note})</p>", escape(reason));
     }
     let _ = write!(
         out,
@@ -451,7 +477,11 @@ pub fn index_html(scenarios: &[ScenarioRecording]) -> String {
     }
     // Stable sorts keep the catalogue's order among equals.
     for (_, members) in &mut groups {
-        members.sort_by_key(|scenario| !scenario.failed());
+        members.sort_by_key(|scenario| match (&scenario.disabled, scenario.skipped()) {
+            (Some(Disabled::Fixme(_)), _) => 3,
+            (Some(Disabled::Skip(_)), _) | (None, true) => 2,
+            (None, false) => u8::from(!scenario.failed()),
+        });
     }
     groups.sort_by_key(|(_, members)| !members.iter().any(|scenario| scenario.failed()));
 
@@ -467,25 +497,33 @@ pub fn index_html(scenarios: &[ScenarioRecording]) -> String {
          .card{width:340px;background:#24242c;border-left:6px solid #3c9a54;padding:.5rem .8rem}\
          .card.fail{border-left-color:#c84040}\
          .card.skipped{border-left-color:#777}\
+         .card.fixme{border-left-color:#c8a040}\
+         .card.skipped,.card.fixme{opacity:.6}.tags{opacity:.7;margin:.2rem 0}\
          .card img{width:100%}\
          .card h3{margin:.2rem 0}.card small{font-weight:normal;opacity:.7}\
          ul{list-style:none;padding:0;margin:.4rem 0;font-size:.9rem}\
          li.pass{color:#7fdc8c}li.fail{color:#ff7a7a}li.skipped{color:#999}\
          a{color:#9cc8ff}</style></head><body><h1>Scenario recordings</h1>",
     );
+    let fixme = scenarios
+        .iter()
+        .filter(|scenario| matches!(scenario.disabled, Some(Disabled::Fixme(_))))
+        .count();
     let skipped = scenarios
         .iter()
-        .filter(|scenario| scenario.skipped())
-        .count();
+        .filter(|scenario| scenario.skipped() || scenario.is_disabled())
+        .count()
+        - fixme;
+    let mut counts = String::new();
+    for (count, word) in [(skipped, "skipped"), (fixme, "fixme")] {
+        if count > 0 {
+            let _ = write!(counts, ", {count} {word}");
+        }
+    }
     let _ = write!(
         out,
-        "<p>{} scenarios, {failed} failed{}.</p>",
+        "<p>{} scenarios, {failed} failed{counts}.</p>",
         scenarios.len(),
-        if skipped == 0 {
-            String::new()
-        } else {
-            format!(", {skipped} skipped")
-        }
     );
     for (group, members) in groups {
         let _ = write!(
@@ -527,6 +565,9 @@ mod tests {
             slug: name.into(),
             report,
             skipped: false,
+            tags: Vec::new(),
+            disabled: None,
+            should_fail: None,
             pictures: 3,
             trace: None,
         }
@@ -540,9 +581,48 @@ mod tests {
             slug: name.into(),
             report: ScenarioReport::default(),
             skipped: true,
+            tags: Vec::new(),
+            disabled: None,
+            should_fail: None,
             pictures: 0,
             trace: None,
         }
+    }
+
+    #[test]
+    fn the_index_lists_fixme_and_skip_scenarios_dimmed_with_their_reason_and_tags() {
+        let mut fixme = skipped_recording("later", "A");
+        fixme.skipped = false;
+        fixme.disabled = Some(Disabled::Fixme("not built <yet>".into()));
+        fixme.tags = vec!["bridge".into()];
+        let mut skip = skipped_recording("never", "A");
+        skip.skipped = false;
+        skip.disabled = Some(Disabled::Skip("flaky".into()));
+        let html = index_html(&[fixme, skip, recording("good", "A", true)]);
+        assert!(html.contains("FIXME"), "{html}");
+        assert!(html.contains("fixme: not built &lt;yet&gt;"), "{html}");
+        assert!(html.contains("skip: flaky"), "{html}");
+        assert!(html.contains("#bridge"), "{html}");
+        assert!(html.contains("1 skipped, 1 fixme"), "{html}");
+        assert!(!html.contains("1 failed"), "{html}");
+        assert!(
+            html.find("good") < html.find("later"),
+            "disabled scenarios come last: {html}"
+        );
+    }
+
+    #[test]
+    fn the_index_flips_a_should_fail_scenario() {
+        let mut known = recording("known", "A", false);
+        known.should_fail = Some("issue 7".into());
+        let mut fixed = recording("fixed", "A", true);
+        fixed.should_fail = Some("issue 8".into());
+        assert!(!known.failed());
+        assert!(fixed.failed());
+        let html = index_html(&[known, fixed]);
+        assert!(html.contains("failed as expected"), "{html}");
+        assert!(html.contains("remove should_fail"), "{html}");
+        assert!(html.contains("1 failed"), "{html}");
     }
 
     #[test]
@@ -595,6 +675,9 @@ mod tests {
             slug: "shows-it".into(),
             report,
             skipped: false,
+            tags: Vec::new(),
+            disabled: None,
+            should_fail: None,
             pictures: 0,
             trace: Some(trace),
         }
@@ -642,6 +725,9 @@ mod tests {
             slug: "captures".into(),
             report,
             skipped: false,
+            tags: Vec::new(),
+            disabled: None,
+            should_fail: None,
             pictures: 0,
             trace: Some(trace.clone()),
         };

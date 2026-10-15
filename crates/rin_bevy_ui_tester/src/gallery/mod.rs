@@ -247,6 +247,8 @@ pub struct GalleryPlugin {
     session_hooks: SessionHooks,
     /// Whether to play the whole catalogue once and exit.
     run_all: bool,
+    /// The tag the catalogue starts filtered by.
+    tag: Option<String>,
 }
 
 impl GalleryPlugin {
@@ -261,6 +263,7 @@ impl GalleryPlugin {
             loop_pause: DEFAULT_LOOP_PAUSE,
             session_hooks: SessionHooks::default(),
             run_all: false,
+            tag: None,
         }
     }
 
@@ -273,6 +276,16 @@ impl GalleryPlugin {
     #[must_use]
     pub const fn with_run_all(mut self) -> Self {
         self.run_all = true;
+        self
+    }
+
+    /// Starts with the catalogue filtered by `tag` (see
+    /// [`GalleryAction::SelectTag`]), for example to run only the entries
+    /// tagged `bridge` with [`GalleryPlugin::with_run_all`]. A tag no entry
+    /// carries filters nothing.
+    #[must_use]
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = Some(tag.into());
         self
     }
 
@@ -334,6 +347,9 @@ impl Plugin for GalleryPlugin {
             |config| config.hooks.noise().clone(),
         );
         let mut state = GalleryState::new(self.export_dir.clone(), self.loop_pause, noise);
+        if let Some(tag) = &self.tag {
+            state.tag = self.gallery.tags().iter().position(|known| known == tag);
+        }
         if self.run_all {
             state.begin_run_all();
         }
@@ -391,6 +407,7 @@ impl Plugin for GalleryPlugin {
                 ui::scroll_catalogue,
                 ui::split_panels,
                 ui::style_controls,
+                ui::filter_entries,
                 ui::update_labels,
                 ui::update_details,
             ),

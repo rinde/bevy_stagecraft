@@ -115,6 +115,19 @@ impl Gallery {
         self.variants.len().max(1)
     }
 
+    /// Every tag the entries' scenarios carry, sorted and without repeats:
+    /// what the gallery's tag row offers.
+    #[must_use]
+    pub fn tags(&self) -> Vec<String> {
+        let mut tags: Vec<String> = self
+            .entries()
+            .flat_map(|(_, entry)| entry.scenario.tag_names().iter().cloned())
+            .collect();
+        tags.sort();
+        tags.dedup();
+        tags
+    }
+
     /// The groups, in order.
     #[must_use]
     pub fn groups(&self) -> &[GalleryGroup] {

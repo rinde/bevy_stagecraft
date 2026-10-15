@@ -62,7 +62,8 @@ use crate::{
 /// of steps, and the `Capture(name: .., value: ..)` step with the
 /// `Captured(..)` operand of a comparison: they only add forms, so every file
 /// that loaded before still does. The `variants` field came later still in
-/// version 3 and also only adds a form.
+/// version 3 and also only adds a form, as do `tags`, `skip`, `fixme` and
+/// `should_fail`.
 /// Any other older file still loads.
 pub const FORMAT_VERSION: u32 = 3;
 
@@ -126,6 +127,21 @@ pub struct Script {
     /// than failing it. The default variant answers to `default`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<String>,
+    /// Labels a runner filters by (`RIN_SCENARIO_TAGS`, the gallery's tag
+    /// filter); empty, the default, means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Why the scenario is not run, when it is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip: Option<String>,
+    /// Why the scenario is a known problem and not run, when it is; listed
+    /// apart from the skipped ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixme: Option<String>,
+    /// Why the scenario is expected to fail, when it is: it passes only if it
+    /// fails, so a fixed bug is noticed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub should_fail: Option<String>,
     /// What the scenario does.
     pub steps: Vec<Step>,
     /// Checks that run once the steps have finished. A recorded session

@@ -44,6 +44,7 @@ use bevy::{
 };
 
 use crate::{
+    annotation::{Disabled, TagFilter},
     capture::{CaptureError, Frame},
     check::suggest::NoiseFilter,
     headless::{DEFAULT_SCALE_FACTOR, DEFAULT_WINDOW_SIZE, HeadlessPlugins, RenderCameraSupport},
@@ -519,6 +520,14 @@ pub struct ScenarioRecording {
     /// Whether the scenario does not run in its variant and was skipped rather
     /// than played (see [`Variant::skips`]).
     pub skipped: bool,
+    /// The scenario's tags (see [`Scenario::tags`]).
+    pub tags: Vec<String>,
+    /// Why the scenario was not played, when it is skipped or fixme (see
+    /// [`Scenario::skip`], [`Scenario::fixme`]).
+    pub disabled: Option<Disabled>,
+    /// Why the scenario is expected to fail, when it is (see
+    /// [`Scenario::should_fail`]).
+    pub should_fail: Option<String>,
     /// How many pictures were written.
     pub pictures: usize,
     /// The world around each step, which `trace.html` in the scenario's
@@ -530,7 +539,14 @@ impl ScenarioRecording {
     /// Whether the scenario finished with every step and check passing.
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.report.passed()
+        self.report.passed() != self.should_fail.is_some()
+    }
+
+    /// Whether the scenario failed and was expected to
+    /// ([`Scenario::should_fail`]), which counts as a pass.
+    #[must_use]
+    pub fn failed_as_expected(&self) -> bool {
+        self.should_fail.is_some() && !self.report.passed()
     }
 
     /// Whether the scenario does not run in its variant and was skipped rather
@@ -540,10 +556,17 @@ impl ScenarioRecording {
         self.skipped
     }
 
+    /// Whether the scenario is skipped or fixme and was not played, whatever
+    /// the variant.
+    #[must_use]
+    pub const fn is_disabled(&self) -> bool {
+        self.disabled.is_some()
+    }
+
     /// Whether the scenario ran and failed.
     #[must_use]
     pub fn failed(&self) -> bool {
-        !self.passed() && !self.skipped
+        !self.passed() && !self.skipped && self.disabled.is_none()
     }
 }
 
@@ -602,6 +625,8 @@ pub struct Recorder {
     /// The environments every scenario is recorded in, each its own index
     /// entry; the default one (the scenario as written) unless set.
     variants: Vec<Variant>,
+    /// Which scenarios are recorded, by tag.
+    tags: TagFilter,
 }
 
 impl fmt::Debug for Recorder {
@@ -626,6 +651,7 @@ impl Recorder {
             every: DEFAULT_EVERY,
             noise: NoiseFilter::default(),
             variants: vec![Variant::default()],
+            tags: TagFilter::default(),
         }
     }
 
@@ -658,6 +684,15 @@ impl Recorder {
     #[must_use]
     pub fn variants(mut self, variants: impl IntoIterator<Item = Variant>) -> Self {
         self.variants = variants.into_iter().collect();
+        self
+    }
+
+    /// Records only the scenarios whose tags `tags` lets through (see
+    /// [`TagFilter`]); by default all of them. A scenario with `skip` or
+    /// `fixme` is listed in the index with its reason and not played.
+    #[must_use]
+    pub fn with_tag_filter(mut self, tags: TagFilter) -> Self {
+        self.tags = tags;
         self
     }
 
@@ -701,6 +736,10 @@ impl Recorder {
         let mut used = Vec::new();
         let mut scenarios = Vec::new();
         for entry in &self.entries {
+            if !self.tags.matches(entry.scenario.tag_names()) {
+                continue;
+            }
+            let disabled = entry.scenario.disabled();
             for variant in &self.variants {
                 let scenario = variant.varied(&entry.scenario);
                 let slug = unique_slug(scenario.name(), &mut used);
@@ -708,7 +747,7 @@ impl Recorder {
                 // failed, and nothing is played or written for it; the `.ron`
                 // test runner does the same.
                 let skipped = variant.skips(&entry.scenario);
-                let (report, pictures, trace) = if skipped {
+                let (report, pictures, trace) = if skipped || disabled.is_some() {
                     (
                         ScenarioReport {
                             name: scenario.name().into(),
@@ -730,10 +769,13 @@ impl Recorder {
                     slug,
                     report,
                     skipped,
+                    tags: scenario.tag_names().to_vec(),
+                    disabled: disabled.clone(),
+                    should_fail: scenario.should_fail_reason().map(str::to_owned),
                     pictures: pictures.len(),
                     trace,
                 };
-                if !skipped {
+                if !skipped && disabled.is_none() {
                     index::write_scenario(&folder, &pictures, &recording)?;
                 }
                 scenarios.push(recording);

@@ -2412,6 +2412,98 @@ fn running_everything_skips_a_scenario_that_does_not_name_the_variant() {
     assert!(summary.contains("SKIP add 2 [large]"), "{summary}");
 }
 
+/// Plays the whole catalogue and returns its report.
+fn run_everything(gallery: Gallery) -> GalleryRunReport {
+    let mut app = app_with(
+        GalleryPlugin::new(gallery)
+            .with_reset(reset_app)
+            .with_run_all(),
+    );
+    for _ in 0..4_000 {
+        if exit_asked(&app).is_some() {
+            break;
+        }
+        app.update();
+    }
+    app.world().resource::<GalleryRunReport>().clone()
+}
+
+#[test]
+fn a_skipped_or_fixme_scenario_is_not_played_and_says_why() {
+    let mut app = variant_app([adds(2).skip("flaky")], default_and_large());
+    ask(&mut app, GalleryAction::Select(0));
+    let state = app.world().resource::<GalleryState>();
+    assert_eq!(state.result(0), Some(ScenarioResult::Skipped));
+    assert!(!state.is_playing(), "the player never starts");
+    assert!(state.status().contains("skip: flaky"), "{}", state.status());
+    assert_eq!(count(app.world()), 0, "the app was not played");
+}
+
+#[test]
+fn running_everything_skips_annotated_scenarios_and_flips_should_fail() {
+    let still_broken = adds(2)
+        .expect_check(Check::shows("never shown"))
+        .should_fail("bug");
+    let report = run_everything(
+        Gallery::new().group("All", [adds(3), adds(2).fixme("later"), still_broken]),
+    );
+    assert!(report.passed(), "{}", report.summary());
+    assert_eq!(
+        report.outcomes.iter().filter(|o| o.skipped()).count(),
+        1,
+        "{}",
+        report.summary()
+    );
+    let fixed = adds(2).should_fail("bug");
+    let report = run_everything(Gallery::new().group("All", [fixed]));
+    assert!(!report.passed(), "{}", report.summary());
+    assert!(
+        report
+            .summary()
+            .contains("expected to fail (bug) but passed"),
+        "{}",
+        report.summary()
+    );
+}
+
+#[test]
+fn the_tag_filter_limits_a_run_to_the_entries_carrying_the_tag() {
+    let gallery = Gallery::new().group(
+        "All",
+        [adds(2).tags(["bridge"]), adds(3).tags(["slow"]), adds(4)],
+    );
+    assert_eq!(gallery.tags(), ["bridge", "slow"]);
+    let mut app = app_with(
+        GalleryPlugin::new(gallery)
+            .with_reset(reset_app)
+            .with_tag("bridge")
+            .with_run_all(),
+    );
+    for _ in 0..4_000 {
+        if exit_asked(&app).is_some() {
+            break;
+        }
+        app.update();
+    }
+    let report = app.world().resource::<GalleryRunReport>();
+    let skipped: Vec<_> = report
+        .outcomes
+        .iter()
+        .filter(|o| o.skipped())
+        .map(|o| o.name.as_str())
+        .collect();
+    assert_eq!(skipped, ["add 3", "add 4"], "{}", report.summary());
+}
+
+#[test]
+fn choosing_a_tag_in_the_gallery_filters_the_catalogue_and_none_clears_it() {
+    let mut app = variant_app([adds(2).tags(["bridge"])], default_and_large());
+    ask(&mut app, GalleryAction::SelectTag(Some(0)));
+    assert_eq!(app.world().resource::<GalleryState>().tag(), Some(0));
+    ask(&mut app, GalleryAction::SelectTag(None));
+    assert_eq!(app.world().resource::<GalleryState>().tag(), None);
+}
+
 #[test]
 fn save_as_setup_while_recording_writes_the_apps_own_setup() {
     let dir = fresh_dir("gallery-save-own");
