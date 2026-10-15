@@ -8,6 +8,7 @@
 
 extern crate alloc;
 
+pub mod annotation;
 #[cfg(feature = "record")]
 pub mod capture;
 pub mod check;
@@ -32,6 +33,7 @@ pub mod targets;
 pub mod trace;
 pub mod variant;
 
+pub use annotation::{Disabled, TAGS_ENV, TagFilter};
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
 pub use check::{
@@ -50,8 +52,8 @@ pub use extension::{
     ReflectAppView, Setup, SeveralAppTypes, View, app_type,
 };
 pub use files::{
-    FileOutcome, FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tests,
-    run_ron_tests_with_variants, run_ron_variants,
+    FileOutcome, FileResult, load_ron_file, ron_files, run_ron_files, run_ron_tagged,
+    run_ron_tests, run_ron_tests_with_variants, run_ron_variants,
 };
 #[cfg(feature = "gallery")]
 pub use gallery::{

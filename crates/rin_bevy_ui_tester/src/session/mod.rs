@@ -1038,6 +1038,10 @@ impl SessionRecorder {
             // A freshly recorded script runs in every variant; limit it by
             // hand where it needs to.
             variants: Vec::new(),
+            tags: Vec::new(),
+            skip: None,
+            fixme: None,
+            should_fail: None,
             steps: with_checks(&logged.steps, &checkpoints, &kept),
             expect: candidates.clone(),
         };

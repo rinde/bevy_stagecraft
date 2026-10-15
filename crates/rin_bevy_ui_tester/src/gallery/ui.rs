@@ -72,6 +72,8 @@ const BUTTON_ON: Color = Color::srgb(0.2, 0.4, 0.65);
 const BUTTON_OFF: Color = Color::srgb(0.14, 0.15, 0.19);
 /// Ordinary text.
 const TEXT: Color = Color::srgb(0.9, 0.9, 0.92);
+/// Why a file does not load.
+const ERROR: Color = Color::srgb(1.0, 0.4, 0.4);
 /// Secondary text.
 const DIM: Color = Color::srgb(0.6, 0.62, 0.68);
 
@@ -119,6 +121,8 @@ pub(super) enum Control {
     Entry(usize),
     /// A variant to play the entries in.
     Variant(usize),
+    /// A tag to show only the entries of, or all of them.
+    Tag(Option<usize>),
     /// A step of the selected entry, to jump to the start of.
     JumpTo(usize),
     /// A check the last recording suggested at its end, in the checklist.
@@ -254,6 +258,7 @@ fn control_text(control: Control, state: &GalleryState) -> String {
         Control::Entry(_)
         | Control::NoiseType(_)
         | Control::Variant(_)
+        | Control::Tag(_)
         | Control::InspectStep(_)
         | Control::JumpTo(_)
         | Control::Suggestion(_)
@@ -294,6 +299,7 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
         Control::NewFromCurrent => GalleryAction::NewFromCurrent,
         Control::Entry(index) => GalleryAction::Select(index),
         Control::Variant(index) => GalleryAction::SelectVariant(index),
+        Control::Tag(tag) => GalleryAction::SelectTag(tag),
         Control::JumpTo(step) => GalleryAction::JumpTo(step),
         Control::Suggestion(index) => GalleryAction::ToggleSuggestion(index),
         Control::CheckpointSuggestion(checkpoint, index) => {
@@ -426,6 +432,16 @@ fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState, gal
             label(row, "Variant", DIM);
             for (index, variant) in gallery.variant_list().iter().enumerate() {
                 button_with(row, Control::Variant(index), variant.to_string(), false);
+            }
+        });
+    }
+    let tags = gallery.tags();
+    if !tags.is_empty() {
+        row(root, |row| {
+            label(row, "Tag", DIM);
+            button_with(row, Control::Tag(None), "all".into(), false);
+            for (index, tag) in tags.into_iter().enumerate() {
+                button_with(row, Control::Tag(Some(index)), tag, false);
             }
         });
     }
@@ -569,6 +585,29 @@ pub(super) fn spawn_window(
         });
 }
 
+/// Spawns the catalogue again when the gallery's entries changed, such as a
+/// scenario file that was saved.
+pub(super) fn rebuild_catalogue(
+    gallery: Res<Gallery>,
+    catalogues: Query<Entity, With<Catalogue>>,
+    mut commands: Commands,
+    mut shown: Local<u32>,
+) {
+    if gallery.revision() == *shown {
+        return;
+    }
+    *shown = gallery.revision();
+    for catalogue in &catalogues {
+        commands
+            .entity(catalogue)
+            .despawn_children()
+            .with_children(|list| spawn_catalogue(list, &gallery));
+    }
+}
+
+/// How many lines of why a file does not load the catalogue shows.
+const MAX_ERROR_LINES: usize = 3;
+
 /// Spawns the groups and their entries.
 fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
     let mut index = 0;
@@ -607,10 +646,40 @@ fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
                 .with_children(|head| {
                     let result = label(head, "-", DIM);
                     head.commands().entity(result).insert(EntryResult(at));
-                    label(head, entry.scenario.name(), TEXT);
+                    // Not run: skipped or fixme, shown dimmed with the reason.
+                    let disabled = entry.scenario.disabled();
+                    let name_colour = if disabled.is_some() { DIM } else { TEXT };
+                    label(head, entry.scenario.name(), name_colour);
+                    if !entry.scenario.tag_names().is_empty() {
+                        let tags = entry
+                            .scenario
+                            .tag_names()
+                            .iter()
+                            .map(|tag| format!("#{tag}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        label(head, tags, DIM);
+                    }
                 });
+                if let Some(disabled) = entry.scenario.disabled() {
+                    label(item, disabled.describe(), DIM);
+                }
+                if let Some(reason) = entry.scenario.should_fail_reason() {
+                    label(item, format!("should fail: {reason}"), DIM);
+                }
                 if !entry.description.is_empty() {
                     label(item, entry.description.clone(), DIM);
+                }
+                if let Some(error) = entry.error() {
+                    let heading = if entry.is_unloaded() {
+                        "Does not load:"
+                    } else {
+                        "Does not load, the previous version stays:"
+                    };
+                    label(item, heading, ERROR);
+                    for line in error.lines().take(MAX_ERROR_LINES) {
+                        label(item, line.to_owned(), ERROR);
+                    }
                 }
             });
         }
@@ -637,6 +706,7 @@ pub(super) fn style_controls(
             Control::Record => state.is_recording(),
             Control::Entry(index) => state.selected() == Some(*index),
             Control::Variant(index) => state.variant() == *index,
+            Control::Tag(tag) => state.tag() == *tag,
             Control::Suggestion(index) => state
                 .suggestions()
                 .is_some_and(|suggestions| suggestions.is_ticked(*index)),
@@ -686,6 +756,34 @@ pub(super) fn style_controls(
         };
         if colour.0 != wanted {
             colour.0 = wanted;
+        }
+    }
+}
+
+/// Hides the catalogue entries the tag filter leaves out.
+pub(super) fn filter_entries(
+    state: Res<GalleryState>,
+    gallery: Res<Gallery>,
+    mut entries: Query<(&Control, &mut Node)>,
+) {
+    let tags = gallery.tags();
+    let wanted = state.tag().and_then(|index| tags.get(index));
+    for (control, mut node) in &mut entries {
+        let Control::Entry(index) = control else {
+            continue;
+        };
+        let shown = wanted.is_none_or(|tag| {
+            gallery
+                .get(*index)
+                .is_some_and(|entry| entry.scenario.tag_names().contains(tag))
+        });
+        let display = if shown {
+            bevy::ui::Display::Flex
+        } else {
+            bevy::ui::Display::None
+        };
+        if node.display != display {
+            node.display = display;
         }
     }
 }

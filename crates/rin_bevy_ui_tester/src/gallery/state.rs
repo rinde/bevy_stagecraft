@@ -163,6 +163,11 @@ pub enum GalleryAction {
     /// setup or view it sets. With an entry selected it is played again in
     /// the new variant.
     SelectVariant(usize),
+    /// Show only the entries carrying the tag with this index among
+    /// [`crate::Gallery::tags`], or all of them for `None`. A run of the
+    /// whole catalogue skips the others. An index the catalogue has no tag at
+    /// shows everything.
+    SelectTag(Option<usize>),
     /// Reset the app, play the selected entry up to the start of the step with
     /// this index (counting from 0) and pause there, with the app as it is at
     /// that point, for looking at it. Nothing is stored: runs are
@@ -619,6 +624,9 @@ pub struct GalleryState {
     pub(crate) pending: Vec<GalleryAction>,
     /// The variant entries are played in, an index among the gallery's.
     pub(crate) variant: usize,
+    /// The tag the catalogue is filtered by: an index among
+    /// [`crate::Gallery::tags`]; `None` shows every entry.
+    pub(crate) tag: Option<usize>,
     /// The primary window as the app had it before the gallery first changed
     /// it: logical width, height and scale factor override. Variants and
     /// scenarios that set nothing get it back.
@@ -695,6 +703,7 @@ impl GalleryState {
             jump: None,
             pending: Vec::new(),
             variant: 0,
+            tag: None,
             original_window: None,
             original_rem: None,
             results: BTreeMap::new(),
@@ -735,6 +744,33 @@ impl GalleryState {
     /// Asks for something; it happens before the script next advances.
     pub fn request(&mut self, action: GalleryAction) {
         self.pending.push(action);
+    }
+
+    /// Makes room for a new entry at `index`: what is kept per entry index
+    /// (the selection, the results) follows the entries it belongs to.
+    pub(crate) fn insert_entry(&mut self, index: usize) {
+        if let Some(selected) = self.selected.as_mut()
+            && *selected >= index
+        {
+            *selected = selected.saturating_add(1);
+        }
+        self.results = core::mem::take(&mut self.results)
+            .into_iter()
+            .map(|((entry, variant), result)| {
+                let entry = if entry >= index {
+                    entry.saturating_add(1)
+                } else {
+                    entry
+                };
+                ((entry, variant), result)
+            })
+            .collect();
+    }
+
+    /// Forgets how entry `index` fared, in every variant: it is a different
+    /// scenario now.
+    pub(crate) fn forget_results(&mut self, index: usize) {
+        self.results.retain(|(entry, _), _| *entry != index);
     }
 
     /// The selected entry's index.
@@ -806,6 +842,13 @@ impl GalleryState {
     #[must_use]
     pub const fn variant(&self) -> usize {
         self.variant
+    }
+
+    /// The tag the catalogue is filtered by: an index among
+    /// [`crate::Gallery::tags`]; `None` when every entry is shown.
+    #[must_use]
+    pub const fn tag(&self) -> Option<usize> {
+        self.tag
     }
 
     /// How entry `index` fared the last time it finished in the variant

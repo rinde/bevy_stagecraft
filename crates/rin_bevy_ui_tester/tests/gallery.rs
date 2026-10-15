@@ -2412,6 +2412,98 @@ fn running_everything_skips_a_scenario_that_does_not_name_the_variant() {
     assert!(summary.contains("SKIP add 2 [large]"), "{summary}");
 }
 
+/// Plays the whole catalogue and returns its report.
+fn run_everything(gallery: Gallery) -> GalleryRunReport {
+    let mut app = app_with(
+        GalleryPlugin::new(gallery)
+            .with_reset(reset_app)
+            .with_run_all(),
+    );
+    for _ in 0..4_000 {
+        if exit_asked(&app).is_some() {
+            break;
+        }
+        app.update();
+    }
+    app.world().resource::<GalleryRunReport>().clone()
+}
+
+#[test]
+fn a_skipped_or_fixme_scenario_is_not_played_and_says_why() {
+    let mut app = variant_app([adds(2).skip("flaky")], default_and_large());
+    ask(&mut app, GalleryAction::Select(0));
+    let state = app.world().resource::<GalleryState>();
+    assert_eq!(state.result(0), Some(ScenarioResult::Skipped));
+    assert!(!state.is_playing(), "the player never starts");
+    assert!(state.status().contains("skip: flaky"), "{}", state.status());
+    assert_eq!(count(app.world()), 0, "the app was not played");
+}
+
+#[test]
+fn running_everything_skips_annotated_scenarios_and_flips_should_fail() {
+    let still_broken = adds(2)
+        .expect_check(Check::shows("never shown"))
+        .should_fail("bug");
+    let report = run_everything(
+        Gallery::new().group("All", [adds(3), adds(2).fixme("later"), still_broken]),
+    );
+    assert!(report.passed(), "{}", report.summary());
+    assert_eq!(
+        report.outcomes.iter().filter(|o| o.skipped()).count(),
+        1,
+        "{}",
+        report.summary()
+    );
+    let fixed = adds(2).should_fail("bug");
+    let report = run_everything(Gallery::new().group("All", [fixed]));
+    assert!(!report.passed(), "{}", report.summary());
+    assert!(
+        report
+            .summary()
+            .contains("expected to fail (bug) but passed"),
+        "{}",
+        report.summary()
+    );
+}
+
+#[test]
+fn the_tag_filter_limits_a_run_to_the_entries_carrying_the_tag() {
+    let gallery = Gallery::new().group(
+        "All",
+        [adds(2).tags(["bridge"]), adds(3).tags(["slow"]), adds(4)],
+    );
+    assert_eq!(gallery.tags(), ["bridge", "slow"]);
+    let mut app = app_with(
+        GalleryPlugin::new(gallery)
+            .with_reset(reset_app)
+            .with_tag("bridge")
+            .with_run_all(),
+    );
+    for _ in 0..4_000 {
+        if exit_asked(&app).is_some() {
+            break;
+        }
+        app.update();
+    }
+    let report = app.world().resource::<GalleryRunReport>();
+    let skipped: Vec<_> = report
+        .outcomes
+        .iter()
+        .filter(|o| o.skipped())
+        .map(|o| o.name.as_str())
+        .collect();
+    assert_eq!(skipped, ["add 3", "add 4"], "{}", report.summary());
+}
+
+#[test]
+fn choosing_a_tag_in_the_gallery_filters_the_catalogue_and_none_clears_it() {
+    let mut app = variant_app([adds(2).tags(["bridge"])], default_and_large());
+    ask(&mut app, GalleryAction::SelectTag(Some(0)));
+    assert_eq!(app.world().resource::<GalleryState>().tag(), Some(0));
+    ask(&mut app, GalleryAction::SelectTag(None));
+    assert_eq!(app.world().resource::<GalleryState>().tag(), None);
+}
+
 #[test]
 fn save_as_setup_while_recording_writes_the_apps_own_setup() {
     let dir = fresh_dir("gallery-save-own");
@@ -2599,4 +2691,132 @@ fn a_short_catalogue_gives_the_rest_to_a_long_list_of_steps() {
     assert!(details > catalogue * 1.5, "{catalogue} vs {details}");
     let share = catalogue / (catalogue + details);
     assert!(share >= 0.19, "the catalogue had {share}");
+}
+
+/// A scenario file that expects the count to be `count`, on a fresh app.
+fn scenario_file(count: u32) -> String {
+    Scenario::new("from a file")
+        .steps([Step::wait(2)])
+        .expect_check(Check::resource::<Count>(".0").eq(count))
+        .to_ron()
+        .expect("a scenario exports")
+}
+
+/// A fresh directory for scenario files, named for the test.
+fn scenario_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rin-gallery-{name}-{}", std::process::id()));
+    drop(std::fs::remove_dir_all(&dir));
+    std::fs::create_dir_all(&dir).expect("a temp directory");
+    dir
+}
+
+/// A gallery app over the `.ron` files in `dir`.
+fn watching_app(dir: &std::path::Path) -> App {
+    app_with(
+        GalleryPlugin::new(Gallery::new().directory("Files", dir, &Registry::default()))
+            .with_reset(reset_app)
+            .with_loop_pause(2),
+    )
+}
+
+/// Lets the gallery look at its files once.
+fn let_the_gallery_look(app: &mut App) {
+    for _ in 0..rin_bevy_ui_tester::gallery::WATCH_INTERVAL {
+        app.update();
+    }
+}
+
+#[test]
+fn saving_a_scenario_file_shows_its_new_result_without_restarting_the_gallery() {
+    let dir = scenario_dir("edit");
+    std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
+    let mut app = watching_app(&dir);
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 400, |world| {
+        world.resource::<GalleryState>().result(0) == Some(ScenarioResult::Passed)
+    });
+    std::fs::write(dir.join("a.ron"), scenario_file(15)).expect("written");
+    let_the_gallery_look(&mut app);
+    run_until(&mut app, 400, |world| {
+        world.resource::<GalleryState>().result(0) == Some(ScenarioResult::Failed)
+    });
+    assert!(
+        app.world()
+            .resource::<Gallery>()
+            .get(0)
+            .is_some_and(|entry| entry.error().is_none())
+    );
+}
+
+#[test]
+fn a_file_with_a_syntax_error_shows_the_error_and_keeps_the_previous_version() {
+    let dir = scenario_dir("broken");
+    std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
+    let mut app = watching_app(&dir);
+    std::fs::write(dir.join("a.ron"), "(this is not a scenario").expect("written");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    let entry = gallery.get(0).expect("the entry stays");
+    assert!(
+        entry.error().is_some(),
+        "the error is kept for the catalogue"
+    );
+    assert!(!entry.is_unloaded(), "the previous version is still there");
+    // The previous version still plays, and passes.
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 400, |world| {
+        world.resource::<GalleryState>().result(0) == Some(ScenarioResult::Passed)
+    });
+    // Fixing the file clears the error.
+    std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
+    let_the_gallery_look(&mut app);
+    assert!(
+        app.world()
+            .resource::<Gallery>()
+            .get(0)
+            .is_some_and(|entry| entry.error().is_none())
+    );
+}
+
+#[test]
+fn a_file_that_never_loaded_has_an_entry_that_cannot_be_played() {
+    let dir = scenario_dir("never");
+    std::fs::write(dir.join("a.ron"), "nonsense").expect("written");
+    let mut app = watching_app(&dir);
+    let entry = app.world().resource::<Gallery>().get(0).cloned();
+    assert!(entry.is_some_and(|entry| entry.is_unloaded() && entry.error().is_some()));
+    ask(&mut app, GalleryAction::Select(0));
+    assert_eq!(app.world().resource::<GalleryState>().selected(), None);
+}
+
+#[test]
+fn a_new_scenario_file_is_added_to_the_catalogue_and_the_selection_keeps_its_entry() {
+    let dir = scenario_dir("added");
+    std::fs::write(dir.join("b.ron"), scenario_file(0)).expect("written");
+    let mut app = watching_app(&dir);
+    ask(&mut app, GalleryAction::Select(0));
+    std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
+    let_the_gallery_look(&mut app);
+    assert_eq!(app.world().resource::<Gallery>().len(), 2);
+    assert_eq!(app.world().resource::<GalleryState>().selected(), Some(0));
+}
+
+#[test]
+fn the_catalogue_entry_of_a_file_that_does_not_load_shows_why() {
+    let dir = scenario_dir("shown");
+    std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
+    let mut app = watching_app(&dir);
+    std::fs::write(dir.join("a.ron"), "(this is not a scenario").expect("written");
+    let_the_gallery_look(&mut app);
+    app.update();
+    app.update();
+    let shown = app
+        .world_mut()
+        .query::<&Text>()
+        .iter(app.world())
+        .any(|text| {
+            text.0
+                .starts_with("Does not load, the previous version stays")
+        });
+    assert!(shown);
 }

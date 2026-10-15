@@ -169,8 +169,9 @@ mod input;
 mod pick;
 mod state;
 mod ui;
+mod watch;
 
-pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
+pub use catalogue::{Gallery, GalleryEntry, GalleryGroup, WATCH_INTERVAL};
 pub use input::scenarios_pointer;
 pub use state::{
     GalleryAction, GalleryPhase, GalleryRunReport, GalleryState, GalleryTab, HiddenList,
@@ -185,6 +186,16 @@ use crate::{
     player::{ExternallyDriven, ScenarioPlayerPlugin, ScenarioSystems},
     session::{SessionConfig, SessionHooks, SessionPlugin, SessionSystems},
 };
+
+/// What a look at the watched files changed in the catalogue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reload {
+    /// The entry at this index was read again, or its file went. Whether it
+    /// now loads is [`GalleryEntry::error`].
+    Changed(usize),
+    /// A new entry at this index, which moved every later entry up by one.
+    Added(usize),
+}
 
 /// How many updates a loop waits before starting again, unless configured.
 pub const DEFAULT_LOOP_PAUSE: u16 = 60;
@@ -247,6 +258,8 @@ pub struct GalleryPlugin {
     session_hooks: SessionHooks,
     /// Whether to play the whole catalogue once and exit.
     run_all: bool,
+    /// The tag the catalogue starts filtered by.
+    tag: Option<String>,
 }
 
 impl GalleryPlugin {
@@ -261,6 +274,7 @@ impl GalleryPlugin {
             loop_pause: DEFAULT_LOOP_PAUSE,
             session_hooks: SessionHooks::default(),
             run_all: false,
+            tag: None,
         }
     }
 
@@ -273,6 +287,16 @@ impl GalleryPlugin {
     #[must_use]
     pub const fn with_run_all(mut self) -> Self {
         self.run_all = true;
+        self
+    }
+
+    /// Starts with the catalogue filtered by `tag` (see
+    /// [`GalleryAction::SelectTag`]), for example to run only the entries
+    /// tagged `bridge` with [`GalleryPlugin::with_run_all`]. A tag no entry
+    /// carries filters nothing.
+    #[must_use]
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = Some(tag.into());
         self
     }
 
@@ -334,6 +358,9 @@ impl Plugin for GalleryPlugin {
             |config| config.hooks.noise().clone(),
         );
         let mut state = GalleryState::new(self.export_dir.clone(), self.loop_pause, noise);
+        if let Some(tag) = &self.tag {
+            state.tag = self.gallery.tags().iter().position(|known| known == tag);
+        }
         if self.run_all {
             state.begin_run_all();
         }
@@ -387,10 +414,13 @@ impl Plugin for GalleryPlugin {
             Update,
             (
                 input::exit_with_either_window,
+                watch::reload_changed_files,
+                ui::rebuild_catalogue.after(watch::reload_changed_files),
                 ui::place_scenarios_window,
                 ui::scroll_catalogue,
                 ui::split_panels,
                 ui::style_controls,
+                ui::filter_entries,
                 ui::update_labels,
                 ui::update_details,
             ),

@@ -735,6 +735,47 @@ every variant. `run_ron_variants` (and `run_ron_tests_with_variants`) reports
 a variant a file is thus limited out of as `skipped`, not `failed`, and
 `FileResult::skipped` says so.
 
+## Tags, skip, fixme and should-fail
+
+A scenario can carry tags and say it should not run, as Playwright's
+annotations do:
+
+```ron
+(
+    format_version: 3,
+    name: "bridge builds",
+    tags: ["bridge", "slow"],
+    // skip: Some("needs a display"),        not run, listed as ignored
+    // fixme: Some("crashes, see #12"),      not run, listed apart from skip
+    should_fail: Some("rails overlap, #34"), // passes only by failing
+    steps: [ /* .. */ ],
+)
+```
+
+In code: `Scenario::tags([..])`, `skip(reason)`, `fixme(reason)`,
+`should_fail(reason)`.
+
+* A `skip`ped or `fixme`d scenario is not run, in any variant. `run_ron_tests`
+  prints it as `ignored, skip: reason` / `ignored, fixme: reason`
+  (`FileOutcome::Disabled`) and counts it apart from `skipped`, which stays for
+  variants.
+* A `should_fail` scenario passes only if it fails (`ok (failed as expected)`).
+  When it passes, the test fails saying the bug is fixed and `should_fail`
+  should go, so a fixed bug does not go unnoticed.
+* `run_ron_tests` filters by tag through `RIN_SCENARIO_TAGS`:
+  `RIN_SCENARIO_TAGS=bridge,-slow cargo test` plays the scenarios tagged
+  `bridge` except those tagged `slow`. A scenario outside the filter is not
+  listed. In code, `run_ron_tagged(dir, &registry, filter, &TagFilter::parse(..),
+  &variants, run)`.
+* The gallery shows tags beside each entry, dims skipped and fixme entries with
+  their reason, and has a **Tag** row of buttons that shows only the entries
+  with that tag (a run of the whole catalogue plays only those too;
+  `GalleryPlugin::with_tag("bridge")` starts filtered).
+* The recorder's `index.html` shows tags on the cards, lists skipped and fixme
+  scenarios last, dimmed, with their reason, and flips `should_fail`
+  scenarios as above. `Recorder::with_tag_filter(TagFilter)` limits what is
+  recorded.
+
 ## Seeing what the script does
 
 `CursorOverlayPlugin` draws the script's pointer for people watching: an arrow
@@ -992,6 +1033,26 @@ mouse drives a pointer of its own. **Take over** pauses the script and hands
 the window back; **Resume script** carries on.
 
 Try it with `cargo run --example gallery --features gallery` (needs a display).
+
+### Editing scenario files while the gallery runs
+
+`Gallery::directory(name, dir, &registry)` adds a group of the `.ron` scenarios
+in a directory (not `*.scene.ron`) and watches it, as Playwright's UI mode
+does. When a file is saved the gallery reads it again, replaces its entry, and
+restarts the scenario if it is the selected one, so an edited check shows its
+new result without restarting the app. A new file is added to the group. A
+file that fails to load (a syntax error, an unknown type) shows its
+`LoadError` under its catalogue entry and in the status line, and the last
+version that loaded keeps working; a file that never loaded has an entry that
+cannot be played (and fails **Run all**). A deleted file keeps its entry,
+marked "The file is gone". Use `Gallery::prepare_files(|scenario| ..)`, set
+before the directory, for what the gallery does to every scenario it reads,
+such as `window_size`, so a reload gives the same result as the first load.
+
+Files are looked at every `WATCH_INTERVAL` (30) updates by modification time
+and size, with no extra dependency; this is part of feature `gallery` only.
+Changes made in the gallery (a check added by **Pick**) live in the catalogue
+until the file is read again, so **Export RON** them first.
 
 To run the whole catalogue unattended, add `.with_run_all()` to the plugin
 (the example does so with `--run-all`; `just gallery-test` is the one command).

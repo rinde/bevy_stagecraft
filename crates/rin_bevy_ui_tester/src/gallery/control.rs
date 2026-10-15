@@ -115,6 +115,14 @@ fn fit_window(world: &mut World, state: &mut GalleryState, scenario: &Scenario) 
     }
 }
 
+/// Whether the tag the catalogue is filtered by leaves `scenario` out.
+fn hidden_by_tag(gallery: &Gallery, state: &GalleryState, scenario: &Scenario) -> bool {
+    state
+        .tag
+        .and_then(|index| gallery.tags().get(index).cloned())
+        .is_some_and(|tag| !scenario.tag_names().contains(&tag))
+}
+
 /// Resets the app, sets the entry up and arranges for it to play.
 fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     let Some(entry) = world
@@ -125,6 +133,11 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         bevy::log::warn!("the gallery has no entry {index}");
         return;
     };
+    if let Some(error) = entry.error().filter(|_| entry.is_unloaded()) {
+        let first = error.lines().next().unwrap_or_default();
+        state.status = format!("{} does not load: {first}", entry.scenario.name());
+        return;
+    }
     let variant = chosen_variant(world, state);
     let refused = variant.problem(&entry.scenario);
     let scenario = variant.varied(&entry.scenario);
@@ -145,7 +158,8 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     // A scenario that does not name this variant runs nowhere near it (see
     // `Scenario::variants`): it is skipped, not failed, and the player never
     // starts.
-    if variant.skips(&entry.scenario) {
+    let disabled = entry.scenario.disabled();
+    if variant.skips(&entry.scenario) || disabled.is_some() {
         world.insert_resource(ScenarioReport {
             name: scenario.name().into(),
             ..ScenarioReport::default()
@@ -161,7 +175,10 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         state.jump = None;
         state.tick = 0;
         state.setup = Ok(false);
-        state.status = format!("Skipped: {} does not run in this variant", scenario.name());
+        state.status = disabled.map_or_else(
+            || format!("Skipped: {} does not run in this variant", scenario.name()),
+            |disabled| format!("Not run: {} ({})", scenario.name(), disabled.describe()),
+        );
         return;
     }
     // A variant the scenario cannot run in is a failed setup, as in the
@@ -658,6 +675,7 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         }
         GalleryAction::Select(index) => select(world, state, index),
         GalleryAction::SelectVariant(variant) => select_variant(world, state, variant),
+        GalleryAction::SelectTag(tag) => state.tag = tag,
         GalleryAction::JumpTo(step) => jump_to(world, state, step),
         GalleryAction::Restart => {
             if let Some(index) = state.selected {
@@ -855,10 +873,15 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
             .get_resource::<ScenarioReport>()
             .is_some_and(ScenarioReport::passed);
         if let Some(index) = state.selected {
-            let result = if passed {
-                ScenarioResult::Passed
-            } else {
+            // A scenario that is expected to fail passes by failing.
+            let flipped = world
+                .get_resource::<Gallery>()
+                .and_then(|gallery| gallery.get(index))
+                .is_some_and(|entry| entry.scenario.should_fail_reason().is_some());
+            let result = if passed == flipped {
                 ScenarioResult::Failed
+            } else {
+                ScenarioResult::Passed
             };
             state.results.insert((index, state.variant), result);
         }
@@ -907,6 +930,21 @@ fn record_outcome(world: &World, state: &mut GalleryState) {
     if failures.is_empty() && !report.passed() {
         failures.push("the scenario did not finish".into());
     }
+    // A scenario that is expected to fail passes by failing, and fails by
+    // passing, which says the bug is fixed.
+    let should_fail = state
+        .selected
+        .and_then(|index| world.get_resource::<Gallery>()?.get(index))
+        .and_then(|entry| entry.scenario.should_fail_reason());
+    if let Some(reason) = should_fail {
+        failures = if report.passed() {
+            vec![format!(
+                "expected to fail ({reason}) but passed: remove should_fail"
+            )]
+        } else {
+            Vec::new()
+        };
+    }
     if let Some(run) = state.run_all.as_mut() {
         run.outcomes.push(ScenarioOutcome {
             name: report.name.clone(),
@@ -928,16 +966,37 @@ fn run_next(world: &mut World, state: &mut GalleryState) {
             .get_resource::<Gallery>()
             .map_or(1, Gallery::variant_count);
         let (entry, at) = (next / variants, next % variants);
-        let Some((scenario, variant)) = world.get_resource::<Gallery>().and_then(|gallery| {
-            let scenario = gallery.get(entry)?.scenario.clone();
-            let variant = gallery.variant(at).cloned().unwrap_or_default();
-            Some((scenario, variant))
-        }) else {
+        let Some((scenario, variant, broken)) =
+            world.get_resource::<Gallery>().and_then(|gallery| {
+                let found = gallery.get(entry)?;
+                let broken = found
+                    .error()
+                    .filter(|_| found.is_unloaded())
+                    .map(str::to_owned);
+                let variant = gallery.variant(at).cloned().unwrap_or_default();
+                Some((found.scenario.clone(), variant, broken))
+            })
+        else {
             break;
         };
+        // A file that never loaded has nothing to play: it fails the run.
+        if let Some(error) = broken {
+            let name = variant.label(scenario.name());
+            if let Some(run) = state.run_all.as_mut() {
+                run.outcomes.push(ScenarioOutcome {
+                    name,
+                    failures: vec![format!("does not load: {error}")],
+                    skipped: false,
+                });
+            }
+            continue;
+        }
         // A scenario that does not name this variant is skipped, not failed:
         // the run records it and moves on without playing it.
-        if variant.skips(&scenario) {
+        let hidden = world
+            .get_resource::<Gallery>()
+            .is_some_and(|gallery| hidden_by_tag(gallery, state, &scenario));
+        if variant.skips(&scenario) || scenario.disabled().is_some() || hidden {
             let name = variant.label(scenario.name());
             if let Some(run) = state.run_all.as_mut() {
                 run.outcomes.push(ScenarioOutcome {

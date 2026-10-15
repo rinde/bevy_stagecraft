@@ -19,6 +19,7 @@ use bevy::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    annotation::Disabled,
     check::{Check, Measure},
     extension::{AppSetup, AppView, Setup, View},
     script::{FORMAT_VERSION, LoadError, Registry, Script},
@@ -554,6 +555,15 @@ pub struct Scenario {
     /// The names of the variants the scenario runs in; empty when it runs in
     /// every one.
     variants: Vec<String>,
+    /// Labels a runner filters by (see [`crate::TagFilter`]).
+    tags: Vec<String>,
+    /// Why the scenario is not run, when it is not.
+    skip: Option<String>,
+    /// Why the scenario is known to be broken and not run, when it is.
+    fixme: Option<String>,
+    /// Why the scenario is expected to fail, when it is: it passes only by
+    /// failing.
+    should_fail: Option<String>,
     /// The script.
     steps: Vec<Step>,
     /// Checks run once the script has finished.
@@ -574,6 +584,10 @@ impl fmt::Debug for Scenario {
             .field("base_dir", &self.base_dir)
             .field("app_view", &self.app_view)
             .field("variants", &self.variants)
+            .field("tags", &self.tags)
+            .field("skip", &self.skip)
+            .field("fixme", &self.fixme)
+            .field("should_fail", &self.should_fail)
             .field("steps", &self.steps)
             .field("expects", &self.expects)
             .finish()
@@ -596,6 +610,10 @@ impl Scenario {
             base_dir: None,
             app_view: None,
             variants: Vec::new(),
+            tags: Vec::new(),
+            skip: None,
+            fixme: None,
+            should_fail: None,
             steps: Vec::new(),
             expects: Vec::new(),
         }
@@ -706,6 +724,76 @@ impl Scenario {
     #[must_use]
     pub fn variant_names(&self) -> &[String] {
         &self.variants
+    }
+
+    /// Labels the scenario, for a runner to filter by: `run_ron_tests` reads
+    /// `RIN_SCENARIO_TAGS` (see [`crate::TagFilter`]) and the gallery has a
+    /// tag filter. A file writes `tags: ["bridge", "slow"]`.
+    #[must_use]
+    pub fn tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.tags = tags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The scenario's tags, in order. See [`Scenario::tags`].
+    #[must_use]
+    pub fn tag_names(&self) -> &[String] {
+        &self.tags
+    }
+
+    /// Does not run the scenario, for `reason`: a runner lists it as
+    /// ignored. A file writes `skip: Some("reason")`.
+    #[must_use]
+    pub fn skip(mut self, reason: impl Into<String>) -> Self {
+        self.skip = Some(reason.into());
+        self
+    }
+
+    /// Marks the scenario as a known problem to come back to, for `reason`:
+    /// not run, and listed apart from the skipped ones. A file writes
+    /// `fixme: Some("reason")`.
+    #[must_use]
+    pub fn fixme(mut self, reason: impl Into<String>) -> Self {
+        self.fixme = Some(reason.into());
+        self
+    }
+
+    /// Expects the scenario to fail, for `reason` (a known bug): it passes
+    /// only if it fails, and a run that passes is reported as a failure, so
+    /// that a fixed bug is noticed. A file writes `should_fail: Some("reason")`.
+    #[must_use]
+    pub fn should_fail(mut self, reason: impl Into<String>) -> Self {
+        self.should_fail = Some(reason.into());
+        self
+    }
+
+    /// Why the scenario is skipped, if it is. See [`Scenario::skip`].
+    #[must_use]
+    pub fn skip_reason(&self) -> Option<&str> {
+        self.skip.as_deref()
+    }
+
+    /// Why the scenario is marked fixme, if it is. See [`Scenario::fixme`].
+    #[must_use]
+    pub fn fixme_reason(&self) -> Option<&str> {
+        self.fixme.as_deref()
+    }
+
+    /// Why the scenario is expected to fail, if it is. See
+    /// [`Scenario::should_fail`].
+    #[must_use]
+    pub fn should_fail_reason(&self) -> Option<&str> {
+        self.should_fail.as_deref()
+    }
+
+    /// Whether and why a runner leaves the scenario out: skipped, or fixme
+    /// (skip first, when both are set).
+    #[must_use]
+    pub fn disabled(&self) -> Option<Disabled> {
+        self.skip
+            .clone()
+            .map(Disabled::Skip)
+            .or_else(|| self.fixme.clone().map(Disabled::Fixme))
     }
 
     /// Sets how many frames a step waits for its target to be actionable
@@ -891,6 +979,10 @@ impl Scenario {
             setup: self.app_setup.clone(),
             view: self.app_view.clone(),
             variants: self.variants.clone(),
+            tags: self.tags.clone(),
+            skip: self.skip.clone(),
+            fixme: self.fixme.clone(),
+            should_fail: self.should_fail.clone(),
             steps: self.steps.clone(),
             expect: self.expects.clone(),
         }
@@ -954,6 +1046,10 @@ impl Scenario {
             base_dir: None,
             app_view: script.view,
             variants: script.variants,
+            tags: script.tags,
+            skip: script.skip,
+            fixme: script.fixme,
+            should_fail: script.should_fail,
             steps: script.steps,
             expects: script.expect,
         }
