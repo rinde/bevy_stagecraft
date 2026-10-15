@@ -37,8 +37,8 @@ pub use annotation::{Disabled, TAGS_ENV, TagFilter};
 #[cfg(feature = "record")]
 pub use capture::{CaptureError, Frame};
 pub use check::{
-    AppCheck, Check, Comparison, CountOf, FieldOf, Measure, ReflectAppCheck, TextMatch, Unit,
-    Value,
+    AppCheck, Check, Comparison, CountOf, FieldOf, Measure, ReflectAppCheck, ScreenshotRecord,
+    ScreenshotResult, ScreenshotSettings, TextMatch, Tolerance, Unit, Value,
     pick::{
         AppCheckForm, FieldValue, Picked, PickedForm, app_check_forms, checks_that_hold, node_at,
         subject_of, target_alternatives,

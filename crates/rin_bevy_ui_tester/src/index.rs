@@ -1,12 +1,12 @@
 //! What the recorder writes for each scenario, and the page that lists them.
 
 use core::fmt::Write as _;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use crate::{
     annotation::Disabled,
     capture::{FilmstripCell, Frame, Mark, encode_gif, filmstrip},
-    check::suggest::SnapshotChange,
+    check::{ScreenshotRecord, ScreenshotResult, suggest::SnapshotChange},
     overlay::TargetDescriptions,
     player::{CheckKind, Outcome, StepRecord},
     recorder::{Capture, RecordError, ScenarioRecording, create_dir, write_file},
@@ -33,6 +33,9 @@ pub const FILMSTRIP_FILE: &str = "filmstrip.png";
 pub const GIF_FILE: &str = "scenario.gif";
 /// File name of a scenario's per-step trace.
 pub const TRACE_FILE: &str = "trace.html";
+/// The folder of a scenario's folder that holds copies of the pictures its
+/// screenshot checks wrote, so the page links to files that sit beside it.
+pub const SNAPSHOT_DIR: &str = "snapshots";
 
 /// How long a GIF shows a picture taken at `frame` before the one at `next`.
 fn delay_ms(frame: u32, next: Option<u32>) -> u32 {
@@ -94,6 +97,7 @@ pub(crate) fn write_scenario(
     if !gif_frames.is_empty() {
         write_file(&folder.join(GIF_FILE), &encode_gif(&gif_frames)?)?;
     }
+    copy_snapshots(folder, &recording.report.screenshots)?;
     if let Some(trace) = &recording.trace {
         let frames: Vec<u32> = pictures.iter().map(|picture| picture.meta.frame).collect();
         write_file(
@@ -102,6 +106,75 @@ pub(crate) fn write_scenario(
         )?;
     }
     Ok(())
+}
+
+/// The files of a screenshot check worth looking at: its baseline and, after a
+/// mismatch, the picture taken and the one of what differs. Each is named
+/// `<check>.<role>.png` in the scenario's [`SNAPSHOT_DIR`].
+fn snapshot_files(record: &ScreenshotRecord) -> Vec<(String, &Path)> {
+    let mut files = Vec::new();
+    match &record.result {
+        ScreenshotResult::Matched | ScreenshotResult::Updated => return files,
+        ScreenshotResult::Created => {}
+        ScreenshotResult::Mismatch { actual, diff } => {
+            files.push((format!("{}.actual.png", record.name), actual.as_path()));
+            if let Some(diff) = diff {
+                files.push((format!("{}.diff.png", record.name), diff.as_path()));
+            }
+        }
+    }
+    files.insert(
+        0,
+        (
+            format!("{}.baseline.png", record.name),
+            record.baseline.as_path(),
+        ),
+    );
+    files
+}
+
+/// Copies the pictures screenshot checks wrote into the scenario's folder.
+/// A baseline that is not there (a mismatch in size has one, a failed write
+/// does not) is left out.
+fn copy_snapshots(folder: &Path, records: &[ScreenshotRecord]) -> Result<(), RecordError> {
+    let files: Vec<_> = records.iter().flat_map(snapshot_files).collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    let directory = folder.join(SNAPSHOT_DIR);
+    create_dir(&directory)?;
+    for (name, from) in files {
+        if from.exists() {
+            let to = directory.join(name);
+            fs::copy(from, &to).map_err(|error| RecordError::Io(to, error))?;
+        }
+    }
+    Ok(())
+}
+
+/// Links, on a scenario's card, to the pictures screenshot checks left to look
+/// at.
+fn snapshot_links(out: &mut String, slug: &str, records: &[ScreenshotRecord]) {
+    for record in records {
+        let links: Vec<String> = snapshot_files(record)
+            .into_iter()
+            .map(|(file, _)| {
+                let label = file.rsplit('.').nth(1).unwrap_or("picture").to_owned();
+                format!(
+                    "<a href=\"{slug}/{SNAPSHOT_DIR}/{href}\">{label}</a>",
+                    href = escape(&file),
+                )
+            })
+            .collect();
+        if !links.is_empty() {
+            let _ = write!(
+                out,
+                "<li class=\"fail\">screenshot `{}`: {}</li>",
+                escape(&record.name),
+                links.join(" \u{b7} ")
+            );
+        }
+    }
 }
 
 /// Escapes text for HTML.
@@ -189,6 +262,7 @@ fn card(out: &mut String, scenario: &ScenarioRecording) {
     for failure in scenario.report.failures() {
         let _ = write!(out, "<li class=\"fail\">{}</li>", escape(&failure));
     }
+    snapshot_links(out, &slug, &scenario.report.screenshots);
     out.push_str("</ul>");
     if !scenario.passed() && scenario.trace.is_some() {
         card_steps(out, scenario, &slug);
@@ -426,11 +500,10 @@ fn point(out: &mut String, title: &str, point: &TracePoint) {
 
 /// The end of the run: the expectations and the final world.
 fn end_section(out: &mut String, recording: &ScenarioRecording, trace: &ScenarioTrace) {
-    let failed = recording
-        .report
-        .checks
-        .iter()
-        .any(|check| check.kind == CheckKind::Expect && !check.outcome.is_pass());
+    let failed =
+        recording.report.checks.iter().any(|check| {
+            check.kind == CheckKind::Expect && matches!(check.outcome, Outcome::Fail(_))
+        });
     let class = if failed { "fail" } else { "pass" };
     let _ = write!(
         out,

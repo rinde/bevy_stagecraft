@@ -106,6 +106,10 @@ workspace = true
 name = "recorder"
 required-features = ["record"]
 
+[[test]]
+name = "screenshots"
+required-features = ["record"]
+
 # Plays against two headless windows; no GPU needed.
 [[test]]
 name = "gallery"

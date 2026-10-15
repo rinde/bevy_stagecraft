@@ -27,7 +27,11 @@ use bevy::{
 mod catch;
 
 use crate::{
-    check::{CapturedValues, Check, Measure, suggest::NoiseFilter},
+    check::{
+        CapturedValues, Check, Measure, ScreenshotRecord,
+        screenshot::{self, Pictures, Readiness},
+        suggest::NoiseFilter,
+    },
     headless::HeadlessPlugins,
     input::{SyntheticEvent, SyntheticInput, SyntheticInputSystems, character_events},
     probe::check_hover,
@@ -45,7 +49,9 @@ pub enum Outcome {
     Pass,
     /// It ran and did not hold; the message says why.
     Fail(String),
-    /// It never ran, because an earlier step failed.
+    /// It never ran, because an earlier step failed, or it could not run
+    /// here (a screenshot check without the recorder). A skipped check does
+    /// not fail the scenario; a skipped step does.
     Skipped,
 }
 
@@ -110,16 +116,23 @@ pub struct ScenarioReport {
     pub finished: bool,
     /// Why the scenario's setup failed, if it did; no step plays then.
     pub setup_failure: Option<String>,
+    /// What each screenshot check did with its files, in the order they ran.
+    pub screenshots: Vec<ScreenshotRecord>,
 }
 
 impl ScenarioReport {
-    /// Whether the scenario finished with every step and check passing.
+    /// Whether the scenario finished with every step passing and no check
+    /// failed. A check that was skipped because it cannot run here counts as
+    /// neither; steps are only skipped after one failed.
     #[must_use]
     pub fn passed(&self) -> bool {
         self.finished
             && self.setup_failure.is_none()
             && self.steps.iter().all(|record| record.outcome.is_pass())
-            && self.checks.iter().all(|record| record.outcome.is_pass())
+            && !self
+                .checks
+                .iter()
+                .any(|record| matches!(record.outcome, Outcome::Fail(_)))
     }
 
     /// One line per failure, naming the step or check.
@@ -609,6 +622,9 @@ impl ScenarioPlayer {
                     .and_then(Window::cursor_position)
             })
             .unwrap_or(ORIGIN);
+        if let Some(mut pictures) = world.get_resource_mut::<Pictures>() {
+            pictures.reset();
+        }
         self.running = Some(Running {
             scenario,
             plan,
@@ -727,17 +743,9 @@ impl ScenarioPlayer {
                     check,
                     waited,
                 } => {
-                    let name = check.to_string();
-                    let Some(result) = check.poll(world, &run.captures, waited) else {
-                        // Not yet: look again after one more frame.
-                        run.ops.push_front(Op::Check {
-                            step,
-                            check,
-                            waited: waited + 1,
-                        });
+                    if run.play_check(world, report, &mut self.trace, step, check, waited) {
                         return;
-                    };
-                    record_step_check(&mut self.trace, report, step, &name, result);
+                    }
                 }
                 Op::Caption(text) => report.caption = Some(text),
             }
@@ -852,6 +860,46 @@ fn waiting_for(
     }
 }
 
+impl Running {
+    /// Polls one check op. Returns whether the frame is over, which it is
+    /// while the check waits for its picture or for a `Within` to settle.
+    fn play_check(
+        &mut self,
+        world: &mut World,
+        report: &mut ScenarioReport,
+        trace: &mut Option<ScenarioTrace>,
+        step: usize,
+        check: Check,
+        waited: u32,
+    ) -> bool {
+        let name = check.to_string();
+        let result = match self.poll_check(world, report, &check, waited) {
+            Polled::Waiting => {
+                // The picture is on its way, which is no waiting for the
+                // check to hold.
+                self.ops.push_front(Op::Check {
+                    step,
+                    check,
+                    waited,
+                });
+                return true;
+            }
+            Polled::Done(None) => {
+                // Not yet: look again after one more frame.
+                self.ops.push_front(Op::Check {
+                    step,
+                    check,
+                    waited: waited + 1,
+                });
+                return true;
+            }
+            Polled::Done(Some(result)) => result,
+        };
+        record_step_check(trace, report, step, &name, result);
+        false
+    }
+}
+
 /// Records the end of a step's check in the report and the trace, and fails
 /// the step if it did not hold.
 fn record_step_check(
@@ -859,11 +907,8 @@ fn record_step_check(
     report: &mut ScenarioReport,
     step: usize,
     name: &str,
-    result: Result<(), String>,
+    outcome: Outcome,
 ) {
-    let outcome = result
-        .clone()
-        .map_or_else(Outcome::Fail, |()| Outcome::Pass);
     if let Some(trace) = trace.as_mut() {
         trace.add_check(
             step,
@@ -873,8 +918,8 @@ fn record_step_check(
             },
         );
     }
-    record_check(report, name, CheckKind::Step, outcome);
-    if let Err(message) = result {
+    record_check(report, name, CheckKind::Step, outcome.clone());
+    if let Outcome::Fail(message) = outcome {
         fail_step(report, step, message);
     }
 }
@@ -1234,12 +1279,13 @@ impl Running {
     /// Runs the end-of-script expectations and, once none waits any more,
     /// records them in order and closes the report. Returns whether it did;
     /// otherwise a frame passes and it runs again.
-    fn finish(&mut self, world: &World, report: &mut ScenarioReport) -> bool {
+    fn finish(&mut self, world: &mut World, report: &mut ScenarioReport) -> bool {
         let expects = self.scenario.expects();
         let waited = self.expect_waited;
-        let outcomes = self
+        let mut outcomes = self
             .expected
-            .get_or_insert_with(|| vec![None; expects.len()]);
+            .take()
+            .unwrap_or_else(|| vec![None; expects.len()]);
         for (expect, outcome) in expects.iter().zip(outcomes.iter_mut()) {
             if outcome.is_some() {
                 continue;
@@ -1247,16 +1293,20 @@ impl Running {
             *outcome = if self.aborted {
                 Some(Outcome::Skipped)
             } else {
-                expect
-                    .poll(world, &self.captures, waited)
-                    .map(|result| match result {
-                        Ok(()) => Outcome::Pass,
-                        Err(message) => Outcome::Fail(message),
-                    })
+                match self.poll_check(world, report, expect, waited) {
+                    Polled::Waiting => {
+                        // A picture is on its way: the other expectations
+                        // keep their place and wait with it.
+                        self.expected = Some(outcomes);
+                        return false;
+                    }
+                    Polled::Done(outcome) => outcome,
+                }
             };
         }
         if outcomes.iter().any(Option::is_none) {
             self.expect_waited += 1;
+            self.expected = Some(outcomes);
             return false;
         }
         for (expect, outcome) in expects.iter().zip(outcomes.iter()) {
@@ -1271,6 +1321,40 @@ impl Running {
         }
         report.finished = true;
         true
+    }
+}
+
+/// What polling a check came to for the player.
+enum Polled {
+    /// A screenshot check's picture is not here yet: poll again after a frame
+    /// without counting it as waiting for the check to hold.
+    Waiting,
+    /// The check's outcome, or `None` while a `Within` waits.
+    Done(Option<Outcome>),
+}
+
+impl Running {
+    /// Polls `check`, having a picture taken first where it compares one.
+    fn poll_check(
+        &self,
+        world: &mut World,
+        report: &mut ScenarioReport,
+        check: &Check,
+        waited: u32,
+    ) -> Polled {
+        let readiness = screenshot::prepare(
+            world,
+            check,
+            self.scenario.base_dir(),
+            self.scenario.name(),
+            &mut report.screenshots,
+        );
+        if readiness == Readiness::Waiting {
+            return Polled::Waiting;
+        }
+        let outcome = check.poll(world, &self.captures, waited);
+        screenshot::forget(world);
+        Polled::Done(outcome)
     }
 }
 
