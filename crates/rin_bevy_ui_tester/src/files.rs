@@ -30,6 +30,7 @@ use std::{
 };
 
 use crate::{
+    annotation::{Disabled, TagFilter},
     player::ScenarioReport,
     save::is_scene_file,
     scenario::Scenario,
@@ -47,6 +48,9 @@ pub enum FileOutcome {
     /// and this is not one, so it was skipped, not failed. See
     /// [`Variant::skips`].
     Skipped,
+    /// The scenario is skipped (`skip`) or set aside (`fixme`), whatever the
+    /// variant: it was not run, and a runner lists it as ignored.
+    Disabled(Disabled),
 }
 
 /// One `.ron` file played.
@@ -63,6 +67,9 @@ pub struct FileResult {
     pub path: PathBuf,
     /// The report, why the file did not load, or that it was skipped.
     pub outcome: FileOutcome,
+    /// Why the scenario is expected to fail (`should_fail`), if it is: it
+    /// then passes only by failing.
+    pub should_fail: Option<String>,
 }
 
 impl FileResult {
@@ -71,8 +78,9 @@ impl FileResult {
     #[must_use]
     pub fn passed(&self) -> bool {
         match &self.outcome {
-            FileOutcome::Skipped => true,
-            FileOutcome::Ran(result) => result.as_ref().is_ok_and(ScenarioReport::passed),
+            FileOutcome::Skipped | FileOutcome::Disabled(_) => true,
+            FileOutcome::Ran(Ok(report)) => report.passed() != self.should_fail.is_some(),
+            FileOutcome::Ran(Err(_)) => false,
         }
     }
 
@@ -83,13 +91,42 @@ impl FileResult {
         matches!(self.outcome, FileOutcome::Skipped)
     }
 
+    /// Whether the scenario is `skip`ped or `fixme`d and was not run, as an
+    /// ignored test. See [`FileResult::disabled`].
+    #[must_use]
+    pub const fn ignored(&self) -> bool {
+        matches!(self.outcome, FileOutcome::Disabled(_))
+    }
+
+    /// Why the scenario was not run, when it is skipped or fixme.
+    #[must_use]
+    pub const fn disabled(&self) -> Option<&Disabled> {
+        match &self.outcome {
+            FileOutcome::Disabled(disabled) => Some(disabled),
+            _ => None,
+        }
+    }
+
+    /// Whether the scenario failed as `should_fail` says it would. That is a
+    /// pass, [`FileResult::passed`].
+    #[must_use]
+    pub fn failed_as_expected(&self) -> bool {
+        self.should_fail.is_some()
+            && matches!(&self.outcome, FileOutcome::Ran(Ok(report)) if !report.passed())
+    }
+
     /// Why the test failed, one line per reason; empty when it passed or was
     /// skipped.
     #[must_use]
     pub fn failures(&self) -> Vec<String> {
         match &self.outcome {
-            FileOutcome::Skipped => Vec::new(),
-            FileOutcome::Ran(Ok(report)) if report.passed() => Vec::new(),
+            FileOutcome::Skipped | FileOutcome::Disabled(_) => Vec::new(),
+            FileOutcome::Ran(Ok(report)) if report.passed() => {
+                self.should_fail.iter().map(|reason| format!(
+                    "expected to fail ({reason}) but passed: the bug is fixed, remove should_fail"
+                )).collect()
+            }
+            FileOutcome::Ran(Ok(_)) if self.should_fail.is_some() => Vec::new(),
             FileOutcome::Ran(Ok(report)) => {
                 let mut failures = report.failures();
                 if failures.is_empty() {
@@ -188,6 +225,27 @@ pub fn run_ron_variants(
     registry: &Registry,
     filter: &str,
     variants: &[Variant],
+    run: impl FnMut(&Scenario) -> ScenarioReport,
+) -> Result<Vec<FileResult>, LoadError> {
+    run_ron_tagged(dir, registry, filter, &TagFilter::default(), variants, run)
+}
+
+/// As [`run_ron_variants`], playing only the scenarios `tags` lets through (a
+/// file that does not load is always kept, so its error shows).
+///
+/// A scenario with `skip` or `fixme` is not run, in any variant
+/// ([`FileOutcome::Disabled`]); one with `should_fail` passes only if it
+/// fails.
+///
+/// # Errors
+///
+/// [`LoadError::Io`] if the directory cannot be read.
+pub fn run_ron_tagged(
+    dir: impl AsRef<Path>,
+    registry: &Registry,
+    filter: &str,
+    tags: &TagFilter,
+    variants: &[Variant],
     mut run: impl FnMut(&Scenario) -> ScenarioReport,
 ) -> Result<Vec<FileResult>, LoadError> {
     let mut results = Vec::new();
@@ -209,8 +267,21 @@ pub fn run_ron_variants(
             continue;
         }
         let loaded = load_ron_file(&path, registry);
+        if loaded
+            .as_ref()
+            .is_ok_and(|scenario| !tags.matches(scenario.tag_names()))
+        {
+            continue;
+        }
+        let should_fail = loaded
+            .as_ref()
+            .ok()
+            .and_then(|scenario| scenario.should_fail_reason().map(str::to_owned));
         for (variant, name) in wanted {
             let outcome = match &loaded {
+                Ok(scenario) if scenario.disabled().is_some() => FileOutcome::Disabled(
+                    scenario.disabled().unwrap_or(Disabled::Skip(String::new())),
+                ),
                 Ok(scenario) if variant.skips(scenario) => FileOutcome::Skipped,
                 Ok(scenario) => {
                     FileOutcome::Ran(variant.apply(scenario).map(|scenario| run(&scenario)))
@@ -222,6 +293,7 @@ pub fn run_ron_variants(
                 variant: variant.name().to_owned(),
                 path: path.clone(),
                 outcome,
+                should_fail: should_fail.clone(),
             });
         }
     }
@@ -266,6 +338,7 @@ pub fn run_ron_tests_with_variants(
         dir.as_ref(),
         registry,
         &filter,
+        &TagFilter::from_env(),
         variants,
         run,
         &mut std::io::stdout().lock(),
@@ -287,18 +360,30 @@ fn run_and_print(
     dir: &Path,
     registry: &Registry,
     filter: &str,
+    tags: &TagFilter,
     variants: &[Variant],
     run: impl FnMut(&Scenario) -> ScenarioReport,
     out: &mut impl Write,
     err: &mut impl Write,
 ) -> bool {
-    match run_ron_variants(dir, registry, filter, variants, run) {
+    match run_ron_tagged(dir, registry, filter, tags, variants, run) {
         Ok(results) => print_results(out, &results),
         Err(error) => {
             // A closed pipe is not worth failing over.
             writeln!(err, "{error}").ok();
             false
         }
+    }
+}
+
+/// The word after `...` on a result's line.
+fn verdict(result: &FileResult) -> String {
+    match result.disabled() {
+        Some(disabled) => format!("ignored, {}", disabled.describe()),
+        None if result.skipped() => "skipped".to_owned(),
+        None if result.failed_as_expected() => "ok (failed as expected)".to_owned(),
+        None if result.passed() => "ok".to_owned(),
+        None => "FAILED".to_owned(),
     }
 }
 
@@ -309,13 +394,7 @@ fn print_results(out: &mut impl Write, results: &[FileResult]) -> bool {
     let mut say = |line: String| writeln!(out, "{line}").ok();
     say(format!("\nrunning {} tests", results.len()));
     for result in results {
-        let verdict = if result.skipped() {
-            "skipped"
-        } else if result.passed() {
-            "ok"
-        } else {
-            "FAILED"
-        };
+        let verdict = verdict(result);
         say(format!("test {} ... {verdict}", result.name));
     }
     let failed: Vec<_> = results.iter().filter(|result| !result.passed()).collect();
@@ -330,11 +409,18 @@ fn print_results(out: &mut impl Write, results: &[FileResult]) -> bool {
         }
     }
     let skipped = results.iter().filter(|result| result.skipped()).count();
+    let fixme = results
+        .iter()
+        .filter(|result| matches!(result.disabled(), Some(Disabled::Fixme(_))))
+        .count();
+    let ignored = results.iter().filter(|result| result.ignored()).count() - fixme;
     say(format!(
-        "\ntest result: {}. {} passed; {} failed; {} skipped\n",
+        "\ntest result: {}. {} passed; {} failed; {} ignored; {} fixme; {} skipped\n",
         if failed.is_empty() { "ok" } else { "FAILED" },
-        results.len() - failed.len() - skipped,
+        results.len() - failed.len() - skipped - ignored - fixme,
         failed.len(),
+        ignored,
+        fixme,
         skipped
     ));
     failed.is_empty()
@@ -375,11 +461,22 @@ mod tests {
 
     /// What `run_and_print` printed and decided.
     fn print_for(dir: &Path, filter: &str, variants: &[Variant]) -> (bool, String, String) {
+        print_tagged(dir, filter, &TagFilter::default(), variants)
+    }
+
+    /// As `print_for`, with a tag filter.
+    fn print_tagged(
+        dir: &Path,
+        filter: &str,
+        tags: &TagFilter,
+        variants: &[Variant],
+    ) -> (bool, String, String) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let passed = run_and_print(
             dir,
             &Registry::default(),
             filter,
+            tags,
             variants,
             Scenario::run_headless,
             &mut out,
@@ -494,7 +591,7 @@ mod tests {
             "test fixed ... ok",
             "test fixed [narrow] ... FAILED",
             "---- fixed [narrow] (",
-            "test result: FAILED. 3 passed; 1 failed; 0 skipped",
+            "test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 fixme; 0 skipped",
         ] {
             assert!(out.contains(line), "missing {line:?} in\n{out}");
         }
@@ -512,7 +609,7 @@ mod tests {
         assert!(passed, "{out}");
         assert!(out.contains("running 2 tests"), "{out}");
         assert!(
-            out.contains("test result: ok. 2 passed; 0 failed; 0 skipped"),
+            out.contains("test result: ok. 2 passed; 0 failed; 0 ignored; 0 fixme; 0 skipped"),
             "{out}"
         );
         assert!(!out.contains("fixed"), "{out}");
@@ -579,9 +676,117 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("test result: ok. 1 passed; 0 failed; 1 skipped"),
+            out.contains("test result: ok. 1 passed; 0 failed; 0 ignored; 0 fixme; 1 skipped"),
             "{out}"
         );
+    }
+
+    /// A scenario that always fails: it expects text nobody shows.
+    fn failing(name: &str) -> Scenario {
+        Scenario::new(name)
+            .step(Step::wait(1))
+            .expect_check(crate::check::Check::shows("never shown"))
+    }
+
+    #[test]
+    fn skip_and_fixme_scenarios_are_listed_as_ignored_with_their_reason() {
+        let dir = scratch_dir("ignored");
+        write_scenario(&dir, "a_skipped", &failing("a_skipped").skip("flaky"));
+        write_scenario(&dir, "b_fixme", &failing("b_fixme").fixme("not built"));
+        write_scenario(&dir, "c_fine", &Scenario::new("c_fine").step(Step::wait(1)));
+        let (passed, out, err) = print_for(&dir, "", &[Variant::default()]);
+        assert!(passed, "{out}{err}");
+        assert!(
+            out.contains("test a_skipped ... ignored, skip: flaky"),
+            "{out}"
+        );
+        assert!(
+            out.contains("test b_fixme ... ignored, fixme: not built"),
+            "{out}"
+        );
+        assert!(
+            out.contains("1 passed; 0 failed; 1 ignored; 1 fixme; 0 skipped"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_should_fail_scenario_passes_only_by_failing() {
+        let dir = scratch_dir("should_fail");
+        write_scenario(&dir, "bug", &failing("bug").should_fail("issue 7"));
+        let (passed, out, _) = print_for(&dir, "", &[Variant::default()]);
+        assert!(passed, "a known bug that still fails is a pass: {out}");
+        assert!(
+            out.contains("test bug ... ok (failed as expected)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_should_fail_scenario_that_passes_fails_naming_the_fix() {
+        let dir = scratch_dir("fixed_bug");
+        write_scenario(
+            &dir,
+            "bug",
+            &Scenario::new("bug")
+                .step(Step::wait(1))
+                .should_fail("issue 7"),
+        );
+        let (passed, out, _) = print_for(&dir, "", &[Variant::default()]);
+        assert!(!passed, "{out}");
+        assert!(
+            out.contains("expected to fail (issue 7) but passed"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn the_tag_filter_keeps_required_tags_and_drops_forbidden_ones() {
+        let dir = scratch_dir("tags");
+        let wait = |name: &str| Scenario::new(name).step(Step::wait(1));
+        write_scenario(&dir, "bridge_fast", &wait("bridge_fast").tags(["bridge"]));
+        write_scenario(
+            &dir,
+            "bridge_slow",
+            &wait("bridge_slow").tags(["bridge", "slow"]),
+        );
+        write_scenario(&dir, "other", &wait("other"));
+        let (_, out, _) = print_tagged(
+            &dir,
+            "",
+            &TagFilter::parse("bridge,-slow"),
+            &[Variant::default()],
+        );
+        assert!(out.contains("test bridge_fast ... ok"), "{out}");
+        assert!(!out.contains("bridge_slow"), "{out}");
+        assert!(!out.contains("other"), "{out}");
+    }
+
+    #[test]
+    fn tags_and_annotations_round_trip_through_ron() {
+        let scenario = Scenario::new("s")
+            .tags(["bridge", "slow"])
+            .skip("a")
+            .fixme("b")
+            .should_fail("c")
+            .step(Step::wait(1));
+        let text = scenario.to_ron().expect("exports");
+        let back = Scenario::from_ron(&text).expect("loads");
+        assert_eq!(back.tag_names(), ["bridge", "slow"]);
+        assert_eq!(back.skip_reason(), Some("a"));
+        assert_eq!(back.fixme_reason(), Some("b"));
+        assert_eq!(back.should_fail_reason(), Some("c"));
+        assert_eq!(back.to_script(), scenario.to_script());
+    }
+
+    #[test]
+    fn a_file_may_write_tags_and_annotations() {
+        let scenario = Scenario::from_ron(
+            "(format_version: 3, name: \"s\", tags: [\"x\"], skip: Some(\"why\"), steps: [])",
+        )
+        .expect("loads");
+        assert_eq!(scenario.tag_names(), ["x"]);
+        assert_eq!(scenario.skip_reason(), Some("why"));
     }
 
     #[test]
