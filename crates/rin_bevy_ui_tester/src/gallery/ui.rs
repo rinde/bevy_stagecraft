@@ -72,6 +72,8 @@ const BUTTON_ON: Color = Color::srgb(0.2, 0.4, 0.65);
 const BUTTON_OFF: Color = Color::srgb(0.14, 0.15, 0.19);
 /// Ordinary text.
 const TEXT: Color = Color::srgb(0.9, 0.9, 0.92);
+/// Why a file does not load.
+const ERROR: Color = Color::srgb(1.0, 0.4, 0.4);
 /// Secondary text.
 const DIM: Color = Color::srgb(0.6, 0.62, 0.68);
 
@@ -569,6 +571,29 @@ pub(super) fn spawn_window(
         });
 }
 
+/// Spawns the catalogue again when the gallery's entries changed, such as a
+/// scenario file that was saved.
+pub(super) fn rebuild_catalogue(
+    gallery: Res<Gallery>,
+    catalogues: Query<Entity, With<Catalogue>>,
+    mut commands: Commands,
+    mut shown: Local<u32>,
+) {
+    if gallery.revision() == *shown {
+        return;
+    }
+    *shown = gallery.revision();
+    for catalogue in &catalogues {
+        commands
+            .entity(catalogue)
+            .despawn_children()
+            .with_children(|list| spawn_catalogue(list, &gallery));
+    }
+}
+
+/// How many lines of why a file does not load the catalogue shows.
+const MAX_ERROR_LINES: usize = 3;
+
 /// Spawns the groups and their entries.
 fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
     let mut index = 0;
@@ -611,6 +636,17 @@ fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
                 });
                 if !entry.description.is_empty() {
                     label(item, entry.description.clone(), DIM);
+                }
+                if let Some(error) = entry.error() {
+                    let heading = if entry.is_unloaded() {
+                        "Does not load:"
+                    } else {
+                        "Does not load, the previous version stays:"
+                    };
+                    label(item, heading, ERROR);
+                    for line in error.lines().take(MAX_ERROR_LINES) {
+                        label(item, line.to_owned(), ERROR);
+                    }
                 }
             });
         }

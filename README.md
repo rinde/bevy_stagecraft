@@ -953,6 +953,26 @@ the window back; **Resume script** carries on.
 
 Try it with `cargo run --example gallery --features gallery` (needs a display).
 
+### Editing scenario files while the gallery runs
+
+`Gallery::directory(name, dir, &registry)` adds a group of the `.ron` scenarios
+in a directory (not `*.scene.ron`) and watches it, as Playwright's UI mode
+does. When a file is saved the gallery reads it again, replaces its entry, and
+restarts the scenario if it is the selected one, so an edited check shows its
+new result without restarting the app. A new file is added to the group. A
+file that fails to load (a syntax error, an unknown type) shows its
+`LoadError` under its catalogue entry and in the status line, and the last
+version that loaded keeps working; a file that never loaded has an entry that
+cannot be played (and fails **Run all**). A deleted file keeps its entry,
+marked "The file is gone". Use `Gallery::prepare_files(|scenario| ..)`, set
+before the directory, for what the gallery does to every scenario it reads,
+such as `window_size`, so a reload gives the same result as the first load.
+
+Files are looked at every `WATCH_INTERVAL` (30) updates by modification time
+and size, with no extra dependency; this is part of feature `gallery` only.
+Changes made in the gallery (a check added by **Pick**) live in the catalogue
+until the file is read again, so **Export RON** them first.
+
 To run the whole catalogue unattended, add `.with_run_all()` to the plugin
 (the example does so with `--run-all`; `just gallery-test` is the one command).
 Every entry is reset, set up and played once, in order, with the controls off.

@@ -169,8 +169,9 @@ mod input;
 mod pick;
 mod state;
 mod ui;
+mod watch;
 
-pub use catalogue::{Gallery, GalleryEntry, GalleryGroup};
+pub use catalogue::{Gallery, GalleryEntry, GalleryGroup, WATCH_INTERVAL};
 pub use input::scenarios_pointer;
 pub use state::{
     GalleryAction, GalleryPhase, GalleryRunReport, GalleryState, GalleryTab, HiddenList,
@@ -185,6 +186,16 @@ use crate::{
     player::{ExternallyDriven, ScenarioPlayerPlugin, ScenarioSystems},
     session::{SessionConfig, SessionHooks, SessionPlugin, SessionSystems},
 };
+
+/// What a look at the watched files changed in the catalogue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reload {
+    /// The entry at this index was read again, or its file went. Whether it
+    /// now loads is [`GalleryEntry::error`].
+    Changed(usize),
+    /// A new entry at this index, which moved every later entry up by one.
+    Added(usize),
+}
 
 /// How many updates a loop waits before starting again, unless configured.
 pub const DEFAULT_LOOP_PAUSE: u16 = 60;
@@ -387,6 +398,8 @@ impl Plugin for GalleryPlugin {
             Update,
             (
                 input::exit_with_either_window,
+                watch::reload_changed_files,
+                ui::rebuild_catalogue.after(watch::reload_changed_files),
                 ui::place_scenarios_window,
                 ui::scroll_catalogue,
                 ui::split_panels,

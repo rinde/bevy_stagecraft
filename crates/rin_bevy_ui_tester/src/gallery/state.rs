@@ -737,6 +737,33 @@ impl GalleryState {
         self.pending.push(action);
     }
 
+    /// Makes room for a new entry at `index`: what is kept per entry index
+    /// (the selection, the results) follows the entries it belongs to.
+    pub(crate) fn insert_entry(&mut self, index: usize) {
+        if let Some(selected) = self.selected.as_mut()
+            && *selected >= index
+        {
+            *selected = selected.saturating_add(1);
+        }
+        self.results = core::mem::take(&mut self.results)
+            .into_iter()
+            .map(|((entry, variant), result)| {
+                let entry = if entry >= index {
+                    entry.saturating_add(1)
+                } else {
+                    entry
+                };
+                ((entry, variant), result)
+            })
+            .collect();
+    }
+
+    /// Forgets how entry `index` fared, in every variant: it is a different
+    /// scenario now.
+    pub(crate) fn forget_results(&mut self, index: usize) {
+        self.results.retain(|(entry, _), _| *entry != index);
+    }
+
     /// The selected entry's index.
     #[must_use]
     pub const fn selected(&self) -> Option<usize> {

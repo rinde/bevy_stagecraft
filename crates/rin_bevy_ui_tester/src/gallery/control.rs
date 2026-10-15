@@ -125,6 +125,11 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         bevy::log::warn!("the gallery has no entry {index}");
         return;
     };
+    if let Some(error) = entry.error().filter(|_| entry.is_unloaded()) {
+        let first = error.lines().next().unwrap_or_default();
+        state.status = format!("{} does not load: {first}", entry.scenario.name());
+        return;
+    }
     let variant = chosen_variant(world, state);
     let refused = variant.problem(&entry.scenario);
     let scenario = variant.varied(&entry.scenario);
@@ -928,13 +933,31 @@ fn run_next(world: &mut World, state: &mut GalleryState) {
             .get_resource::<Gallery>()
             .map_or(1, Gallery::variant_count);
         let (entry, at) = (next / variants, next % variants);
-        let Some((scenario, variant)) = world.get_resource::<Gallery>().and_then(|gallery| {
-            let scenario = gallery.get(entry)?.scenario.clone();
-            let variant = gallery.variant(at).cloned().unwrap_or_default();
-            Some((scenario, variant))
-        }) else {
+        let Some((scenario, variant, broken)) =
+            world.get_resource::<Gallery>().and_then(|gallery| {
+                let found = gallery.get(entry)?;
+                let broken = found
+                    .error()
+                    .filter(|_| found.is_unloaded())
+                    .map(str::to_owned);
+                let variant = gallery.variant(at).cloned().unwrap_or_default();
+                Some((found.scenario.clone(), variant, broken))
+            })
+        else {
             break;
         };
+        // A file that never loaded has nothing to play: it fails the run.
+        if let Some(error) = broken {
+            let name = variant.label(scenario.name());
+            if let Some(run) = state.run_all.as_mut() {
+                run.outcomes.push(ScenarioOutcome {
+                    name,
+                    failures: vec![format!("does not load: {error}")],
+                    skipped: false,
+                });
+            }
+            continue;
+        }
         // A scenario that does not name this variant is skipped, not failed:
         // the run records it and moves on without playing it.
         if variant.skips(&scenario) {

@@ -16,7 +16,9 @@
 //! (the counter's new value, the new text, the switch's fact), one list per
 //! checkpoint and one for the end; untick the ones you do not want and the
 //! file is written again without them. Files in
-//! that directory show up under "Recorded" the next time the example starts.
+//! that directory show up under "Recorded", and when one is edited and saved
+//! the gallery reads it again (and restarts it if it is selected); a file that
+//! does not load shows why in the catalogue.
 //! With `--record` the session starts straight away and is saved when the app
 //! window is closed:
 //!
@@ -32,15 +34,14 @@
 //! cargo run --example gallery --features gallery -- --run-all
 //! ```
 
-use std::{fs, path::Path};
+use std::path::Path;
 
 use bevy::{
     app::AppExit, ecs::system::IntoObserverSystem, prelude::*, ui::px, ui_widgets::Activate,
 };
 use rin_bevy_ui_tester::{
     AppCheck, AppSetup, Check, CheckResult, Gallery, GalleryEntry, GalleryPlugin, Probe,
-    ReflectAppCheck, ReflectAppSetup, Registry, Scenario, SessionRecorder, Step, Target,
-    load_ron_file, save, session,
+    ReflectAppCheck, ReflectAppSetup, Registry, Scenario, SessionRecorder, Step, Target, session,
 };
 
 /// Where recordings are written, and read from at startup.
@@ -308,44 +309,6 @@ fn gallery() -> Gallery {
         )
 }
 
-/// Loads every recording in [`RECORDINGS`], read against the app's own types.
-fn recorded() -> Vec<GalleryEntry> {
-    let registry = Registry::default();
-    let Ok(files) = fs::read_dir(RECORDINGS) else {
-        return Vec::new();
-    };
-    let mut paths: Vec<_> = files
-        .filter_map(|file| file.ok().map(|file| file.path()))
-        .filter(|path| path.extension().is_some_and(|e| e == "ron"))
-        // A world saved with **Save as setup** is a setup, not a scenario.
-        .filter(|path| {
-            !path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(save::is_scene_file)
-        })
-        .collect();
-    paths.sort();
-    paths
-        .into_iter()
-        .filter_map(|path| load(&path, &registry))
-        .map(|scenario| GalleryEntry::new(scenario.window_size(WINDOW.0, WINDOW.1)))
-        .collect()
-}
-
-/// One recording as a scenario, or `None` (with a warning) when it will not
-/// load. Its setup is the app's own, so nothing else is needed.
-fn load(path: &Path, registry: &Registry) -> Option<Scenario> {
-    // Next to its file, so a `Scene("..")` setup finds the world it names.
-    match load_ron_file(path, registry) {
-        Ok(scenario) => Some(scenario),
-        Err(error) => {
-            warn!("skipping {}: {error}", path.display());
-            None
-        }
-    }
-}
-
 /// With `--record`: starts a session as soon as the app is up.
 fn record_from_the_command_line(mut recorder: ResMut<SessionRecorder>) {
     if std::env::args().any(|arg| arg == "--record") {
@@ -370,11 +333,12 @@ fn save_on_exit(world: &mut World) {
 }
 
 fn main() -> AppExit {
-    let mut gallery = gallery();
-    let recordings = recorded();
-    if !recordings.is_empty() {
-        gallery = gallery.group("Recorded", recordings);
-    }
+    // The directory is watched: a recording saved here, or a file edited in
+    // an editor, shows up in the gallery without a restart. Its setup is the
+    // app's own, so nothing but the window size is added to what the file says.
+    let gallery = gallery()
+        .prepare_files(|scenario| scenario.window_size(WINDOW.0, WINDOW.1))
+        .directory("Recorded", RECORDINGS, &Registry::default());
     let mut plugin = GalleryPlugin::new(gallery)
         .with_reset(reset_app)
         .with_export_dir(RECORDINGS);
