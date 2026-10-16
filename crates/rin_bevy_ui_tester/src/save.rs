@@ -52,7 +52,6 @@ use bevy::{
         reflect::AppTypeRegistry,
         world::World,
     },
-    ui::Node,
     window::Window,
     world_serialization::{
         DynamicWorld, DynamicWorldBuilder, WorldFilter, serde::WorldDeserializer,
@@ -63,7 +62,7 @@ use serde::de::DeserializeSeed as _;
 use crate::{
     check::suggest::NoiseFilter,
     extension::{Setup, capture_setup},
-    targets::is_tooling,
+    targets::{is_tooling, is_ui_node},
 };
 
 /// The end of a saved world's file name, which makes a `.ron` file a setup
@@ -113,7 +112,7 @@ fn is_app_data(world: &World, entity: Entity) -> bool {
         let Ok(here) = world.get_entity(current) else {
             return false;
         };
-        if here.contains::<Node>() || here.contains::<Camera>() || here.contains::<Window>() {
+        if is_ui_node(world, current) || here.contains::<Camera>() || here.contains::<Window>() {
             return false;
         }
         match here.get::<ChildOf>() {

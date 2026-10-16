@@ -362,3 +362,24 @@ fn is_hit(world: &World, node: Entity, at: Vec2) -> bool {
             .is_none_or(|clip| clip.contains_point(point))
         && !is_tooling(world, node)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_node_missing_from_the_ui_stack_stands_in_as_its_nearest_stacked_ancestor() {
+        // Bevy's `ghost_nodes` feature leaves a node without a `Node` out of
+        // the stack; building that stack by hand reaches the same case.
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let child = world.spawn(ChildOf(root)).id();
+        let grandchild = world.spawn(ChildOf(child)).id();
+        let orphan = world.spawn_empty().id();
+        let mut stack = UiStack::default();
+        stack.uinodes.push(root);
+        assert_eq!(stacked(&world, &stack, root), root);
+        assert_eq!(stacked(&world, &stack, grandchild), root);
+        assert_eq!(stacked(&world, &stack, orphan), orphan);
+    }
+}

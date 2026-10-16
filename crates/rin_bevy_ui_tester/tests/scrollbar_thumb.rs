@@ -144,6 +144,11 @@ fn a_scrollbar_thumb_is_actionable_once_its_scrollbar_has_placed_it() {
         .steps([Step::move_to(Target::name("ScrollThumb"))]);
     let (report, position) = play(&scenario);
     assert!(report.passed(), "{:?}", report.failures());
+    assert!(
+        report.frames > APPEARS_AT,
+        "the move waited for the thumb: {} frames",
+        report.frames
+    );
     assert_eq!(
         position,
         Some(Vec2::ZERO),
