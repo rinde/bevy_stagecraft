@@ -27,15 +27,15 @@ use bevy::{
     picking::Pickable,
     ui::{
         BackgroundColor, BackgroundGradient, CalculatedClip, ComputedNode, ComputedUiTargetCamera,
-        InteractionDisabled, Node, UiGlobalTransform, UiStack,
+        InteractionDisabled, UiGlobalTransform, UiStack,
         widget::{ImageNode, Text},
     },
     window::{PrimaryWindow, Window},
 };
 
 use super::{
-    Action, Lookup, NotActionable, ResolvedTarget, Target, enclosing_button, is_tooling, locate,
-    resolve,
+    Action, Lookup, NotActionable, ResolvedTarget, Target, enclosing_button, is_tooling,
+    is_ui_node, locate, resolve,
 };
 use crate::probe::{describe_entity, is_within};
 
@@ -100,7 +100,7 @@ fn find(world: &World, target: &Target) -> Result<ResolvedTarget, NotActionable>
         | Target::Nth(..) => match locate(world, target) {
             Lookup::Found(node) => {
                 let widget = enclosing_button(world, node).unwrap_or(node);
-                if world.get::<Node>(widget).is_none() {
+                if !is_ui_node(world, widget) {
                     return Err(NotActionable::Never(format!(
                         "{target:?} names {} ({widget}), which is not a UI node",
                         describe_entity(world, widget)
@@ -219,6 +219,7 @@ fn receives_pointer(
     let Some(stack) = world.get_resource::<UiStack>() else {
         return Ok(());
     };
+    let widget = stacked(world, stack, widget);
     let camera = camera_of(world, widget);
     for node in stack.uinodes.iter().rev().copied() {
         if !is_hit(world, node, at) || camera_of(world, node) != camera {
@@ -276,6 +277,7 @@ pub(super) fn painted_topmost(world: &World, widget: Entity) -> Result<(), Strin
     };
     // The transform is in physical pixels; the hit tests take logical ones.
     let at = transform.affine().translation * computed.inverse_scale_factor;
+    let widget = stacked(world, stack, widget);
     let camera = camera_of(world, widget);
     for node in stack.uinodes.iter().rev().copied() {
         if !is_hit(world, node, at) || camera_of(world, node) != camera {
@@ -289,6 +291,30 @@ pub(super) fn painted_topmost(world: &World, widget: Entity) -> Result<(), Strin
         }
     }
     Err("nothing is drawn at its middle (it is hidden, clipped or outside the window)".into())
+}
+
+/// The entity that stands for `widget` in the UI stack: `widget` itself
+/// when the stack holds it, else the nearest entity above it that the stack
+/// holds, else `widget`.
+///
+/// Bevy builds the stack by walking `UiChildren`. Without its `ghost_nodes`
+/// feature that walk reaches every child with a `ComputedStackIndex`, so a
+/// UI node without a `Node` (a `ScrollbarThumb`) is in it; with the feature
+/// it follows only `Node` and `GhostNode` entities and leaves such a node
+/// out. Then the pointer can only reach what is above it, and that is the
+/// right thing to ask about: a `Scrollbar` observes the pointer on its track
+/// and works out itself whether a press is on the thumb.
+fn stacked(world: &World, stack: &UiStack, widget: Entity) -> Entity {
+    let mut current = widget;
+    loop {
+        if stack.uinodes.contains(&current) {
+            return current;
+        }
+        match world.get::<ChildOf>(current) {
+            Some(parent) => current = parent.parent(),
+            None => return widget,
+        }
+    }
 }
 
 /// Whether `node` draws something of its own over its whole box: a

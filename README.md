@@ -381,7 +381,10 @@ inside `Within(..)`; a target that matches nothing is a state, so
 order" is depth first, roots by `Entity` and children by their index: stable
 from run to run, but not the order on screen. A `Name`, `Component` or `Role`
 that matches an entity outside the UI (a named camera, say) is reported as not
-a UI node.
+a UI node. A UI node is an entity with a `Node`, or with both a `ComputedNode`
+and a `UiGlobalTransform`: `bevy_ui_widgets`' `ScrollbarThumb` has no `Node`
+(its `Scrollbar` places it after the layout), and a step such as
+`Drag(from: Name("ScrollThumb"), ..)` still finds it.
 The locators work wherever a target does: in steps, in checks and in a
 `Target` field of an app check.
 

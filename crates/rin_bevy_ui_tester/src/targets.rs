@@ -476,7 +476,7 @@ fn resolve_node(world: &World, target: &Target, node: Entity) -> Result<Resolved
     let widget = enclosing_button(world, node).unwrap_or(node);
     // `Name`, `Component` and `Role` can match any entity, a camera say,
     // which no layout will ever place.
-    if world.get::<Node>(widget).is_none() {
+    if !is_ui_node(world, widget) {
         return Err(format!(
             "{target:?} names {} ({widget}), which is not a UI node",
             describe_entity(world, widget)
@@ -491,6 +491,21 @@ fn resolve_node(world: &World, target: &Target, node: Entity) -> Result<Resolved
     // The transform is in physical pixels; pointer positions are logical.
     let position = transform.affine().translation * computed.inverse_scale_factor;
     Ok(ResolvedTarget::on_widget(position, widget))
+}
+
+/// Whether `entity` is a UI node: it has a [`Node`], or it has both a
+/// [`ComputedNode`] and a [`UiGlobalTransform`].
+///
+/// The second kind is laid out by a widget rather than by Bevy's layout:
+/// `bevy_ui_widgets`' `ScrollbarThumb` has no `Node`, by design, and its
+/// `Scrollbar` writes its size and transform after the layout. Giving it a
+/// `Node` would make the two overwrite each other every frame. A camera, or
+/// a bare entity with only a `Name` or a marker, has neither and is no UI
+/// node.
+pub(crate) fn is_ui_node(world: &World, entity: Entity) -> bool {
+    world.get::<Node>(entity).is_some()
+        || (world.get::<ComputedNode>(entity).is_some()
+            && world.get::<UiGlobalTransform>(entity).is_some())
 }
 
 /// The nearest `Button` that is `entity` or above it.

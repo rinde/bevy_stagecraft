@@ -46,7 +46,7 @@ use bevy::{
 };
 
 use super::{reflect::close_names, widget::label_of};
-use crate::{probe::is_within, targets::WidgetRole, targets::is_tooling};
+use crate::{probe::is_within, targets::WidgetRole, targets::is_tooling, targets::is_ui_node};
 
 /// How far each level of the tree is indented.
 const INDENT: usize = 2;
@@ -312,7 +312,7 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
         return vec![line];
     }
     let is_text = this.contains::<Text>();
-    let is_node = this.contains::<Node>();
+    let is_node = is_ui_node(world, entity);
     if !is_root && !is_node && !is_text {
         // A span is part of the text above it, so only what sits inline
         // below it shows; anything else groups.
