@@ -6,16 +6,31 @@ argument-hint: <issue-number> [pr-number]
 
 # Implement an issue
 
-The arguments, or the prompt that started you, name the issue `<issue>` and
-perhaps its pull request `<pr>`. You own the issue on `rinde/rin-bevy-ui-tester` until its
-pull request is ready to merge. You never merge, approve or review your own pull request, and
+The arguments, or the prompt that started you, name the issue `<issue>`,
+perhaps its pull request `<pr>`, and, from the coordinator, the **slot** to
+work in: a worktree at `.claude/worktrees/slot-<n>`. You own the issue on
+`rinde/rin-bevy-ui-tester` until its pull request is ready to merge. You never merge, approve or review your own pull request, and
 never push to `main`.
 
 Talk to GitHub through `gh api` and the REST endpoints below. GraphQL is
 blocked in Claude Code cloud sessions, so `gh pr create`, `gh issue view` and
 friends may fail where `gh api repos/...` works.
 
-## 1. Read and decide whether you can start
+## 1. Enter your slot
+
+The coordinator keeps one worktree per issue in flight, the slot, and every
+agent on the issue works there, so that each build reuses the `target/` the
+last agent left. When the prompt names a slot, enter it before anything
+else, with the `EnterWorktree` tool and the slot's absolute path
+(`path: /path/to/rin-bevy-ui-tester/.claude/worktrees/slot-<n>`); without
+that tool, `cd` into it and give every later command and file an absolute
+path under it. Confirm with `git rev-parse --show-toplevel` that you are in
+the slot. From then on touch nothing outside it: another agent may be
+working in the main checkout or in a sibling slot.
+
+When no slot was named, you were started by hand: work where you are.
+
+## 2. Read and decide whether you can start
 
 - The issue, its labels and comments: `gh api repos/rinde/rin-bevy-ui-tester/issues/<issue>`
   and `.../issues/<issue>/comments`. A bare-title issue's title is the
@@ -34,26 +49,29 @@ friends may fail where `gh api repos/...` works.
   specific question and the readings you see, remove `ready-for-agent`, add
   `Needs refinement`, and stop.
 
-## 2. Start
+## 3. Start
 
 1. Add the `In progress` label:
    `gh api repos/rinde/rin-bevy-ui-tester/issues/<issue>/labels -f "labels[]=In progress"`.
 2. Branch from a fresh `main`, named `TESTER-<issue>/<short-slug>`:
    `git fetch origin main && git switch -c TESTER-<issue>/<slug> origin/main`.
-   You are usually in a worktree of your own under `.claude/worktrees/`;
-   another implementer may be working in the main checkout or a sibling
-   worktree, so touch nothing outside yours.
+   A slot starts detached on `origin/main`, so this is the only branch work
+   there; never touch the main checkout or another slot.
 3. Read `AGENTS.md` in full, then the module you are changing (its row in
    "Where to find what" says what it holds) and a sibling module that does
    something similar.
 
-A worktree has its own `target/`, so its first build is a cold Bevy compile.
-To reuse the main checkout's build, prefix cargo and `just` commands with
-`CARGO_TARGET_DIR="$(git rev-parse --path-format=absolute --git-common-dir)/../target"`.
-On a tight disk, also set `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, as CI
-does.
+Build in the slot's own `target/`. It outlives you: the reviewer and any
+follow-up on this issue build on what you compiled, and the next issue in
+the slot after that, so never delete it or `cargo clean` it. A slot that has
+been used before is warm; a new one's first build is a cold Bevy compile,
+once. Never point `CARGO_TARGET_DIR` at the main checkout's `target/` or any
+other slot's: two builds sharing one directory block each other and leave
+stale artefacts. On a tight disk, set `CARGO_PROFILE_DEV_DEBUG=line-tables-only`,
+as CI does. Commit and push everything you want kept: the coordinator resets
+the slot to `origin/main` once the issue is done.
 
-## 3. Implement
+## 4. Implement
 
 Follow the rules in `AGENTS.md` without exception: no dependency on a game
 crate and no game state (apps extend the tester through its reflected
@@ -66,7 +84,7 @@ Bevy UI, never a game; a test that needs a GPU has `gpu` in its name, needs
 feature `record` and is `#[ignore]`d. Keep the change to what the issue asks;
 note anything else worth doing in the pull request rather than doing it.
 
-## 4. Before you call it done
+## 5. Before you call it done
 
 1. `just fmt`
 2. `just ci` (lint, test, features, unused-deps, deny)
@@ -83,7 +101,7 @@ All green, then commit with a message that says what the change does, in the
 imperative (`Wait for a target to stop moving before a click`), and push with
 `git push -u origin <branch>`.
 
-## 5. Open the pull request
+## 6. Open the pull request
 
 ```sh
 gh api repos/rinde/rin-bevy-ui-tester/pulls -f base=main -f head=<branch> \
@@ -101,9 +119,12 @@ coordinator has it reviewed once you report it.
 
 Given a pull request, bring it to a mergeable state:
 
-1. Check out its branch in your worktree:
+1. Check out its branch in your slot:
    `git fetch origin <branch> && git switch <branch>` (or
    `git switch -c <branch> origin/<branch>`), and `git pull` to be current.
+   The slot may still hold the branch from the last implementer, or sit
+   detached on the head the reviewer checked out; either way the branch on
+   `origin` is the truth, and the `target/` is already warm.
 2. **Merge conflict** (`mergeable` is false): `git merge origin/main`, resolve,
    re-run the checks, push. Never rebase, amend or force-push a pushed branch.
 3. **Red CI**: read the failing job's log
