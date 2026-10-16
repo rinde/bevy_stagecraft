@@ -35,7 +35,7 @@ use crate::{
     overlay::{TargetDescriptions, describe_step},
     player::{Outcome, StepRecord},
     scenario::{Step, with_group_path},
-    targets::is_tooling,
+    targets::{is_tooling, is_ui_node},
 };
 
 /// How many levels of the UI tree a trace point writes down; deeper nodes are
@@ -419,7 +419,7 @@ fn ui_tree(world: &World) -> Vec<UiLine> {
 
 /// Adds `entity` and, below it, its UI children to `lines`.
 fn walk(world: &World, entity: Entity, depth: usize, lines: &mut Vec<UiLine>) {
-    if depth > MAX_TREE_DEPTH || is_tooling(world, entity) || world.get::<Node>(entity).is_none() {
+    if depth > MAX_TREE_DEPTH || is_tooling(world, entity) || !is_ui_node(world, entity) {
         return;
     }
     lines.push(UiLine {
