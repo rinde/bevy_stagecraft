@@ -1426,12 +1426,18 @@ fn compare(
     })
 }
 
-/// Whether the widget `target` names is in `state`.
+/// Whether the widget `target` names is in `state`; `Visible` asks about the
+/// named node itself, since a list or popup root is no widget and its
+/// visibility must not be that of the selectable row around it.
 fn widget_state(world: &World, target: &Target, state: WidgetState) -> Result<CheckResult, String> {
     match widget::node(world, target) {
         Lookup::Found(node) => Ok(widget::in_state(
             world,
-            widget::widget(world, node),
+            if state == WidgetState::Visible {
+                node
+            } else {
+                widget::widget(world, node)
+            },
             state,
             &format!("{target:?}"),
         )),

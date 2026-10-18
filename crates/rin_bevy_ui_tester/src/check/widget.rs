@@ -34,7 +34,8 @@ pub(super) enum WidgetState {
     Pressed,
     /// Has input focus, or something below it has.
     Focused,
-    /// Visible in the hierarchy and taking up room on screen.
+    /// The named node itself (not its widget) is visible in the hierarchy and
+    /// takes up room on screen.
     Visible,
     /// Painted topmost at its middle, whatever covers it lets through.
     OnTop,
