@@ -461,8 +461,8 @@ Condition 5 follows how Bevy delivers pointer events, so a node with
 lets the pointer through) never counts as covering what lies below it. To
 assert what the person sees instead, check `OnTop(target)`
 (`Check::on_top(Target::text("Go"))`): it holds when the named node (a text
-label stands for its widget) is painted topmost at its middle, walking the UI stack in paint order and ignoring
-`Pickable`. Only nodes that paint something cover (a background that is not
+label stands for its widget) is painted topmost at its middle, walking the UI
+stack in paint order and ignoring `Pickable`. Only nodes that paint something cover (a background that is not
 transparent, an image or text), so an empty full-window container does not,
 and the widget's own nodes always count. A failure says what covers it
 (`Text("Go") is not on top: it is covered by `Popup``). It is a check, not a
