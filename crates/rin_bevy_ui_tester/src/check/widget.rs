@@ -43,6 +43,12 @@ pub(super) enum WidgetState {
 }
 
 impl WidgetState {
+    /// Whether the state is about the named node (its own visibility), not the
+    /// widget it belongs to.
+    pub(super) const fn is_about_the_node(self) -> bool {
+        matches!(self, Self::Visible)
+    }
+
     /// The state in words, after the target: `is disabled`.
     pub(super) const fn words(self) -> &'static str {
         match self {
