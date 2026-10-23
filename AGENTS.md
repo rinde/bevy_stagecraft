@@ -1,4 +1,4 @@
-# Agent notes
+# Development notes
 
 This file is for whoever changes the code. If it and the code disagree, the
 code wins, and both documents need fixing in the same change.
@@ -12,113 +12,20 @@ view, scripted pointer and keyboard steps, checks) runs three ways:
 - recorded offscreen for review (feature `record`);
 - played in a gallery (feature `gallery`).
 
-## Tickets live on GitHub
+## Issue and pull request workflow
 
-Read tickets with the GitHub tools. Label a ticket **"In progress"** before
-starting work on it. Treat the title as the specification, and ask if it is
-ambiguous.
-
-Issues labelled `ready-for-agent` can be run by agents end to end with
-`/coordinate`; see [Agents](#agents).
-
-## Always work with PRs
+Coordino is used to coordinate issues and pull requests. Treat the issue title
+as the specification, and ask for clarification when it is ambiguous. Issues
+labelled `ready for agent` are available to be picked up through Coordino.
 
 Work on a branch named `TESTER-<n>/<short-slug>`, branched from an up-to-date
-`main`. Before stopping, create the PR (body says `Closes #<n>`) and check
-whether it needs a rebase. Never merge it yourself: only the coordinator
-merges, and only what [Agents](#agents) allows.
-
-## Agents
-
-A **coordinator** picks up issues that are ready, an **implementer** turns
-each into a pull request, a **reviewer** approves it or requests changes, and
-the coordinator sends it back or merges it. They live in `.claude/agents/` and
-`.claude/skills/` and follow the same rules as anyone else: this file. Nothing
-runs on GitHub's side; the coordinator starts every agent, in its own session.
-The same set-up runs on `rinde/rin-bevy-ui`.
-
-| Agent | Model | Does |
-| --- | --- | --- |
-| `coordinator` | Sonnet | Decides what is ready, keeps the slots, dispatches implementers and reviewers into them, checks on GitHub that each did its job, merges, and files an issue for everything a pull request left open, labelled `ready-for-agent`, or `require-human-review` where a human must decide first. Writes no code. |
-| `implementer-sonnet`, `implementer-opus` | Sonnet, Opus | Implements one issue in the issue's slot on a branch `TESTER-<number>/<slug>`, opens a pull request that `Closes #N`, and follows it up on review, red CI or a merge conflict. Runs the `implement-issue` skill. |
-| `reviewer-sonnet`, `reviewer-opus` | Sonnet, Opus | Reviews one pull request in the issue's slot, makes sure CI passed on its head, and posts one review that approves or requests changes, with inline comments. Runs the `review-pr` skill. |
-
-The variants differ only in their model; the instructions are the skills, which
-also run by hand: `/implement-issue 82`, `/review-pr 90 opus`.
-
-| Label | Meaning |
-| --- | --- |
-| `ready-for-agent` | The coordinator may start the issue. Agents leave every other issue alone. On a pull request, a coordinator run that wound down left it there, and a later run may pick the pull request up; without it, an open pull request may be someone else's. |
-| `opus` | The Opus implementer, and an Opus approval. Without it, Sonnet. |
-| `require-human-review` | A human approves and merges; no agent approves or merges it. On a follow-up the coordinator filed without `ready-for-agent`, a human must decide something before an agent can take it. |
-| `In progress` | Someone is working on it; set on dispatch. |
-| `Needs refinement` | Not ready. An implementer that finds the issue ambiguous asks on it, sets this and removes `ready-for-agent`. |
-
-An issue starts only when everything it depends on is **closed as completed**:
-the issues blocking it in its *Relationships*, its open sub-issues, and any
-issue its body names as `Depends on #N`, `Blocked by #N` or `After #N`. A
-dependency closed as not planned waits for a human.
-
-**The review verdict.** A reviewer approves only when CI passed on the pull
-request's head: GitHub's **lint**, **test**, **features**, **unused-deps** and
-**deny** jobs, which together are `just ci`, and **gpu** (`just test-gpu-headless`).
-Where one did not run (missing, cancelled, queued, or failed for billing
-reasons; see [CI billing failures](#ci-billing-failures)) the reviewer runs
-`just ci` and `just test-gpu-headless` on the head itself. Every agent review starts
-with a marker the coordinator reads:
-
-```
-<!-- agent-review verdict=<approve|request_changes> reviewer=<sonnet|opus> sha=<commit> ci=<github|local|none> -->
-```
-
-A verdict counts only for the commit it names, so a push makes it stale. An
-approved pull request with CI passed and no conflict is squash-merged (a plain
-merge where the repository refuses squashing) unless the issue has
-`require-human-review`. After three rounds of changes requested, the
-coordinator stops, comments and takes `ready-for-agent` off the issue.
-Everything agents leave behind (a pull request's "anything left open",
-untaken nits, flakes) becomes an issue once the pull request merges,
-labelled `ready-for-agent`, or `require-human-review` alone when a human
-must decide something first. When a run winds down with a pull request of
-its own still waiting for CI or a slot, it labels that pull request
-`ready-for-agent` so the next run may pick it up; that is the only time a
-pull request gets the label.
-
-| How | What |
-| --- | --- |
-| `/coordinate` | Passes until nothing is left to do, then a report. One slot, so one issue in flight at a time, in a cloud session (`CLAUDE_CODE_REMOTE=true`), two on a local machine. |
-| `/coordinate #82 #86` | Only those issues and their pull requests. |
-| `/coordinate max 5` | Five slots, so five issues in flight at once, instead of the default. |
-| `/coordinate dry-run` | Report what it would do and change nothing. |
-| `/loop 30m /coordinate` | Keep coordinating every half hour. |
-| `claude --agent coordinator` | The coordinator as the session's main agent. |
-
-Agents talk to GitHub through `gh api` and its REST endpoints, because cloud
-sessions block the GraphQL API that `gh issue` and `gh pr` use. An unattended
-run needs its tools allowed, or it stops at the first permission prompt.
-
-**Slots.** Every agent works in a slot, a worktree at
-`.claude/worktrees/slot-<n>` that the coordinator makes and keeps, numbered
-from `slot-1` up to the limit, which is the number of issues in flight at
-once. A slot is bound to one issue from its first implementer until the
-issue's work is done, usually the merge: the implementer, the reviewer, the
-follow-up and the reviewer again all run in that one slot, one at a time,
-each building on the `target/` the last one left, and no other issue uses
-it meanwhile. The binding is `.claude/worktrees/slot-<n>.issue`, next to
-the worktree, so it survives between runs. When the issue is done the
-coordinator resets the slot to `origin/main` and frees it; the `target/`
-stays, so the next issue starts warm. A new slot's first build is a cold
-Bevy compile, once; the skills no longer point cargo at the main checkout's
-`target/`, which two builds at once would leave stale. Agents enter their
-slot with Claude Code's `EnterWorktree` tool, given the slot's path. Slots
-are never removed; the coordinator checks the free disk space at the start
-of each run and, below 20 GiB, sweeps stale files out of free slots'
-`target/` folders, oldest first, never a bound slot's.
+`main`. Open a pull request that closes the issue (`Closes #<n>`), and keep it
+up to date with its review and CI results. Follow Coordino's current workflow
+for review and merge.
 
 A change here reaches `rinde/rin-bevy-ui` only through a `rev` bump there, and
-issues there may wait on issues here. The coordinator does not follow
-dependencies across repositories, so such an issue there gets
-`ready-for-agent` by hand once the issue here is closed.
+issues there may wait on issues here. Once the issue here is closed, update
+the dependent issue there in Coordino so it can proceed.
 
 ## The one architectural rule
 
@@ -205,8 +112,6 @@ pinned toolchain (with `rustfmt` and `clippy`), `just`, `cargo-machete` and
 libraries, and warms the build cache in the background. It is idempotent and
 does nothing outside cloud sessions. Run it by hand with
 `.claude/hooks/session-start.sh --force` (this also waits for the cache warm-up).
-`.claude/settings.json` also sets the auto-compact window to 200k tokens for
-Sonnet 5.5 and Opus 5.5 (`modelSettings.<model>.autoCompactWindow`).
 
 ## Code practices
 

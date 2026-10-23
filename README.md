@@ -1387,4 +1387,5 @@ Scenarios use fixed 1/60 s steps, so all three runners produce the same frames.
 
 ## Working on the crate
 
-See [`AGENTS.md`](AGENTS.md). In short: `just ci` runs everything CI runs.
+See [`AGENTS.md`](AGENTS.md) for the repository workflow and development notes.
+In short: `just ci` runs everything CI runs.
