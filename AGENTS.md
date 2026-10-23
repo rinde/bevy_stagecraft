@@ -14,18 +14,15 @@ view, scripted pointer and keyboard steps, checks) runs three ways:
 
 ## Issue and pull request workflow
 
-Coordino is used to coordinate issues and pull requests. Treat the issue title
-as the specification, and ask for clarification when it is ambiguous. Issues
-labelled `ready for agent` are available to be picked up through Coordino.
-
-Work on a branch named `TESTER-<n>/<short-slug>`, branched from an up-to-date
-`main`. Open a pull request that closes the issue (`Closes #<n>`), and keep it
-up to date with its review and CI results. Follow Coordino's current workflow
-for review and merge.
+Issues labelled `ready for agent` are available to be picked.
 
 A change here reaches `rinde/rin-bevy-ui` only through a `rev` bump there, and
 issues there may wait on issues here. Once the issue here is closed, update
-the dependent issue there in Coordino so it can proceed.
+the dependent issue there so it can proceed.
+
+There is a GitHub Actions billing problem, this is a known problem, no
+action is required. Running `just ci` is a valid substitute and is enough
+for merging a PR.
 
 ## The one architectural rule
 
