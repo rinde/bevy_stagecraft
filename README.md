@@ -241,6 +241,9 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
   `InteractionDisabled`, `Checked`, `Selected`, `Pressed`,
   `InputFocus` (the widget or something below it), `InheritedVisibility` and a
   laid-out size. A text target names the nearest widget at or above the text.
+  `Visible` is about the named node itself, not the widget above it, so a
+  hidden list inside a visible selectable row is not `Visible`; the other
+  states read the nearest widget at or above the node.
 - `TextOf` reads every text node at or below the target's widget, spans
   included, joined by spaces, and matches `Exact`, `Contains` or `StartsWith`.
   For a text input (`TextInput`) it reads the value the field holds, and

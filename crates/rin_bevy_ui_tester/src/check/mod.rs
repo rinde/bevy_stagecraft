@@ -1426,12 +1426,18 @@ fn compare(
     })
 }
 
-/// Whether the widget `target` names is in `state`.
+/// Whether the widget `target` names is in `state`. `Visible` is about the
+/// named node itself, not the widget above it: a hidden list inside a visible
+/// selectable row is hidden.
 fn widget_state(world: &World, target: &Target, state: WidgetState) -> Result<CheckResult, String> {
     match widget::node(world, target) {
         Lookup::Found(node) => Ok(widget::in_state(
             world,
-            widget::widget(world, node),
+            if state.is_about_the_node() {
+                node
+            } else {
+                widget::widget(world, node)
+            },
             state,
             &format!("{target:?}"),
         )),
