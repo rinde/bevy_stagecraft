@@ -242,8 +242,10 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
   `InputFocus` (the widget or something below it), `InheritedVisibility` and a
   laid-out size. A text target names the nearest widget at or above the text.
   `Visible` is about the named node itself, not the widget above it, so a
-  hidden list inside a visible selectable row is not `Visible`; the other
-  states read the nearest widget at or above the node.
+  hidden list inside a visible selectable row is not `Visible`. `OnTop` reads
+  the named node too, so a plain popup root inside a widget is judged by its own
+  paint; only a text label stands for the widget it sits in. The other states
+  read the nearest widget at or above the node.
 - `TextOf` reads every text node at or below the target's widget, spans
   included, joined by spaces, and matches `Exact`, `Contains` or `StartsWith`.
   For a text input (`TextInput`) it reads the value the field holds, and
@@ -458,8 +460,8 @@ Condition 5 follows how Bevy delivers pointer events, so a node with
 `Pickable { should_block_lower: false, .. }` (a floating popup or list that
 lets the pointer through) never counts as covering what lies below it. To
 assert what the person sees instead, check `OnTop(target)`
-(`Check::on_top(Target::text("Go"))`): it holds when the widget is painted
-topmost at its middle, walking the UI stack in paint order and ignoring
+(`Check::on_top(Target::text("Go"))`): it holds when the named node (a text
+label stands for its widget) is painted topmost at its middle, walking the UI stack in paint order and ignoring
 `Pickable`. Only nodes that paint something cover (a background that is not
 transparent, an image or text), so an empty full-window container does not,
 and the widget's own nodes always count. A failure says what covers it

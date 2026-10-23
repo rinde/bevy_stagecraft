@@ -309,3 +309,59 @@ fn on_top_reads_and_writes_as_ron() {
     let written = scenario.to_ron().expect("written");
     assert!(written.contains("OnTop(Text(\"Go\"))"), "{written}");
 }
+
+/// A "Go" button holding a plain node "Inner" (no widget) whose middle a popup
+/// covers, while the button's own middle stays free.
+fn spawn_button_with_covered_inner(world: &mut World) {
+    world.spawn(Camera2d);
+    world.spawn((
+        Button,
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0),
+            top: px(0),
+            width: px(300),
+            height: px(300),
+            ..Node::default()
+        },
+        BackgroundColor(Color::WHITE),
+        children![(
+            Name::new("Inner"),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(10),
+                top: px(10),
+                width: px(40),
+                height: px(40),
+                ..Node::default()
+            },
+        )],
+    ));
+    world.spawn((
+        Name::new("Popup"),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0),
+            top: px(0),
+            width: px(60),
+            height: px(60),
+            ..Node::default()
+        },
+        BackgroundColor(Color::BLACK),
+        GlobalZIndex(10),
+        Pickable {
+            should_block_lower: false,
+            is_hoverable: false,
+        },
+    ));
+}
+
+#[test]
+fn a_plain_node_inside_a_widget_is_judged_by_itself_not_by_the_widget() {
+    let scenario = Scenario::new("inner covered")
+        .setup(spawn_button_with_covered_inner)
+        .step(Step::wait(SETTLE_FRAMES));
+    let message = failure_of(scenario, Check::on_top(Target::name("Inner")))
+        .expect("OnTop should fail for the covered inner node");
+    assert!(message.contains("it is covered by `Popup`"), "{message}");
+}
