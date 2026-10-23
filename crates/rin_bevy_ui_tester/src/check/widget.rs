@@ -86,6 +86,17 @@ pub(super) fn widget(world: &World, node: Entity) -> Entity {
     }
 }
 
+/// What an `OnTop` check judges for `node`: a text label stands for the
+/// widget it belongs to (a button is named by its label), any other node is
+/// judged itself, so a plain popup root inside a widget is not mistaken for it.
+pub(super) fn painted_subject(world: &World, node: Entity) -> Entity {
+    if world.get::<Text>(node).is_some() {
+        widget(world, node)
+    } else {
+        node
+    }
+}
+
 /// Whether `entity` is a widget of `bevy_ui_widgets`, or a `bevy_ui` node
 /// that tracks interaction.
 pub(super) fn is_widget(world: &World, entity: Entity) -> bool {
