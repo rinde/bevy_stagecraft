@@ -1429,7 +1429,10 @@ fn compare(
 /// Whether the widget `target` names is in `state`. `Visible` is about the
 /// named node itself, not the widget above it: a hidden list inside a visible
 /// selectable row is hidden. `OnTop` reads the named node too, except that a
-/// text label stands for its widget; the other states climb to the widget.
+/// text label stands for its widget; the other states climb to the widget,
+/// because `Disabled`, `Checked`, `Selected`, `Pressed` and `Focused` are
+/// properties of a widget, which a plain node inside it has no state of its own
+/// for.
 fn widget_state(world: &World, target: &Target, state: WidgetState) -> Result<CheckResult, String> {
     match widget::node(world, target) {
         Lookup::Found(node) => Ok(widget::in_state(

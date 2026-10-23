@@ -315,6 +315,7 @@ fn on_top_reads_and_writes_as_ron() {
 fn spawn_button_with_covered_inner(world: &mut World) {
     world.spawn(Camera2d);
     world.spawn((
+        Name::new("Outer"),
         Button,
         Node {
             position_type: PositionType::Absolute,
@@ -361,6 +362,13 @@ fn a_plain_node_inside_a_widget_is_judged_by_itself_not_by_the_widget() {
     let scenario = Scenario::new("inner covered")
         .setup(spawn_button_with_covered_inner)
         .step(Step::wait(SETTLE_FRAMES));
+    // The button's own middle is free, so it stays on top while its inner
+    // node is covered: the node and the widget are judged apart.
+    let report = scenario
+        .clone()
+        .step(Step::check(Check::on_top(Target::name("Outer"))))
+        .run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
     let message = failure_of(scenario, Check::on_top(Target::name("Inner")))
         .expect("OnTop should fail for the covered inner node");
     assert!(message.contains("it is covered by `Popup`"), "{message}");
