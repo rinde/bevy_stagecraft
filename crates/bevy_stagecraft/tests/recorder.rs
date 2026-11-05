@@ -19,13 +19,13 @@ use bevy::{
     ecs::{intern::Interned, schedule::ScheduleLabel},
     prelude::*,
 };
-use common::{Activations, SHUFFLE_SEEDS, shuffle, shuffled_schedules, spawn_ui};
 use bevy_stagecraft::{
     CaptureMeta, Captures, Check, Frame, Recorder, RecorderPlugins, Scenario, Step, Target,
     Variant,
     overlay::{OverlayTheme, PickHighlight},
     recorder::request_capture,
 };
+use common::{Activations, SHUFFLE_SEEDS, shuffle, shuffled_schedules, spawn_ui};
 
 /// A scenario over the plain UI that clicks "Pause" and checks it was
 /// activated, or, when `broken`, expects it twice.

@@ -1480,6 +1480,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_stagecraft"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "image",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "bevy_state"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4287,18 +4299,6 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
-
-[[package]]
-name = "bevy_stagecraft"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "image",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "ron",
- "serde",
-]
 
 [[package]]
 name = "rodio"

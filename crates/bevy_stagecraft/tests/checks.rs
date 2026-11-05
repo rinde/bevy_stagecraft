@@ -11,11 +11,11 @@
 mod common;
 
 use bevy::math::Vec2;
-use common::{Activations, UiCheck, UiSetup, UiTarget, registry, spawn_ui};
 use bevy_stagecraft::{
     Check, CheckKind, Extension, FORMAT_VERSION, LoadError, Outcome, Registry, Scenario,
     ScenarioReport, Step, Target,
 };
+use common::{Activations, UiCheck, UiSetup, UiTarget, registry, spawn_ui};
 
 /// The outcome of every step, in order.
 fn step_outcomes(report: &ScenarioReport) -> Vec<Outcome> {

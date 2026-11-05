@@ -20,11 +20,11 @@ use bevy::{
     ui::{ComputedNode, UiGlobalTransform, px},
     ui_widgets::{Activate, Button, Checkbox},
 };
-use common::UiCheck;
 use bevy_stagecraft::{
     Check, HeadlessPlugins, LoadError, Outcome, Registry, Scenario, ScenarioReport, Step, Target,
     WidgetRole, target_alternatives,
 };
+use common::UiCheck;
 
 /// The test id of the "Pause" button.
 #[derive(Component, Reflect, Debug, Default)]

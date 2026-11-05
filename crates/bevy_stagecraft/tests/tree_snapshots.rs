@@ -16,11 +16,11 @@ use bevy::{
     ui::{Checked, InteractionDisabled, Selected, px},
     ui_widgets::{Button, Checkbox, ListItem, Slider, SliderValue},
 };
-use common::{registry, spawn_ui};
 use bevy_stagecraft::{
     Check, HeadlessPlugins, NoiseFilter, NotUnderTest, Outcome, Picked, Scenario, Step, Target,
     WidgetRole, checks_that_hold, tree_snapshot,
 };
+use common::{registry, spawn_ui};
 
 /// The name of the panel the controls sit in.
 const TOOLBAR: &str = "Toolbar";

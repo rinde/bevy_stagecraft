@@ -11,10 +11,10 @@
 mod common;
 
 use bevy::prelude::*;
-use common::{Activations, spawn_ui};
 use bevy_stagecraft::{
     Check, Outcome, Scenario, ScenarioPlayer, ScenarioPlayerPlugin, ScenarioReport, Step, Target,
 };
+use common::{Activations, spawn_ui};
 
 /// Frames the app runs before the scenario begins, as the player's own runs do.
 const SETTLE_FRAMES: usize = 2;

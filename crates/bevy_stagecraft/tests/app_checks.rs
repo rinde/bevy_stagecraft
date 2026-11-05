@@ -12,11 +12,11 @@
 mod common;
 
 use bevy::prelude::*;
-use common::{UiCheck, UiSetup, registry, spawn_ui};
 use bevy_stagecraft::{
     AppCheck, AppField, Check, CheckResult, Extension, LoadError, Outcome, Probe, ReflectAppCheck,
     Registry, Scenario, Step, Target,
 };
+use common::{UiCheck, UiSetup, registry, spawn_ui};
 
 /// A second app check type. It opts out of automatic registration, so only
 /// the test that registers it by hand sees two app check types.
@@ -237,10 +237,7 @@ fn the_registry_lists_the_app_check_variants_and_their_field_types() {
     let found_target = &found.variants[2].fields[0];
     assert_eq!(found_target.name, None);
     assert_eq!(found_target.short_type_path, "Target");
-    assert_eq!(
-        found_target.type_path,
-        "bevy_stagecraft::targets::Target"
-    );
+    assert_eq!(found_target.type_path, "bevy_stagecraft::targets::Target");
     let between: Vec<&AppField> = found.variants[3].fields.iter().collect();
     assert_eq!(between[1].name.as_deref(), Some("at_most"));
     assert_eq!(between[1].short_type_path, "u32");

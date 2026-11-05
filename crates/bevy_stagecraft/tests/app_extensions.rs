@@ -12,11 +12,11 @@
 mod common;
 
 use bevy::prelude::*;
-use common::{Activations, Arranged, UiCheck, UiSetup, UiTarget, UiView};
 use bevy_stagecraft::{
     AppSetup, AppTarget, AppView, Check, Extension, LoadError, Outcome, ReflectAppSetup,
     ReflectAppTarget, ReflectAppView, Registry, ResolvedTarget, Scenario, Step, Target,
 };
+use common::{Activations, Arranged, UiCheck, UiSetup, UiTarget, UiView};
 
 /// A second setup type. It opts out of automatic registration, so only the
 /// tests that register it by hand see two setup types.

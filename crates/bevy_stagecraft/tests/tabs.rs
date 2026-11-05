@@ -13,9 +13,7 @@ use bevy::{
     ui::px,
     ui_widgets::{SelectedTab, Tab, TabList, tablist_self_update},
 };
-use bevy_stagecraft::{
-    Check, HeadlessPlugins, Scenario, Step, Target, WidgetRole, tree_snapshot,
-};
+use bevy_stagecraft::{Check, HeadlessPlugins, Scenario, Step, Target, WidgetRole, tree_snapshot};
 
 /// The labels of the tabs, in order.
 const LABELS: [&str; 3] = ["Rendering", "Audio", "Input"];

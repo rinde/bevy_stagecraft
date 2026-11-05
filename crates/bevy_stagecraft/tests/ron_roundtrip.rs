@@ -11,11 +11,11 @@
 mod common;
 
 use bevy::{input::keyboard::KeyCode, math::Vec2};
-use common::{Activations, UiCheck, UiSetup, UiTarget, UiView, registry};
 use bevy_stagecraft::{
     Check, Extension, FORMAT_VERSION, LoadError, Modifiers, Scenario, Script, Setup, Step, Target,
     View, files::run_ron_files,
 };
+use common::{Activations, UiCheck, UiSetup, UiTarget, UiView, registry};
 
 /// A scenario written in Rust, with the app's own setup, view, targets and
 /// checks as values.

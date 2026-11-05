@@ -19,8 +19,8 @@ use bevy::{
     ui::px,
     ui_widgets::{Activate, Button},
 };
-use common::{SHUFFLE_SEEDS, shuffle, shuffled_schedules};
 use bevy_stagecraft::{Check, NoiseFilter, Scenario, Step, Target};
+use common::{SHUFFLE_SEEDS, shuffle, shuffled_schedules};
 
 /// How far the button moves to the right each time it is activated.
 const HOP: f32 = 60.0;
