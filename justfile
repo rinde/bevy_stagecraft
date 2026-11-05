@@ -61,7 +61,7 @@ test-gpu:
 # The same on a software GPU (lavapipe), forcing Vulkan: for CI and machines
 # without a GPU.
 test-gpu-headless:
-    WGPU_BACKEND=vulkan cargo test --quiet --workspace --features record gpu -- --include-ignored
+    WGPU_BACKEND=vulkan cargo test --quiet --workspace --features record gpu -- --include-ignored --test-threads=1
 
 # Play every gallery scenario in a real window, one by one, and close the
 # window when done. Exits non-zero, naming what failed, if any scenario failed.
