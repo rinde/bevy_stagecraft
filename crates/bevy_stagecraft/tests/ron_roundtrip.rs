@@ -1,0 +1,457 @@
+//! Scenarios written in Rust and as RON are one value.
+
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "tests may panic on a broken setup"
+)]
+
+mod common;
+
+use bevy::{input::keyboard::KeyCode, math::Vec2};
+use common::{Activations, UiCheck, UiSetup, UiTarget, UiView, registry};
+use bevy_stagecraft::{
+    Check, Extension, FORMAT_VERSION, LoadError, Modifiers, Scenario, Script, Setup, Step, Target,
+    View, files::run_ron_files,
+};
+
+/// A scenario written in Rust, with the app's own setup, view, targets and
+/// checks as values.
+fn in_rust() -> Scenario {
+    Scenario::new("click pause")
+        .window_size(800, 600)
+        .app_setup(UiSetup::PlainUi)
+        .app_view(UiView::Zoomed(1.5))
+        .steps([
+            Step::glide(Target::text("Pause"), 20),
+            Step::click(),
+            Step::wait(1),
+            Step::check(Check::app(UiCheck::ActivatedOnce)),
+            Step::tap_with(KeyCode::KeyP, Modifiers::CTRL | Modifiers::SHIFT),
+            Step::drag(
+                Target::screen(Vec2::new(1.0, 2.0)),
+                Target::app(UiTarget::Showing("Pause".into())),
+                5,
+            ),
+            Step::move_burst([Vec2::new(30.0, 40.0), Vec2::new(35.0, 45.0)]),
+            Step::caption("done"),
+        ])
+        .expect_check(Check::app(UiCheck::ActivatedOnce))
+}
+
+#[test]
+fn rust_and_ron_are_the_same_value() {
+    let ron = in_rust().to_ron().unwrap();
+    let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
+    assert_eq!(loaded.to_script(), in_rust().to_script());
+    assert_eq!(loaded.to_ron().unwrap(), ron, "export is stable");
+}
+
+#[test]
+fn modifiers_read_as_a_list_in_ron() {
+    let ron = in_rust().to_ron().unwrap();
+    assert!(
+        ron.contains("modifiers: [") && ron.contains("Shift,") && ron.contains("Ctrl,"),
+        "{ron}"
+    );
+    assert!(!ron.contains("bits"), "{ron}");
+    assert!(!ron.contains("Some("), "{ron}");
+}
+
+/// The same scenario as [`in_rust`] without the drag step, played straight
+/// from Rust with no registry.
+fn in_rust_playable() -> Scenario {
+    Scenario::new("click pause")
+        .window_size(800, 600)
+        .app_setup(UiSetup::PlainUi)
+        .steps([
+            Step::glide(Target::text("Pause"), 20),
+            Step::click(),
+            Step::wait(1),
+            Step::check(Check::app(UiCheck::ActivatedOnce)),
+            Step::tap_with(KeyCode::KeyP, Modifiers::CTRL | Modifiers::SHIFT),
+            Step::caption("done"),
+        ])
+        .expect_check(Check::app(UiCheck::ActivatedOnce))
+}
+
+#[test]
+fn both_spellings_play_identically() {
+    // Played directly, as written in Rust.
+    let from_rust = in_rust_playable().run_headless();
+    // Exported to RON and loaded back through the registry.
+    let ron = in_rust_playable().to_ron().unwrap();
+    let from_file = Scenario::from_ron_with(&ron, &registry())
+        .unwrap()
+        .run_headless();
+    assert!(from_rust.passed(), "{:?}", from_rust.failures());
+    assert_eq!(from_rust, from_file);
+}
+
+#[test]
+fn mixed_use_adds_rust_assertions_to_a_recorded_file() {
+    let text = include_str!("ron/click_pause.ron");
+    let scenario = Scenario::from_ron_with(text, &registry())
+        .unwrap()
+        .expect_check(Check::resource::<Activations>(".0").eq(1_u32));
+    assert_eq!(scenario.expects().len(), 2);
+    let report = scenario.run_headless();
+    assert!(report.passed(), "{:?}", report.failures());
+}
+
+#[test]
+fn the_apps_setup_view_and_targets_are_written_inside_app() {
+    let ron = in_rust().to_ron().unwrap();
+    for written in [
+        "setup: App(PlainUi)",
+        "view: App(Zoomed(1.5))",
+        "to: App(Showing(\"Pause\"))",
+    ] {
+        assert!(ron.contains(written), "{written} in {ron}");
+    }
+}
+
+/// Loads a script of format version 3 with this body.
+fn load(body: &str) -> Result<Scenario, LoadError> {
+    Scenario::from_ron_with(
+        &format!("(format_version: 3, name: \"x\", {body})"),
+        &registry(),
+    )
+}
+
+#[test]
+fn a_misspelt_setup_view_or_target_is_a_load_error_naming_where_and_listing_the_variants() {
+    for (body, extension, used_by, variants) in [
+        (
+            "setup: App(PlainUj), steps: []",
+            Extension::Setup,
+            "the setup",
+            vec!["PlainUi", "Activated(u32)", "MissingSave(String)"],
+        ),
+        (
+            "view: App(Zoomed(\"far\")), steps: []",
+            Extension::View,
+            "the view",
+            vec!["Plain", "Zoomed(f32)"],
+        ),
+        (
+            "steps: [Wait(1), MoveTo(App(PauseButon))]",
+            Extension::Target,
+            "step 1",
+            vec!["PauseButton", "Showing(String)"],
+        ),
+        (
+            "steps: [Drag(from: Text(\"a\"), to: App(Showing(3)), frames: 2)]",
+            Extension::Target,
+            "step 0",
+            vec!["PauseButton", "Showing(String)"],
+        ),
+        (
+            "steps: [Check(Hovered(App(Showin(\"Pause\"))))]",
+            Extension::Target,
+            "step 0",
+            vec!["PauseButton", "Showing(String)"],
+        ),
+        (
+            "steps: [], expect: [App(Found(App(PauseButon)))]",
+            Extension::Target,
+            "the expect list",
+            vec!["PauseButton", "Showing(String)"],
+        ),
+    ] {
+        let error = load(body).unwrap_err();
+        let LoadError::BadAppValue {
+            extension: found,
+            used_by: at,
+            variants: listed,
+            ..
+        } = &error
+        else {
+            panic!("{body}: {error:?}");
+        };
+        assert_eq!((*found, at.as_str()), (extension, used_by), "{body}");
+        assert_eq!(listed, &variants, "{body}");
+        let text = error.to_string();
+        assert!(text.starts_with(&format!("{used_by}: `")), "{text}");
+        assert!(text.contains("is one of `"), "{text}");
+    }
+}
+
+#[test]
+fn the_old_named_setups_views_and_custom_targets_are_refused_saying_what_to_write_instead() {
+    for (body, hint) in [
+        ("setup: Named(\"plain_ui\"), steps: []", "`setup: App("),
+        ("setup: Some(File(\"a.ron\")), steps: []", "`setup: App("),
+        ("view: \"top_down\", steps: []", "`view: App("),
+        ("view: Some(\"top_down\"), steps: []", "`view: App("),
+        (
+            "steps: [MoveTo(Custom(resolver: \"nope\", argument: \"\"))]",
+            "`MoveTo(App(",
+        ),
+        (
+            "steps: [Check(Exists(Custom(resolver: \"nope\", argument: \"\")))]",
+            "`MoveTo(App(",
+        ),
+    ] {
+        let error = load(body).unwrap_err();
+        let message = error.to_string();
+        assert!(matches!(error, LoadError::Syntax(_)), "{body}: {message}");
+        assert!(
+            message.contains("no longer looked up") && message.contains(hint),
+            "{body}: {message}"
+        );
+    }
+}
+
+#[test]
+fn an_app_value_with_no_type_for_it_is_a_load_error_saying_how_to_declare_one() {
+    let registry = bevy_stagecraft::Registry {
+        types: bevy::reflect::TypeRegistryArc::default(),
+    };
+    let error = Scenario::from_ron_with(
+        "(format_version: 3, name: \"x\", setup: App(PlainUi), steps: [])",
+        &registry,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        LoadError::NoAppType {
+            extension: Extension::Setup,
+            used_by: "the setup".into()
+        }
+    );
+    assert!(
+        error.to_string().contains("#[reflect(AppSetup)]"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_newer_format_is_refused_even_if_the_rest_is_unreadable() {
+    let error = Scenario::from_ron("(format_version: 4, name: \"x\", brand_new: 7)").unwrap_err();
+    assert_eq!(
+        error,
+        LoadError::UnsupportedVersion {
+            found: 4,
+            supported: 3
+        }
+    );
+    assert!(error.to_string().contains("versions 1 to 3"), "{error}");
+}
+
+#[test]
+fn typos_are_syntax_errors_and_the_apps_setup_and_view_load_as_its_values() {
+    let error = Scenario::from_ron("(format_version: 1, name: \"x\", stpes: [])").unwrap_err();
+    assert!(matches!(error, LoadError::Syntax(_)), "{error}");
+    let scenario = Scenario::from_ron(
+        "(format_version: 1, name: \"x\", setup: Some(App( Activated( 2 ) )), view: App(Plain), steps: [])",
+    )
+    .unwrap();
+    assert_eq!(
+        scenario.setup_value(),
+        Some(&Setup::app(UiSetup::Activated(2)))
+    );
+    assert_eq!(scenario.view_value(), Some(&View::app(UiView::Plain)));
+    let script: Script = scenario.to_script();
+    assert_eq!(script.format_version, FORMAT_VERSION);
+}
+
+#[test]
+fn a_directory_of_files_becomes_results_named_after_the_files() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/ron");
+    let registry = registry();
+    let results = run_ron_files(dir, &registry, "", |scenario| {
+        let mut app = scenario.headless_app();
+        registry.install(app.world_mut());
+        scenario.run_in(&mut app)
+    })
+    .unwrap();
+    let names: Vec<_> = results.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "actionability",
+            "app_checks",
+            "app_target",
+            "click_pause",
+            "grouped",
+            "move_burst",
+            "reflected_checks",
+            "tree_snapshot",
+            "type_text",
+            "typed_checks"
+        ]
+    );
+    assert!(
+        results.iter().all(bevy_stagecraft::FileResult::passed),
+        "{results:?}"
+    );
+}
+
+#[test]
+fn a_type_step_round_trips_through_ron_with_and_without_a_target() {
+    let scenario = Scenario::new("typing").steps([
+        Step::type_text("Alpha"),
+        Step::type_into("Beta 2!", Target::text("Name")),
+        Step::type_into("Gamma", Target::name("Field")).with_timeout(30),
+        Step::type_into("Delta", Target::name("Field")).forced(),
+    ]);
+    let ron = scenario.to_ron().unwrap();
+    assert!(ron.contains("text: \"Alpha\","), "{ron}");
+    assert!(ron.contains("text: \"Beta 2!\","), "{ron}");
+    assert!(ron.contains("into: Text(\"Name\"),"), "{ron}");
+    assert_eq!(
+        ron.matches("into:").count(),
+        3,
+        "no `into` for the first: {ron}"
+    );
+    let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
+    assert_eq!(loaded.to_script(), scenario.to_script());
+    assert_eq!(loaded.to_ron().unwrap(), ron, "export is stable");
+}
+
+#[test]
+fn a_type_step_is_read_from_a_file_with_or_without_into() {
+    let scenario = load(
+        "steps: [Type(text: \"a\"), Type(text: \"b\", into: Name(\"Field\")), \
+         Type(text: \"c\", into: None)]",
+    )
+    .unwrap();
+    assert_eq!(
+        scenario.to_script().steps,
+        [
+            Step::type_text("a"),
+            Step::type_into("b", Target::name("Field")),
+            Step::type_text("c"),
+        ]
+    );
+}
+
+#[test]
+fn a_timeout_or_force_around_a_type_without_a_target_is_refused() {
+    for body in [
+        "steps: [Timeout(5, Type(text: \"x\"))]",
+        "steps: [Force(Type(text: \"x\"))]",
+    ] {
+        assert!(
+            matches!(load(body), Err(LoadError::Invalid { .. })),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_timeout_around_a_type_with_a_target_is_accepted() {
+    let scenario = load("steps: [Timeout(5, Type(text: \"x\", into: Name(\"Field\")))]").unwrap();
+    assert_eq!(scenario.to_script().steps.len(), 1);
+}
+
+#[test]
+fn a_type_into_a_target_the_app_does_not_have_is_a_load_error() {
+    let error = load("steps: [Type(text: \"x\", into: Component(\"NoSuchMarker\"))]").unwrap_err();
+    assert!(error.to_string().contains("NoSuchMarker"), "{error}");
+}
+
+#[test]
+fn a_scale_factor_survives_a_round_trip_through_ron() {
+    let scenario = Scenario::new("dense").scale_factor(2.0);
+    let ron = scenario.to_ron().unwrap();
+    assert!(ron.contains("scale_factor"), "{ron}");
+    let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
+    assert_eq!(loaded.scale(), Some(2.0));
+    assert_eq!(loaded.to_script(), scenario.to_script());
+}
+
+#[test]
+fn a_scenario_without_a_scale_factor_does_not_write_one() {
+    let ron = Scenario::new("plain").to_ron().unwrap();
+    assert!(!ron.contains("scale_factor"), "{ron}");
+}
+
+#[test]
+fn a_scale_factor_of_zero_in_a_file_is_a_load_error_naming_it() {
+    let ron = Scenario::new("dense")
+        .scale_factor(2.0)
+        .to_ron()
+        .unwrap()
+        .replace("2.0", "0.0");
+    let error = Scenario::from_ron_with(&ron, &registry()).unwrap_err();
+    assert!(matches!(error, LoadError::Invalid { .. }), "{error}");
+    assert!(error.to_string().contains("scale factor"), "{error}");
+}
+
+/// A scenario with groups inside groups.
+fn grouped() -> Scenario {
+    Scenario::new("grouped").app_setup(UiSetup::PlainUi).steps([
+        Step::wait(1),
+        Step::group(
+            "press the button",
+            [
+                Step::glide(Target::text("Pause"), 20),
+                Step::group("click it", [Step::click()]),
+            ],
+        ),
+        Step::group("nothing yet", []),
+        Step::group(
+            "see the result",
+            [Step::check(Check::app(UiCheck::ActivatedOnce))],
+        ),
+    ])
+}
+
+#[test]
+fn nested_groups_survive_a_round_trip_through_ron() {
+    let ron = grouped().to_ron().unwrap();
+    assert!(ron.contains("Group("), "{ron}");
+    let loaded = Scenario::from_ron_with(&ron, &registry()).unwrap();
+    assert_eq!(loaded.to_script(), grouped().to_script());
+    assert_eq!(loaded.to_ron().unwrap(), ron, "export is stable");
+}
+
+#[test]
+fn a_group_in_a_file_reads_as_its_name_and_its_steps() {
+    let scenario = load(
+        r#"steps: [Group(name: "outer", steps: [Wait(1), Group(name: "inner", steps: [Wait(2)])])]"#,
+    )
+    .unwrap();
+    assert_eq!(
+        scenario.script(),
+        [Step::group(
+            "outer",
+            [Step::wait(1), Step::group("inner", [Step::wait(2)])]
+        )]
+    );
+}
+
+#[test]
+fn a_group_with_no_name_is_a_load_error_naming_where() {
+    let error = load(r#"steps: [Wait(1), Group(name: " ", steps: [Wait(1)])]"#).unwrap_err();
+    assert!(
+        matches!(&error, LoadError::Invalid { used_by, .. } if used_by == "step 1"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("needs a name"), "{error}");
+}
+
+#[test]
+fn a_bad_step_inside_groups_is_a_load_error_naming_the_group_path() {
+    let error = load(
+        r#"steps: [Wait(1), Group(name: "raise the bridge", steps: [Group(name: "lever", steps: [MoveTo(Component("NoSuchMarker"))])])]"#,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("raise the bridge > lever > step 1"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_group_does_not_change_the_format_version() {
+    let script = grouped().to_script();
+    assert_eq!(script.format_version, FORMAT_VERSION);
+    assert_eq!(FORMAT_VERSION, 3);
+}

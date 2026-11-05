@@ -1,19 +1,11 @@
-# rin-bevy-ui-tester
+# bevy_stagecraft
 
 A UI test driver for Bevy. It runs scripted pointer and keyboard scenarios
 against a Bevy UI, headless inside `cargo test`, so interface behaviour can be
 asserted like any other code.
 
 The same scenarios can be recorded offscreen for review and played back in a
-gallery. The crate knows nothing about any game; it takes Bevy types only.
-
-This is private software.
-
-## Status
-
-The crate is being built up ticket by ticket (see the tickets on GitHub).
-Headless scenarios, the offscreen recorder, the gallery and recording a
-scenario from a real session work today.
+gallery. 
 
 ## Headless app and synthetic input
 
@@ -37,7 +29,7 @@ checks. `run_headless` builds a headless app, builds the world with the
 scenario's setup, plays the steps and returns a `ScenarioReport`.
 
 ```rust,ignore
-use rin_bevy_ui_tester::{Check, Scenario, Step, Target};
+use bevy_stagecraft::{Check, Scenario, Step, Target};
 
 #[test]
 fn clicking_the_button_increments_the_counter() {
@@ -80,7 +72,7 @@ finds the enum by itself: there is no registration call and no generic
 parameter.
 
 ```rust,ignore
-use rin_bevy_ui_tester::{AppCheck, CheckResult, Probe, ReflectAppCheck, Target};
+use bevy_stagecraft::{AppCheck, CheckResult, Probe, ReflectAppCheck, Target};
 
 #[derive(Reflect, Debug, Clone)]
 #[reflect(AppCheck)]
@@ -138,7 +130,7 @@ point, deriving `Reflect` and carrying the attribute, found by Bevy with no
 registration call.
 
 ```rust,ignore
-use rin_bevy_ui_tester::{
+use bevy_stagecraft::{
     AppSetup, AppTarget, AppView, ReflectAppSetup, ReflectAppTarget, ReflectAppView,
     ResolvedTarget,
 };
@@ -818,7 +810,7 @@ therefore ignore the overlay.
 ## Recording for review (feature `record`)
 
 ```rust
-use rin_bevy_ui_tester::Recorder;
+use bevy_stagecraft::Recorder;
 
 let recording = Recorder::new(|app| {
     // Your own plugins and resources go on top of `RecorderPlugins`.
@@ -1369,7 +1361,7 @@ Bevy version must match the one the crate uses, `=0.20.0`):
 
 ```toml
 [dev-dependencies]
-rin_bevy_ui_tester = { git = "https://github.com/rinde/rin-bevy-ui-tester", rev = "<commit>" }
+bevy_stagecraft = { git = "https://github.com/rinde/bevy_stagecraft", rev = "<commit>" }
 ```
 
 Cargo needs credentials for the private repository: in CI, a token with read

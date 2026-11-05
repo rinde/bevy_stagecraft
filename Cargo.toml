@@ -4,9 +4,9 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
-# Equal to the toolchain pinned in rust-toolchain.toml (same compiler as rails).
+# Equal to the toolchain pinned in rust-toolchain.toml
 rust-version = "1.98.1"
-repository = "https://github.com/rinde/rin-bevy-ui-tester"
+repository = "https://github.com/rinde/bevy_stagecraft"
 publish = false
 
 # Bevy version: the tester upgrades first, on its own; rinde/rails and

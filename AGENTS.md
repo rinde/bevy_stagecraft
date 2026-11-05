@@ -26,21 +26,18 @@ for merging a PR.
 
 ## The one architectural rule
 
-No dependency on any game crate (`rail_core`, `rail_game`, ...) and no game
-state. The crate takes Bevy types only. Games extend it through its extension
+The crate takes Bevy types only. Applications extend it through its extension
 points, each the app's one reflected enum found by Bevy's automatic
 registration (no registration call, nothing looked up by name): setups
 (`#[reflect(AppSetup)]`, the world builders), views (`#[reflect(AppView)]`),
 targets (`#[reflect(AppTarget)]`) and checks (`#[reflect(AppCheck)]`); and
-probes over the world. This is the same rule as `rail_ui` and `rin-bevy-ui`.
+probes over the world.
 
 ## Bevy version policy
 
-The tester upgrades Bevy first, on its own. Rails and `rinde/rin-bevy-ui`
-follow once the tester's upgrade is complete, each moving to the version the
-tester is on. It is pinned exactly (`=0.20.0`) in the workspace `Cargo.toml`.
+Bevy is pinned exactly (`=0.20.0`) in the workspace `Cargo.toml`.
 
-The Bevy feature list in `crates/rin_bevy_ui_tester/Cargo.toml` is curated by
+The Bevy feature list in `crates/bevy_stagecraft/Cargo.toml` is curated by
 hand, with `default-features = false` in the workspace. Do not "simplify" it to
 a bundle such as `default` or `ui`: a library must not force audio, gamepad,
 dynamic linking or a windowing backend on whoever depends on it. Windowing and
@@ -48,7 +45,7 @@ rendering sit behind the `gallery` and `record` features.
 
 ## Where to find what
 
-The crate is `crates/rin_bevy_ui_tester`. Fill in this table as each module
+The crate is `crates/bevy_stagecraft`. Fill in this table as each module
 lands.
 
 | Module     | Purpose                                      | Status  |

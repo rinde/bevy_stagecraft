@@ -17,7 +17,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 
 export PATH="$HOME/.cargo/bin:$PATH"
-cache_log="${TMPDIR:-/tmp}/rin-bevy-ui-tester-warm-cache.log"
+cache_log="${TMPDIR:-/tmp}/bevy_stagecraft-warm-cache.log"
 
 # sudo is absent when already root (typical in containers).
 as_root() {
