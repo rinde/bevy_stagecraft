@@ -77,8 +77,8 @@ pub use player::{
 pub use probe::Probe;
 #[cfg(feature = "record")]
 pub use recorder::{
-    Capture, CaptureMeta, Captures, RecordError, Recorder, RecorderPlugins, RecorderSystems,
-    RecorderTarget, Recording, ScenarioRecording,
+    Capture, CaptureMeta, Captures, Checked, RecordError, Recorder, RecorderPlugins,
+    RecorderSystems, RecorderTarget, Recording, ScenarioRecording,
 };
 pub use save::{SCENE_SUFFIX, SaveError, SavedSetup, save_setup};
 pub use scenario::{
