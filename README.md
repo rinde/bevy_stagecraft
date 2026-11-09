@@ -832,6 +832,25 @@ pictures, drawn by the overlay) and `scenario.gif`. Overall it writes
 failure first and failures first within each. A failed check fails the
 scenario, and `any_failed()` tells the calling binary to exit non-zero.
 
+### Checking without recording
+
+A CI job that only needs the checks, not the pictures, calls `check()` instead
+of `record(..)`: the same real rendering and outcomes, but no PNGs, filmstrips,
+GIFs, traces or `index.html` are made or written.
+
+```rust
+let checked = Recorder::new(|app| app.add_plugins(MyUiPlugin))
+    .scenario(click_pause_scenario())
+    .check()?;
+if checked.any_failed() {
+    std::process::exit(1);
+}
+```
+
+Offer a flag to call `record(dir)` instead when someone wants to review the
+recordings. Screenshot checks still take their pictures and read or write
+their baselines, which are test data.
+
 ### Screenshot checks
 
 ```ron
