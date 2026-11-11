@@ -34,7 +34,7 @@ gallery = [
 ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 # PNG and GIF encoding for the recorder; nothing else of the crate.
-image = { version = "0.25.10", default-features = false, features = ["png", "gif"], optional = true }
+image = { version = "0.25.9", default-features = false, features = ["png", "gif"], optional = true }
 # macOS only: the gallery turns off automatic window tabbing, which would
 # otherwise put the Scenarios window in a tab over the app window.
 [target.'cfg(target_os = "macos")'.dependencies]
