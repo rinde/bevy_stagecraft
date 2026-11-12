@@ -867,6 +867,15 @@ directory the file is in. A pixel differs when a channel is further than
 `colour` (default 2, of 255) from the baseline's; the check fails when more
 than the share `pixels` (default 0, so none) of the pixels differ.
 
+- Names that make the same slug (`A B` and `A-B`, or a variant label such as
+  `Home [dark mode]` and `Home [dark-mode]`) would share a directory, so each
+  directory records the exact scenario name that owns it in `.scenario` (commit
+  it with the baselines). Another name finds it taken and its screenshot checks
+  are broken, naming both: rename one of them. Migration: baselines made before
+  this have no `.scenario` file; the first scenario to use the directory adopts
+  it, so nothing moves, but if two scenarios were already sharing one, give them
+  distinct names and move or regenerate the baselines
+  (`RIN_UPDATE_SNAPSHOTS=1`).
 - A missing baseline fails the first time and is written, for you to look at,
   commit and run again.
 - On a mismatch the picture taken (`<name>.actual.png`) and one of what

@@ -166,6 +166,40 @@ pub(crate) fn directory_name(scenario: &str) -> String {
     }
 }
 
+/// The file in a baseline directory that names the scenario it belongs to.
+/// A screenshot name may not start with `.`, so it never clashes with one.
+const OWNER_FILE: &str = ".scenario";
+
+/// Claims `folder` for `scenario`, or says who has it already.
+///
+/// `directory_name` is lossy (`A B` and `A-B` are both `a-b`), so two
+/// scenarios, or a scenario and one of its variants, could share baselines
+/// and overwrite each other's. The folder therefore records the exact name
+/// that owns it in [`OWNER_FILE`]; a different name finds it taken and the
+/// check is broken, not silently compared. A folder with baselines but no
+/// record (made before this existed) is adopted by the first scenario that
+/// uses it. Failing to write the record is not an error: the baselines then
+/// work as they did, unprotected.
+fn claim_directory(folder: &Path, scenario: &str) -> Result<(), String> {
+    let owner = folder.join(OWNER_FILE);
+    let Ok(existing) = fs::read_to_string(&owner) else {
+        if fs::create_dir_all(folder).is_ok() {
+            let _ = fs::write(&owner, format!("{scenario}\n"));
+        }
+        return Ok(());
+    };
+    let existing = existing.trim_end_matches(['\r', '\n']);
+    if existing == scenario {
+        Ok(())
+    } else {
+        Err(format!(
+            "the baseline directory {} belongs to the scenario `{existing}`, and `{scenario}` \
+             would share it: rename one of them so their names differ in letters or digits",
+            folder.display()
+        ))
+    }
+}
+
 /// Whether screenshot checks rewrite their baselines instead of comparing.
 ///
 /// Starts as `RIN_UPDATE_SNAPSHOTS` says (set and not `0`); insert it to
@@ -459,6 +493,7 @@ pub(crate) fn prepare(
     let folder = directory
         .unwrap_or_else(|| Path::new("."))
         .join(directory_name(scenario));
+    let claim = claim_directory(&folder, scenario);
     let mut judgements = Vec::new();
     for part in check.parts() {
         let Check::Screenshot {
@@ -470,6 +505,7 @@ pub(crate) fn prepare(
             continue;
         };
         let judgement = match &picture {
+            Ok(_) if claim.is_err() => Judgement::Broken(claim.clone().err().unwrap_or_default()),
             Ok(picture) => {
                 let (judgement, record) = judge(
                     world,
@@ -844,6 +880,48 @@ mod tests {
             "click-the-pause-dark"
         );
         assert_eq!(directory_name("???"), "scenario");
+    }
+
+    /// A fresh directory for one test's baselines.
+    fn scratch(test: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("rin-claims-{}-{test}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        path
+    }
+
+    #[test]
+    fn scenarios_whose_names_make_the_same_directory_do_not_share_it() {
+        let dir = scratch("collision");
+        let folder = dir.join(directory_name("A B"));
+        assert_eq!(directory_name("A B"), directory_name("A-B"));
+        assert!(claim_directory(&folder, "A B").is_ok());
+        assert!(claim_directory(&folder, "A B").is_ok());
+        let refused = claim_directory(&folder, "A-B").err().unwrap_or_default();
+        assert!(
+            refused.contains("`A B`") && refused.contains("`A-B`"),
+            "{refused}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn variants_whose_labels_make_the_same_directory_do_not_share_it() {
+        let dir = scratch("variant-collision");
+        let folder = dir.join(directory_name("Home [dark mode]"));
+        assert!(claim_directory(&folder, "Home [dark mode]").is_ok());
+        assert!(claim_directory(&folder, "Home [dark-mode]").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_of_baselines_from_before_owners_were_recorded_is_adopted() {
+        let dir = scratch("legacy");
+        let folder = dir.join("home");
+        assert!(fs::create_dir_all(&folder).is_ok());
+        assert!(fs::write(folder.join("home.png"), b"x").is_ok());
+        assert!(claim_directory(&folder, "Home").is_ok());
+        assert!(claim_directory(&folder, "HOME").is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
