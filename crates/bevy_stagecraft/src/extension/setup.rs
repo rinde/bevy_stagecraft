@@ -75,8 +75,10 @@ pub trait AppSetup {
     /// the script. **Save as setup** in the gallery picks a `stem` that no
     /// such file in `dir` has yet (other than the script's own
     /// `"{stem}.ron"`), so a second save does not overwrite the first; a file
-    /// named any other way is not looked for. `None`, the default, records no
-    /// setup.
+    /// named any other way is not looked for. The pick can race with another
+    /// save, so create the files exclusively (`OpenOptions::create_new`) and
+    /// return an error rather than replace one that exists. `None`, the
+    /// default, records no setup.
     ///
     /// `Self: Sized` keeps the trait usable as `dyn AppSetup`; the recorder
     /// reaches this function through [`ReflectAppSetup`].
