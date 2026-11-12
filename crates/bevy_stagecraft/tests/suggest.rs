@@ -408,5 +408,5 @@ fn nothing_suggests_nothing() {
     app.update();
     let again = WorldSnapshot::take(app.world(), &NoiseFilter::default());
     assert_eq!(snapshot, again);
-    assert!(suggest_checks(&snapshot, &again, app.world()).is_empty());
+    assert_eq!(suggest_checks(&snapshot, &again, app.world()).len(), 0);
 }

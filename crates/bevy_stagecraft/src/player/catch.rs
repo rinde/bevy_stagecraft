@@ -72,11 +72,5 @@ pub(super) fn restore(world: &mut World, previous: ErrorHandler) {
 
 /// The errors kept since the last call, oldest first.
 pub(super) fn take() -> Vec<String> {
-    CAUGHT.with(|caught| {
-        caught
-            .borrow_mut()
-            .as_mut()
-            .map(core::mem::take)
-            .unwrap_or_default()
-    })
+    CAUGHT.with(|caught| caught.borrow_mut().as_mut().map_or_default(core::mem::take))
 }

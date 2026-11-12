@@ -507,15 +507,12 @@ fn inline_lines(world: &World, entity: Entity) -> Vec<Line> {
 
 /// The lines of everything directly below `entity`, in order.
 fn children_of(world: &World, entity: Entity, below_widget: bool) -> Vec<Line> {
-    world
-        .get::<Children>(entity)
-        .map(|children| {
-            children
-                .iter()
-                .flat_map(|child| lines_of(world, *child, below_widget, false))
-                .collect()
-        })
-        .unwrap_or_default()
+    world.get::<Children>(entity).map_or_default(|children| {
+        children
+            .iter()
+            .flat_map(|child| lines_of(world, *child, below_widget, false))
+            .collect()
+    })
 }
 
 /// Whether the node is not on screen: not displayed, or hidden in the

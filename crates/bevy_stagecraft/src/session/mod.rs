@@ -783,8 +783,7 @@ fn primary_window(world: &mut World) -> Option<(Entity, Option<Vec2>)> {
 fn unread<M: Message + Clone>(world: &World, cursor: &mut MessageCursor<M>) -> Vec<M> {
     world
         .get_resource::<Messages<M>>()
-        .map(|messages| cursor.read(messages).cloned().collect())
-        .unwrap_or_default()
+        .map_or_default(|messages| cursor.read(messages).cloned().collect())
 }
 
 impl SessionRecorder {

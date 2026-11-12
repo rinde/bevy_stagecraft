@@ -1114,7 +1114,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Outcome::Skipped, Outcome::Skipped]
         );
-        assert!(report.screenshots.is_empty());
+        assert_eq!(report.screenshots.len(), 0);
     }
 
     #[test]

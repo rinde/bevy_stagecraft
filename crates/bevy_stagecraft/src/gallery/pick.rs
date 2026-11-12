@@ -52,8 +52,7 @@ pub(super) fn update(world: &mut World, mut tagged: Local<Option<(Entity, String
         (Some(subject), Some((was, tag))) if *was == subject => tag.clone(),
         (Some(subject), _) => target_alternatives(world, Some(subject), position)
             .first()
-            .map(|target| format!("{target:?}"))
-            .unwrap_or_default(),
+            .map_or_default(|target| format!("{target:?}")),
         (None, _) => String::new(),
     };
     *tagged = subject.map(|subject| (subject, tag.clone()));

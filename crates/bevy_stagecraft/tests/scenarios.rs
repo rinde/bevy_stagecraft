@@ -445,7 +445,7 @@ fn a_failing_step_in_a_group_names_the_group_path() {
         ["raise the bridge", "pull the lever"],
         "the report keeps each step's path"
     );
-    assert!(report.steps[0].group.is_empty());
+    assert_eq!(report.steps[0].group.len(), 0);
 }
 
 #[test]

@@ -138,7 +138,8 @@ enum SessionTarget {
 impl AppTarget for SessionTarget {
     fn resolve(&self, _world: &World) -> Result<ResolvedTarget, String> {
         let Self::Cell(column, row) = self;
-        let centre = |cell: &i32| f32::from(i16::try_from(*cell).unwrap_or(0)) * 100.0 + 50.0;
+        let centre =
+            |cell: &i32| f32::mul_add(f32::from(i16::try_from(*cell).unwrap_or(0)), 100.0, 50.0);
         Ok(ResolvedTarget::at(Vec2::new(centre(column), centre(row))))
     }
 

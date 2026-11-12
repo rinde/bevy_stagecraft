@@ -48,12 +48,10 @@ const SETTLE_UPDATES: u8 = 2;
 fn release_held(world: &mut World) {
     let buttons: Vec<MouseButton> = world
         .get_resource::<ButtonInput<MouseButton>>()
-        .map(|input| input.get_pressed().copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|input| input.get_pressed().copied().collect());
     let keys: Vec<KeyCode> = world
         .get_resource::<ButtonInput<KeyCode>>()
-        .map(|input| input.get_pressed().copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|input| input.get_pressed().copied().collect());
     if let Some(mut input) = world.get_resource_mut::<SyntheticInput>() {
         for button in buttons {
             input.release_button(button);

@@ -338,7 +338,7 @@ fn without_an_overlay_camera_the_overlay_aims_at_the_default_ui_camera() {
         .expect("the app's camera");
     let mut roots = world.query_filtered::<Option<&UiTargetCamera>, With<OverlayRoot>>();
     let roots: Vec<_> = roots.iter(world).collect();
-    assert!(!roots.is_empty());
+    assert_ne!(roots.len(), 0);
     assert!(
         roots
             .iter()
@@ -460,7 +460,7 @@ fn the_overlay_never_adds_a_root_without_a_target_camera() {
     }
     app.update();
     app.update();
-    assert!(overlay_aims(&mut app).is_empty());
+    assert_eq!(overlay_aims(&mut app).len(), 0);
 
     // And back again.
     app.world_mut()

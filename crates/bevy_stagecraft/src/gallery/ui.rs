@@ -1078,14 +1078,13 @@ fn trace_key(
         points: trace.map_or(0, |trace| trace.points().len()),
         found: step
             .and_then(|step| trace?.step(step))
-            .map(|step| {
+            .map_or_default(|step| {
                 (
                     step.targets.clone(),
                     step.checks.clone(),
                     step.captured.clone(),
                 )
-            })
-            .unwrap_or_default(),
+            }),
     }
 }
 

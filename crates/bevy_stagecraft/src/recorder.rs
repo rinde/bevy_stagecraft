@@ -1015,8 +1015,7 @@ impl Recorder {
         let pictures = app
             .world_mut()
             .get_resource_mut::<Captures>()
-            .map(|mut captures| core::mem::take(&mut captures.done))
-            .unwrap_or_default()
+            .map_or_default(|mut captures| core::mem::take(&mut captures.done))
             .into_values()
             .collect();
         let trace = app
