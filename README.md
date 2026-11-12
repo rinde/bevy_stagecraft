@@ -880,7 +880,13 @@ than the share `pixels` (default 0, so none) of the pixels differ.
   commit and run again.
 - On a mismatch the picture taken (`<name>.actual.png`) and one of what
   differs (`<name>.diff.png`, differing pixels magenta, the rest dimmed) are
-  written beside the baseline, and `index.html` links them.
+  written in `.diagnostics/` inside the baseline directory (a name may not
+  start with `.`, so they can never be or overwrite a baseline, even for checks
+  called `home` and `home.actual`), and `index.html` links them. Migration:
+  versions before this wrote them beside the baselines as `<name>.actual.png`
+  and `<name>.diff.png`; those files are never read, changed or deleted now,
+  because one may be a baseline. Delete the stale ones by hand (and ignore
+  `.diagnostics/` in version control).
 - `RIN_UPDATE_SNAPSHOTS=1` (or inserting `ScreenshotSettings { update: true }`)
   rewrites every baseline with the picture taken, and the check passes.
 - The overlay (cursor, caption, pick outlines) is hidden from the picture.
