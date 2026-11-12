@@ -42,6 +42,11 @@ const MAX_PICTURE_FRAMES: u32 = 600;
 const DIFF_COLOUR: [u8; 4] = [255, 0, 255, 255];
 /// How much of its brightness a pixel that matches keeps in a diff image.
 const DIFF_DIM_DIVISOR: u8 = 3;
+/// The directory, inside a baseline directory, that holds the pictures a
+/// failure leaves. A screenshot name may not start with `.`, so no baseline
+/// (`<name>.png`) can be this directory or lie in it, whatever the names are:
+/// `home.actual` is a baseline of its own and `home`'s picture taken is not it.
+const DIAGNOSTICS_DIR: &str = ".diagnostics";
 /// The file name suffix of the picture a baseline is compared with.
 const ACTUAL_SUFFIX: &str = "actual";
 /// The file name suffix of the picture that shows what differs.
@@ -163,6 +168,40 @@ pub(crate) fn directory_name(scenario: &str) -> String {
         "scenario".into()
     } else {
         slug
+    }
+}
+
+/// The file in a baseline directory that names the scenario it belongs to.
+/// A screenshot name may not start with `.`, so it never clashes with one.
+const OWNER_FILE: &str = ".scenario";
+
+/// Claims `folder` for `scenario`, or says who has it already.
+///
+/// `directory_name` is lossy (`A B` and `A-B` are both `a-b`), so two
+/// scenarios, or a scenario and one of its variants, could share baselines
+/// and overwrite each other's. The folder therefore records the exact name
+/// that owns it in [`OWNER_FILE`]; a different name finds it taken and the
+/// check is broken, not silently compared. A folder with baselines but no
+/// record (made before this existed) is adopted by the first scenario that
+/// uses it. Failing to write the record is not an error: the baselines then
+/// work as they did, unprotected.
+fn claim_directory(folder: &Path, scenario: &str) -> Result<(), String> {
+    let owner = folder.join(OWNER_FILE);
+    let Ok(existing) = fs::read_to_string(&owner) else {
+        if fs::create_dir_all(folder).is_ok() {
+            let _ = fs::write(&owner, format!("{scenario}\n"));
+        }
+        return Ok(());
+    };
+    let existing = existing.trim_end_matches(['\r', '\n']);
+    if existing == scenario {
+        Ok(())
+    } else {
+        Err(format!(
+            "the baseline directory {} belongs to the scenario `{existing}`, and `{scenario}` \
+             would share it: rename one of them so their names differ in letters or digits",
+            folder.display()
+        ))
     }
 }
 
@@ -459,6 +498,7 @@ pub(crate) fn prepare(
     let folder = directory
         .unwrap_or_else(|| Path::new("."))
         .join(directory_name(scenario));
+    let claim = claim_directory(&folder, scenario);
     let mut judgements = Vec::new();
     for part in check.parts() {
         let Check::Screenshot {
@@ -470,6 +510,7 @@ pub(crate) fn prepare(
             continue;
         };
         let judgement = match &picture {
+            Ok(_) if claim.is_err() => Judgement::Broken(claim.clone().err().unwrap_or_default()),
             Ok(picture) => {
                 let (judgement, record) = judge(
                     world,
@@ -632,8 +673,12 @@ fn compare(
     tolerance: Tolerance,
     update: bool,
 ) -> Result<Compared, String> {
-    let actual_path = baseline.with_file_name(format!("{name}.{ACTUAL_SUFFIX}.png"));
-    let diff_path = baseline.with_file_name(format!("{name}.{DIFF_SUFFIX}.png"));
+    // Files an older version left as `<name>.actual.png` beside the baselines
+    // are never touched: one of them may be a baseline of a check with that
+    // name. They are stale and can be deleted by hand.
+    let diagnostics = baseline.with_file_name(DIAGNOSTICS_DIR);
+    let actual_path = diagnostics.join(format!("{name}.{ACTUAL_SUFFIX}.png"));
+    let diff_path = diagnostics.join(format!("{name}.{DIFF_SUFFIX}.png"));
     if update {
         write_png(baseline, actual)?;
         remove_stale(&actual_path, &diff_path);
@@ -846,6 +891,48 @@ mod tests {
         assert_eq!(directory_name("???"), "scenario");
     }
 
+    /// A fresh directory for one test's baselines.
+    fn scratch(test: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("rin-claims-{}-{test}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        path
+    }
+
+    #[test]
+    fn scenarios_whose_names_make_the_same_directory_do_not_share_it() {
+        let dir = scratch("collision");
+        let folder = dir.join(directory_name("A B"));
+        assert_eq!(directory_name("A B"), directory_name("A-B"));
+        assert!(claim_directory(&folder, "A B").is_ok());
+        assert!(claim_directory(&folder, "A B").is_ok());
+        let refused = claim_directory(&folder, "A-B").err().unwrap_or_default();
+        assert!(
+            refused.contains("`A B`") && refused.contains("`A-B`"),
+            "{refused}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn variants_whose_labels_make_the_same_directory_do_not_share_it() {
+        let dir = scratch("variant-collision");
+        let folder = dir.join(directory_name("Home [dark mode]"));
+        assert!(claim_directory(&folder, "Home [dark mode]").is_ok());
+        assert!(claim_directory(&folder, "Home [dark-mode]").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_of_baselines_from_before_owners_were_recorded_is_adopted() {
+        let dir = scratch("legacy");
+        let folder = dir.join("home");
+        assert!(fs::create_dir_all(&folder).is_ok());
+        assert!(fs::write(folder.join("home.png"), b"x").is_ok());
+        assert!(claim_directory(&folder, "Home").is_ok());
+        assert!(claim_directory(&folder, "HOME").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_screenshot_check_is_skipped_where_there_is_no_renderer() {
         use crate::{Outcome, Scenario};
@@ -999,8 +1086,8 @@ mod flow {
         let report = run(&dir, &check, [10, 20, 90, 255], false);
         assert!(!report.passed());
         let folder = dir.join("home-screen");
-        assert!(folder.join("home.actual.png").exists());
-        assert!(folder.join("home.diff.png").exists());
+        assert!(folder.join(".diagnostics/home.actual.png").exists());
+        assert!(folder.join(".diagnostics/home.diff.png").exists());
         assert!(matches!(
             report.screenshots.first().map(|record| &record.result),
             Some(ScreenshotResult::Mismatch { diff: Some(_), .. })
@@ -1009,7 +1096,71 @@ mod flow {
         let loose = check.with_tolerance(Tolerance::default().with_colour(100));
         let accepted = run(&dir, &loose, [10, 20, 90, 255], false);
         assert!(accepted.passed(), "{:?}", accepted.failures());
-        assert!(!folder.join("home.actual.png").exists());
+        assert!(!folder.join(".diagnostics/home.actual.png").exists());
+    }
+
+    /// Reads the baseline of `name` in the `home-screen` folder of `dir`.
+    fn baseline_of(dir: &Path, name: &str) -> Vec<u8> {
+        fs::read(dir.join(format!("home-screen/{name}.png"))).unwrap_or_default()
+    }
+
+    #[test]
+    fn diagnostics_never_overwrite_or_delete_a_baseline_with_a_colliding_name() {
+        let dir = directory("colliding");
+        let home = Check::screenshot("home");
+        let other = Check::screenshot("home.actual");
+        let diff = Check::screenshot("home.diff");
+        for check in [&home, &other, &diff] {
+            run(&dir, check, [10, 20, 30, 255], false);
+        }
+        // Give each baseline its own colour so a clobbered one shows.
+        run(&dir, &other, [1, 2, 3, 255], true);
+        run(&dir, &diff, [4, 5, 6, 255], true);
+        let (kept_other, kept_diff) = (
+            baseline_of(&dir, "home.actual"),
+            baseline_of(&dir, "home.diff"),
+        );
+        assert!(!kept_other.is_empty() && !kept_diff.is_empty());
+
+        // A mismatch in `home` leaves both alone.
+        let mismatch = run(&dir, &home, [10, 20, 90, 255], false);
+        assert!(!mismatch.passed());
+        assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
+        assert_eq!(baseline_of(&dir, "home.diff"), kept_diff);
+
+        // A match in `home` removes its own leftovers only.
+        let matched = run(&dir, &home, [10, 20, 30, 255], false);
+        assert!(matched.passed(), "{:?}", matched.failures());
+        assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
+        assert_eq!(baseline_of(&dir, "home.diff"), kept_diff);
+        assert!(
+            !dir.join("home-screen/.diagnostics/home.actual.png")
+                .exists()
+        );
+
+        // So does an update.
+        run(&dir, &home, [10, 20, 90, 255], false);
+        let updated = run(&dir, &home, [10, 20, 90, 255], true);
+        assert!(updated.passed(), "{:?}", updated.failures());
+        assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
+        assert_eq!(baseline_of(&dir, "home.diff"), kept_diff);
+
+        // Both baselines still compare against their own picture.
+        let still = run(&dir, &other, [1, 2, 3, 255], false);
+        assert!(still.passed(), "{:?}", still.failures());
+    }
+
+    #[test]
+    fn pictures_an_older_version_left_beside_the_baselines_are_not_touched() {
+        let dir = directory("legacy");
+        let check = Check::screenshot("home");
+        run(&dir, &check, [10, 20, 30, 255], false);
+        let legacy = dir.join("home-screen/home.actual.png");
+        fs::write(&legacy, b"old").unwrap_or_default();
+        run(&dir, &check, [10, 20, 90, 255], false);
+        run(&dir, &check, [10, 20, 30, 255], false);
+        run(&dir, &check, [10, 20, 90, 255], true);
+        assert_eq!(fs::read(&legacy).unwrap_or_default(), b"old");
     }
 
     #[test]
