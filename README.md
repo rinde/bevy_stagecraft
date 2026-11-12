@@ -1376,7 +1376,7 @@ are refused in the gallery while recording.
 ## Depending on it from a private git repository
 
 In the Bevy app's `Cargo.toml`, as a dev-dependency, pinned to a revision (the
-Bevy version must match the one the crate uses, `=0.20.0`):
+Bevy version must match the one the crate uses, `=0.20.1`):
 
 ```toml
 [dev-dependencies]

@@ -35,7 +35,7 @@ probes over the world.
 
 ## Bevy version policy
 
-Bevy is pinned exactly (`=0.20.0`) in the workspace `Cargo.toml`.
+Bevy is pinned exactly (`=0.20.1`) in the workspace `Cargo.toml`.
 
 The Bevy feature list in `crates/bevy_stagecraft/Cargo.toml` is curated by
 hand, with `default-features = false` in the workspace. Do not "simplify" it to
