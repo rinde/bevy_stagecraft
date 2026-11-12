@@ -894,7 +894,8 @@ impl SessionRecorder {
         fs::create_dir_all(&config.dir).map_err(|error| {
             SessionError::new(format!("cannot create {}: {error}", config.dir.display()))
         })?;
-        let stem = free_stem(&config.dir, name);
+        let stem = free_stem(&config.dir, name)
+            .map_err(|error| SessionError::new(format!("no file name could be chosen: {error}")))?;
         let setup = capture_setup(world, &config.dir, &stem).map_err(|error| {
             SessionError::new(format!("the app's setup could not be captured: {error}"))
         })?;
@@ -1071,8 +1072,9 @@ const HEADER: &str = "\
 // named for; its name leads the report of every step in it.
 ";
 
-/// A file-name-safe version of `name` that no file in `dir` has yet.
-fn free_stem(dir: &std::path::Path, name: &str) -> String {
+/// A file-name-safe version of `name` that no file in `dir` starts with
+/// (`"{stem}."`), so an orphaned saved world or capture file is safe too.
+fn free_stem(dir: &std::path::Path, name: &str) -> Result<String, crate::save::SaveError> {
     let stem: String = name
         .chars()
         .map(|c| {
@@ -1088,13 +1090,7 @@ fn free_stem(dir: &std::path::Path, name: &str) -> String {
     } else {
         stem
     };
-    let mut candidate = stem.clone();
-    let mut number = 1_u32;
-    while dir.join(format!("{candidate}.ron")).exists() {
-        number += 1;
-        candidate = format!("{stem}-{number}");
-    }
-    candidate
+    crate::save::free_session_stem(dir, &stem)
 }
 
 impl Active {

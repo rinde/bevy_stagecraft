@@ -278,6 +278,14 @@ fn resolve(base_dir: Option<&Path>, file: &str) -> PathBuf {
 /// error and never "free": an incomplete listing could hide the very file a
 /// save would then overwrite.
 fn stem_is_taken(dir: &Path, stem: &str) -> Result<bool, SaveError> {
+    stem_is_used(dir, stem, false)
+}
+
+/// Whether `dir` holds a file named `"{stem}.{extension}"`; the scenario's own
+/// `"{stem}.ron"` counts only when `scenario_counts`. A recorded session
+/// counts it, since it has yet to write that file and must not replace one
+/// that is there.
+fn stem_is_used(dir: &Path, stem: &str, scenario_counts: bool) -> Result<bool, SaveError> {
     let prefix = format!("{stem}.");
     let scenario = format!("{stem}.ron");
     let unreadable =
@@ -285,7 +293,7 @@ fn stem_is_taken(dir: &Path, stem: &str) -> Result<bool, SaveError> {
     for entry in fs::read_dir(dir).map_err(unreadable)? {
         let name = entry.map_err(unreadable)?.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with(&prefix) && name != scenario {
+        if name.starts_with(&prefix) && (scenario_counts || name != scenario) {
             return Ok(true);
         }
     }
@@ -311,6 +319,30 @@ fn free_stem_number(dir: &Path, name: &str, from: u32) -> Result<u32, SaveError>
         })?;
     }
     Ok(number)
+}
+
+/// The stem for a recorded session named `name` (already file-name safe): the
+/// first of `name`, `name-2`, `name-3` with no file `"{stem}.{extension}"` in
+/// `dir`, the scenario file and any orphaned saved world or app capture file
+/// included, so neither is overwritten.
+///
+/// # Errors
+///
+/// A directory that cannot be listed is an error and never a free stem. A
+/// concurrent save can still take the stem before the session writes; the
+/// session shares [`AppSetup::capture`](crate::AppSetup::capture)'s contract
+/// of creating files exclusively.
+pub(crate) fn free_session_stem(dir: &Path, name: &str) -> Result<String, SaveError> {
+    let mut number = 1_u32;
+    loop {
+        let stem = numbered_stem(name, number);
+        if !stem_is_used(dir, &stem, true)? {
+            return Ok(stem);
+        }
+        number = number.checked_add(1).ok_or_else(|| {
+            SaveError::new(format!("no free name for {name} in {}", dir.display()))
+        })?;
+    }
 }
 
 /// Writes `text` as the saved world of `stem` numbered `number` or, when that

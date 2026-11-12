@@ -407,6 +407,19 @@ fn a_second_recording_does_not_overwrite_the_first() {
 }
 
 #[test]
+fn a_session_does_not_reuse_a_stem_an_orphaned_sidecar_holds() {
+    let dir = dir("session-orphan-sidecar");
+    fs::create_dir_all(&dir).expect("directory");
+    let sidecar = dir.join("again.scene.ron");
+    fs::write(&sidecar, "kept").expect("sidecar");
+    let mut app = app(&dir);
+    session::start(app.world_mut(), "again").expect("starts");
+    let saved = session::stop(app.world_mut()).expect("saved");
+    assert_eq!(saved.path, dir.join("again-2.ron"));
+    assert_eq!(fs::read_to_string(&sidecar).expect("read"), "kept");
+}
+
+#[test]
 fn starting_twice_or_stopping_nothing_is_an_error_not_a_panic() {
     let dir = dir("session-errors");
     let mut app = app(&dir);
