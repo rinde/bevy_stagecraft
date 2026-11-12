@@ -301,7 +301,80 @@ impl Emitter {
         } else {
             gap
         };
-        self.emit(Step::Wait(frames_u16(gap)), gap);
+        self.emit_wait(gap);
+    }
+
+    /// Adds `Wait` steps totalling `frames`: a `Wait` holds at most
+    /// `u16::MAX` frames, so a longer pause is several, and the script's
+    /// clock stays the one the steps really play.
+    fn emit_wait(&mut self, frames: u32) {
+        let mut left = frames;
+        while left > 0 {
+            let chunk = frames_u16(left);
+            self.emit(Step::Wait(chunk), u32::from(chunk));
+            left = left.saturating_sub(u32::from(chunk));
+        }
+    }
+
+    /// Adds a straight drag of `frames`. A `Drag` holds at most `u16::MAX`
+    /// frames; a longer one is spelt out as a move, a press, `Glide`s and a
+    /// release, so it can be as long as needed.
+    fn emit_drag(
+        &mut self,
+        button: MouseButton,
+        (from, start): (&Target, Vec2),
+        (to, end): (&Target, Vec2),
+        frames: u32,
+    ) {
+        if u16::try_from(frames).is_ok() {
+            self.emit(
+                Step::Drag {
+                    from: from.clone(),
+                    to: to.clone(),
+                    frames: frames_u16(frames),
+                },
+                frames.saturating_add(2),
+            );
+        } else {
+            self.emit(Step::MoveTo(from.clone()), 1);
+            self.pointer = Some(start);
+            self.emit(Step::Press(button), 1);
+            self.emit_glide(to.clone(), end, frames);
+            self.emit(Step::Release(button), 1);
+        }
+    }
+
+    /// Adds `Glide`s to `target` (at `to`) totalling `frames`: a `Glide` takes
+    /// at most `u16::MAX` frames, so a longer one is cut into legs through
+    /// points on the straight line from where the pointer is, which plays the
+    /// same path at the same speed. Without a known start the legs all aim at
+    /// `target`.
+    fn emit_glide(&mut self, target: Target, to: Vec2, frames: u32) {
+        let from = self.pointer;
+        let mut done = 0_u32;
+        while done < frames {
+            let chunk = frames_u16(frames.saturating_sub(done));
+            done = done.saturating_add(u32::from(chunk));
+            let leg_target = if done >= frames {
+                target.clone()
+            } else if let Some(from) = from {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "frame counts far below 2^24 lose nothing that shows in a pixel"
+                )]
+                let fraction = done as f32 / frames as f32;
+                Target::screen(from.lerp(to, fraction))
+            } else {
+                target.clone()
+            };
+            self.emit(
+                Step::Glide {
+                    target: leg_target,
+                    frames: chunk,
+                },
+                u32::from(chunk),
+            );
+        }
     }
 
     /// Notes that the cursor was at `position` in `frame`.
@@ -366,13 +439,7 @@ impl Emitter {
             if !there {
                 self.wait_before(previous, toward_widget);
                 let frames = frame.saturating_sub(previous).max(1);
-                self.emit(
-                    Step::Glide {
-                        target,
-                        frames: frames_u16(frames),
-                    },
-                    frames,
-                );
+                self.emit_glide(target, position, frames);
                 self.pointer = Some(position);
             }
             previous = frame;
@@ -467,13 +534,11 @@ impl Emitter {
         {
             self.wait_until(frame);
             let frames = held.saturating_sub(2).max(1);
-            self.emit(
-                Step::Drag {
-                    from: target.clone(),
-                    to: release_target.clone(),
-                    frames: frames_u16(frames),
-                },
-                frames.saturating_add(2),
+            self.emit_drag(
+                button,
+                (target, position),
+                (release_target, *release_position),
+                frames,
             );
             self.pointer = Some(*release_position);
         } else {
@@ -773,7 +838,8 @@ fn chord_at(steps: &[Step], at: usize) -> Option<(Step, usize)> {
     None
 }
 
-/// A frame count as the `u16` steps take; longer is not a real pause.
+/// A frame count as the `u16` steps take, at most `u16::MAX`: callers split
+/// longer durations into several steps rather than lose frames.
 fn frames_u16(frames: u32) -> u16 {
     u16::try_from(frames).unwrap_or(u16::MAX)
 }

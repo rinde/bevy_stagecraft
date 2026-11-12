@@ -660,3 +660,106 @@ fn shift_held_across_several_characters_still_makes_one_type_step() {
     let steps = convert(&events);
     assert_eq!(typed_texts(&steps), ["AB"], "{steps:?}");
 }
+
+/// The frames the steps spend, as playback counts them: waits and glides by
+/// their length, a drag by its length plus its press and release, every other
+/// step as one.
+fn played_frames(steps: &[Step]) -> u32 {
+    steps
+        .iter()
+        .map(|step| match step {
+            Step::Wait(frames) | Step::Glide { frames, .. } => u32::from(*frames),
+            Step::Drag { frames, .. } => u32::from(*frames) + 2,
+            _ => 1,
+        })
+        .sum()
+}
+
+fn tap_at(frame: u32, x: f32, y: f32) -> [RecordedEvent; 2] {
+    let target = Target::screen(Vec2::new(x, y));
+    [
+        button(frame, ButtonState::Pressed, x, y, target.clone()),
+        button(frame + 1, ButtonState::Released, x, y, target),
+    ]
+}
+
+#[test]
+fn a_pause_longer_than_a_u16_is_several_waits_that_add_up() {
+    let options = StepOptions {
+        idle_frames: 200_000,
+        idle_wait: 30,
+        ..StepOptions::default()
+    };
+    let mut events = vec![moved(0, 10.0, 10.0)];
+    events.extend(tap_at(1, 10.0, 10.0));
+    events.extend(tap_at(70_001, 10.0, 10.0));
+    let steps = steps_from_events(&events, 70_002, &options);
+    let waited: u32 = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Wait(frames) => Some(u32::from(*frames)),
+            _ => None,
+        })
+        .sum();
+    assert!(waited >= 70_000, "{steps:?}");
+    assert!(
+        steps.iter().all(|step| !matches!(step, Step::Wait(0))),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn a_glide_longer_than_a_u16_keeps_its_length_and_its_end() {
+    let events = [moved(0, 0.0, 0.0), moved(70_000, 100.0, 0.0)];
+    // A pause between samples this long would end the run, so lift the limit.
+    let options = StepOptions {
+        idle_frames: 200_000,
+        ..StepOptions::default()
+    };
+    let steps = steps_from_events(&events, 70_000, &options);
+    let glides: Vec<_> = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Glide { target, frames } => Some((target, u32::from(*frames))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(glides.iter().map(|(_, frames)| frames).sum::<u32>(), 70_000);
+    assert!(glides.len() >= 2, "{steps:?}");
+    assert!(
+        matches!(glides.last(), Some((Target::Screen(end), _)) if *end == Vec2::new(100.0, 0.0)),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn a_drag_longer_than_a_u16_is_spelt_out_and_events_after_it_stay_in_time() {
+    let from = Target::screen(Vec2::new(10.0, 10.0));
+    let to = Target::screen(Vec2::new(110.0, 10.0));
+    let mut events = vec![
+        moved(0, 10.0, 10.0),
+        button(5, ButtonState::Pressed, 10.0, 10.0, from),
+        moved(70_005, 110.0, 10.0),
+        button(70_006, ButtonState::Released, 110.0, 10.0, to),
+    ];
+    events.push(key(70_020, KeyCode::KeyA, ButtonState::Pressed));
+    events.push(key(70_021, KeyCode::KeyA, ButtonState::Released));
+    let options = StepOptions {
+        idle_frames: 200_000,
+        ..StepOptions::default()
+    };
+    let steps = steps_from_events(&events, 70_030, &options);
+    assert!(
+        steps.iter().all(|step| !matches!(step, Step::Drag { .. })),
+        "{steps:?}"
+    );
+    let tap = steps
+        .iter()
+        .position(|step| matches!(step, Step::Tap { .. }))
+        .unwrap();
+    let before = played_frames(steps.get(..tap).unwrap());
+    assert!(
+        (70_019..=70_024).contains(&before),
+        "the tap plays at frame {before}: {steps:?}"
+    );
+}

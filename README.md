@@ -1127,7 +1127,9 @@ waits for that widget to be actionable anyway, a modifier held around a
 key folds into a `Tap`, and consecutive keys that typed text (as the keyboard
 reported it, so other layouts record right), each released quickly, merge into
 one `Type(text: "..")`; Enter, Tab, Backspace, Control, Alt and Super chords and
-held keys stay `Key`, `KeyUp` and `Tap` steps. The thresholds are `StepOptions`. The app plugs in through its own reflected
+held keys stay `Key`, `KeyUp` and `Tap` steps. A step holds at most 65,535
+frames, so a longer pause, glide or drag is written as several steps that play
+the same total frames and path. The thresholds are `StepOptions`. The app plugs in through its own reflected
 types (see [The app's own setups, views and targets](#the-apps-own-setups-views-and-targets)):
 
 - `AppSetup::capture` runs on start and turns the state into one of the app's
