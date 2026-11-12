@@ -18,7 +18,7 @@ use std::{fs, path::Path, path::PathBuf};
 use bevy::{
     camera::visibility::Visibility,
     ecs::{entity::Entity, resource::Resource, world::World},
-    math::{UVec2, Vec2},
+    math::{Affine2, UVec2, Vec2},
     ui::{ComputedNode, UiGlobalTransform},
 };
 use serde::{Deserialize, Serialize};
@@ -564,15 +564,49 @@ pub(super) fn verdict(world: &World, check: &Check) -> Verdict {
     }
 }
 
+/// How far a corner may sit inside a pixel edge and still count as on it:
+/// a node turned a quarter turn has corners off by float noise, which would
+/// otherwise widen the crop by a whole pixel.
+const EDGE_EPSILON: f32 = 1e-3;
+
 /// The rectangle of the picture a target's node covers, in physical pixels:
 /// where its top left is and how big it is.
+///
+/// This is the axis-aligned bounding box of the node's box after its complete
+/// [`UiGlobalTransform`] (its own `UiTransform` and those of its parents:
+/// rotation, scale and translation), widened to whole pixels. A node turned a
+/// quarter turn therefore swaps its width and height; one turned any other
+/// way is cropped to the smallest upright rectangle holding it, so pixels of
+/// the picture outside the node itself but inside that rectangle are part of
+/// the crop. Parts left of or above the picture are clipped here and the rest
+/// by [`Picture::crop`].
 fn node_rectangle(world: &World, node: Entity) -> Option<(UVec2, UVec2)> {
     let computed = world.get::<ComputedNode>(node)?;
-    let centre = world.get::<UiGlobalTransform>(node)?.affine().translation;
-    let size: Vec2 = computed.size();
-    let top_left = (centre - size / 2.0).floor().max(Vec2::ZERO);
-    let bottom_right = (centre + size / 2.0).ceil().max(Vec2::ZERO);
-    Some((top_left.as_uvec2(), (bottom_right - top_left).as_uvec2()))
+    let transform = world.get::<UiGlobalTransform>(node)?.affine();
+    Some(bounds(transform, computed.size()))
+}
+
+/// [`node_rectangle`] for a box of `size` centred on the origin that
+/// `transform` places.
+fn bounds(transform: Affine2, size: Vec2) -> (UVec2, UVec2) {
+    let half = size / 2.0;
+    let (low, high) = [
+        Vec2::new(-half.x, -half.y),
+        Vec2::new(half.x, -half.y),
+        Vec2::new(-half.x, half.y),
+        half,
+    ]
+    .into_iter()
+    .map(|corner| transform.transform_point2(corner))
+    .fold((Vec2::MAX, Vec2::MIN), |(low, high), point| {
+        (low.min(point), high.max(point))
+    });
+    let top_left = (low + EDGE_EPSILON).floor().max(Vec2::ZERO);
+    let bottom_right = (high - EDGE_EPSILON).ceil().max(Vec2::ZERO);
+    (
+        top_left.as_uvec2(),
+        (bottom_right - top_left).max(Vec2::ZERO).as_uvec2(),
+    )
 }
 
 /// Compares the picture, or the part of it a node covers, with its baseline.
@@ -821,6 +855,62 @@ mod png {
 mod tests {
     use super::*;
     use crate::targets::Target;
+
+    #[test]
+    fn a_quarter_turn_swaps_the_width_and_height_of_the_crop() {
+        let turned =
+            Affine2::from_angle_translation(core::f32::consts::FRAC_PI_2, Vec2::new(100.0, 50.0));
+        let (top_left, size) = bounds(turned, Vec2::new(40.0, 20.0));
+        assert_eq!((top_left, size), (UVec2::new(90, 30), UVec2::new(20, 40)));
+    }
+
+    #[test]
+    fn a_scale_grows_the_crop_about_the_centre() {
+        let scaled =
+            Affine2::from_scale_angle_translation(Vec2::new(2.0, 0.5), 0.0, Vec2::new(100.0, 50.0));
+        let (top_left, size) = bounds(scaled, Vec2::new(40.0, 20.0));
+        assert_eq!((top_left, size), (UVec2::new(60, 45), UVec2::new(80, 10)));
+    }
+
+    #[test]
+    fn a_turn_of_forty_five_degrees_is_cropped_to_the_upright_bounding_box() {
+        let turned =
+            Affine2::from_angle_translation(core::f32::consts::FRAC_PI_4, Vec2::new(50.0, 50.0));
+        let (top_left, size) = bounds(turned, Vec2::new(20.0, 20.0));
+        // The diagonal is 28.28 long, so the box runs from 35.86 to 64.14.
+        assert_eq!((top_left, size), (UVec2::new(35, 35), UVec2::new(30, 30)));
+    }
+
+    #[test]
+    fn a_node_partly_left_of_the_picture_is_clipped_to_its_visible_part() {
+        let (top_left, size) = bounds(
+            Affine2::from_translation(Vec2::new(5.0, 20.0)),
+            Vec2::new(30.0, 10.0),
+        );
+        assert_eq!((top_left, size), (UVec2::new(0, 15), UVec2::new(20, 10)));
+    }
+
+    #[test]
+    fn the_crop_of_a_transformed_node_is_read_from_the_world() {
+        let mut world = World::new();
+        // A physical scale factor of 2 makes the computed size physical already.
+        let node = world
+            .spawn((
+                ComputedNode {
+                    size: Vec2::new(80.0, 40.0),
+                    ..ComputedNode::default()
+                },
+                UiGlobalTransform::from(Affine2::from_angle_translation(
+                    core::f32::consts::FRAC_PI_2,
+                    Vec2::new(200.0, 100.0),
+                )),
+            ))
+            .id();
+        assert_eq!(
+            node_rectangle(&world, node),
+            Some((UVec2::new(180, 60), UVec2::new(40, 80)))
+        );
+    }
 
     #[test]
     fn a_picture_differs_only_past_the_colour_tolerance() {
