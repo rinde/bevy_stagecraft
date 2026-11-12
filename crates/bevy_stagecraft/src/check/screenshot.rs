@@ -854,7 +854,14 @@ mod png {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::targets::Target;
+    use crate::{HeadlessPlugins, targets::Target};
+    use bevy::{
+        prelude::*,
+        ui::{UiTransform, px},
+    };
+
+    /// Updates the headless app gets to lay the UI out and place it.
+    const LAYOUT_FRAMES: u8 = 3;
 
     #[test]
     fn a_quarter_turn_swaps_the_width_and_height_of_the_crop() {
@@ -910,6 +917,73 @@ mod tests {
             node_rectangle(&world, node),
             Some((UVec2::new(180, 60), UVec2::new(40, 80)))
         );
+    }
+
+    /// Lays out a 200 by 100 panel at (50, 50) carrying `transform`, with a 40
+    /// by 30 child at local (20, 10), in a headless app at `scale_factor`, and
+    /// gives the child's rectangle as the screenshot check would crop it.
+    fn laid_out_child_rectangle(
+        transform: UiTransform,
+        scale_factor: f32,
+    ) -> Option<(UVec2, UVec2)> {
+        let mut app = App::new();
+        app.add_plugins(HeadlessPlugins::default().with_scale_factor(scale_factor));
+        app.finish();
+        app.cleanup();
+        app.world_mut().spawn(Camera2d);
+        let child = app
+            .world_mut()
+            .spawn(Node {
+                position_type: PositionType::Absolute,
+                left: px(20),
+                top: px(10),
+                width: px(40),
+                height: px(30),
+                ..Node::default()
+            })
+            .id();
+        app.world_mut()
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(50),
+                    top: px(50),
+                    width: px(200),
+                    height: px(100),
+                    ..Node::default()
+                },
+                transform,
+            ))
+            .add_child(child);
+        for _ in 0..LAYOUT_FRAMES {
+            app.update();
+        }
+        node_rectangle(app.world(), child)
+    }
+
+    #[test]
+    fn a_child_of_a_parent_turned_a_quarter_turn_is_cropped_with_width_and_height_swapped() {
+        // The parent turns about its middle (150, 100); the child's middle,
+        // (-60, -25) from there, lands at (25, -60) from it: (175, 40).
+        let rectangle =
+            laid_out_child_rectangle(UiTransform::from_rotation(Rot2::degrees(90.0)), 1.0);
+        assert_eq!(rectangle, Some((UVec2::new(160, 20), UVec2::new(30, 40))));
+    }
+
+    #[test]
+    fn a_child_of_a_scaled_parent_is_cropped_to_the_scaled_box_clipped_to_the_picture() {
+        // Doubled about (150, 100) the child's middle moves to (30, 50) and
+        // the box to 80 by 60, whose first ten columns lie left of the picture.
+        let rectangle = laid_out_child_rectangle(UiTransform::from_scale(Vec2::splat(2.0)), 1.0);
+        assert_eq!(rectangle, Some((UVec2::new(0, 20), UVec2::new(70, 60))));
+    }
+
+    #[test]
+    fn at_a_physical_scale_factor_of_two_the_crop_is_in_physical_pixels() {
+        // The same layout as the quarter turn above, twice as many pixels.
+        let rectangle =
+            laid_out_child_rectangle(UiTransform::from_rotation(Rot2::degrees(90.0)), 2.0);
+        assert_eq!(rectangle, Some((UVec2::new(320, 40), UVec2::new(60, 80))));
     }
 
     #[test]
