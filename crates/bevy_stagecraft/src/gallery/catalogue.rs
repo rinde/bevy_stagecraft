@@ -435,3 +435,46 @@ impl Gallery {
         self.len() == 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, reason = "tests may panic")]
+
+    use super::*;
+    use crate::Step;
+
+    #[test]
+    fn a_file_restored_with_the_same_stamp_is_reloaded_and_reported() {
+        let dir =
+            std::env::temp_dir().join(format!("rin-catalogue-restored-{}", std::process::id()));
+        drop(fs::remove_dir_all(&dir));
+        fs::create_dir_all(&dir).expect("a temp directory");
+        let file = dir.join("a.ron");
+        let away = dir.join("elsewhere");
+        let text = Scenario::new("a")
+            .steps([Step::wait(1)])
+            .to_ron()
+            .expect("a scenario exports");
+        fs::write(&file, text).expect("written");
+        let mut gallery = Gallery::new().directory("Files", &dir, &Registry::default());
+        let revision = gallery.revision();
+
+        fs::rename(&file, &away).expect("moved away");
+        let reloads = gallery.poll_files();
+        assert!(matches!(reloads.as_slice(), [Reload::Changed(0)]));
+        assert_eq!(
+            gallery.get(0).and_then(GalleryEntry::error),
+            Some("The file is gone")
+        );
+        assert_ne!(gallery.revision(), revision, "the catalogue is told");
+
+        // A rename keeps the modification time and length: the same stamp.
+        fs::rename(&away, &file).expect("moved back");
+        let revision = gallery.revision();
+        let reloads = gallery.poll_files();
+        assert!(matches!(reloads.as_slice(), [Reload::Changed(0)]));
+        assert!(gallery.get(0).is_some_and(|entry| entry.error().is_none()));
+        assert_ne!(gallery.revision(), revision, "the catalogue is told again");
+        drop(fs::remove_dir_all(&dir));
+    }
+}
