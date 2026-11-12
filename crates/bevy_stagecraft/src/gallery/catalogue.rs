@@ -68,6 +68,10 @@ pub struct GalleryEntry {
     unloaded: bool,
     /// How the file looked when it was last read.
     stamp: Option<FileStamp>,
+    /// Whether `error` comes from the directory scan (the file is gone, or the
+    /// directory could not be read) and not from loading the file, so the next
+    /// scan that finds the file reads it again whatever its stamp.
+    scan_error: bool,
 }
 
 impl GalleryEntry {
@@ -81,6 +85,7 @@ impl GalleryEntry {
             error: None,
             unloaded: false,
             stamp: None,
+            scan_error: false,
         }
     }
 
@@ -104,6 +109,7 @@ impl GalleryEntry {
             return;
         };
         self.stamp = stamp_of(&path);
+        self.scan_error = false;
         match load_ron_file(&path, registry) {
             Ok(scenario) => {
                 self.scenario = match prepare {
@@ -200,8 +206,10 @@ impl Gallery {
     /// restarts if its file changed. A file that does not load shows its
     /// error in the catalogue and leaves the last version that loaded in
     /// place (one that never loaded cannot be played). An unreadable
-    /// directory gives an empty group, and a file that is deleted keeps its
-    /// entry, marked.
+    /// directory gives an empty group at first; once the gallery runs, a
+    /// failed scan keeps every entry, marked with the error, and the next
+    /// good scan reads them again. A file that is deleted keeps its entry,
+    /// marked.
     ///
     /// Files are looked at every [`WATCH_INTERVAL`] updates, so this needs no
     /// file-watching dependency. Call [`Gallery::prepare_files`] first if the
@@ -264,7 +272,7 @@ impl Gallery {
         };
         let prepare = self.prepare.clone();
         for watched in self.watched.clone() {
-            let files = ron_files(&watched.dir).unwrap_or_default();
+            let scan = ron_files(&watched.dir);
             let before: usize = self
                 .groups
                 .iter()
@@ -274,6 +282,22 @@ impl Gallery {
             let Some(group) = self.groups.get_mut(watched.group) else {
                 continue;
             };
+            let files = match scan {
+                Ok(files) => files,
+                Err(error) => {
+                    // A failed scan says nothing about the files: keep every
+                    // entry as it is and only note why it cannot be refreshed.
+                    let message = format!("The directory could not be read: {error}");
+                    for (at, entry) in group.entries.iter_mut().enumerate() {
+                        if entry.source.is_some() && entry.error.as_ref() != Some(&message) {
+                            entry.error = Some(message.clone());
+                            entry.scan_error = true;
+                            reloads.push(Reload::Changed(before + at));
+                        }
+                    }
+                    continue;
+                }
+            };
             for (at, entry) in group.entries.iter_mut().enumerate() {
                 let Some(path) = entry.source.clone() else {
                     continue;
@@ -282,9 +306,10 @@ impl Gallery {
                     let gone = "The file is gone".to_owned();
                     if entry.error.as_ref() != Some(&gone) {
                         entry.error = Some(gone);
+                        entry.scan_error = true;
                         reloads.push(Reload::Changed(before + at));
                     }
-                } else if stamp_of(&path) != entry.stamp {
+                } else if entry.scan_error || stamp_of(&path) != entry.stamp {
                     entry.reload(&registry, prepare.as_ref());
                     reloads.push(Reload::Changed(before + at));
                 }
