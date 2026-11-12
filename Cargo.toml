@@ -11,7 +11,7 @@ repository = "https://github.com/rinde/bevy_stagecraft"
 publish = false
 
 [workspace.dependencies]
-bevy = { version = "=0.20.0", default-features = false }
+bevy = { version = "=0.20.1", default-features = false }
 
 # Bevy is slow unoptimised, so dependencies get full optimisation
 # even in dev builds, while our own code stays quick to compile.
