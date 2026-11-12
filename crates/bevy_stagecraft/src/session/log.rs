@@ -593,7 +593,10 @@ impl Emitter {
         let mut typed = 0_u32;
         let mut pending: Vec<(KeyCode, u32)> = Vec::new();
         let mut shifts = 0_u32;
-        let mut found = None;
+        // The last complete boundary: text length, characters, next index and
+        // frame. Kept as numbers so the text is copied once, not at every
+        // boundary (that was quadratic in the length of the typing).
+        let mut found: Option<(usize, u32, usize, u32)> = None;
         for (index, event) in events.iter().enumerate().skip(at) {
             if event.frame.saturating_sub(last_frame) > self.options.idle_frames {
                 break;
@@ -642,15 +645,18 @@ impl Emitter {
                 }
             }
             if pending.is_empty() && shifts == 0 && typed > 0 {
-                found = Some(Typing {
-                    text: text.clone(),
-                    frames: typed,
-                    next: index + 1,
-                    end_frame: event.frame,
-                });
+                found = Some((text.len(), typed, index + 1, event.frame));
             }
         }
-        found
+        let (length, frames, next, end_frame) = found?;
+        // Text after the boundary belongs to an incomplete suffix.
+        text.truncate(length);
+        Some(Typing {
+            text,
+            frames,
+            next,
+            end_frame,
+        })
     }
 }
 
