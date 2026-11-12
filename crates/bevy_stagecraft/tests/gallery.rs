@@ -2852,3 +2852,37 @@ fn a_directory_that_cannot_be_read_keeps_the_entries_and_recovers_on_a_later_sca
     assert_eq!(gallery.len(), 2);
     assert!((0..2).all(|at| gallery.get(at).is_some_and(|entry| entry.error().is_none())));
 }
+
+#[test]
+fn a_file_moved_away_and_back_unchanged_is_loaded_again_and_its_error_clears() {
+    let dir = scenario_dir("restored");
+    let away = dir.join("elsewhere");
+    drop(std::fs::remove_dir_all(&away));
+    let file = dir.join("a.ron");
+    std::fs::write(&file, scenario_file(0)).expect("written");
+    let mut app = watching_app(&dir);
+    assert!(
+        app.world()
+            .resource::<Gallery>()
+            .get(0)
+            .is_some_and(|entry| entry.error().is_none())
+    );
+    // Renaming keeps the modification time and the length, so the stamp of the
+    // file that comes back is the one of the last good read.
+    std::fs::rename(&file, &away).expect("moved away");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    assert_eq!(
+        gallery.get(0).and_then(|entry| entry.error()),
+        Some("The file is gone")
+    );
+    std::fs::rename(&away, &file).expect("moved back");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    assert_eq!(gallery.len(), 1);
+    assert!(
+        gallery.get(0).is_some_and(|entry| entry.error().is_none()),
+        "the error clears: {:?}",
+        gallery.get(0).and_then(|entry| entry.error())
+    );
+}
