@@ -25,7 +25,7 @@
 //! Roles come from the same components as [`Target::Role`](crate::Target),
 //! not from AccessKit.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt::Write as _;
 
 use bevy::{
@@ -251,6 +251,10 @@ impl Line {
     /// Whether this expected line and everything below it is satisfied by
     /// `actual`: the lines below as an ordered subsequence, each taking the
     /// first actual line after the last one used that satisfies it.
+    ///
+    /// Uncached on purpose: one match asks about each pair of lines at most
+    /// once, so remembering answers would only slow down the common case, a
+    /// tree that matches. [`Matcher`] is for the diff.
     fn matches(&self, actual: &Self) -> bool {
         if !self.head_matches(actual) {
             return false;
@@ -259,6 +263,92 @@ impl Line {
         for wanted in &self.children {
             let rest = actual.children.get(cursor..).unwrap_or_default();
             let Some(found) = rest.iter().position(|candidate| wanted.matches(candidate)) else {
+                return false;
+            };
+            cursor += found + 1;
+        }
+        true
+    }
+}
+
+/// Answers "does this expected line match that actual one" once per pair,
+/// for [`render_diff`].
+///
+/// One call of [`Line::matches`] asks about each pair at most once, but the
+/// diff asks again at every level it descends through, so a mismatch deep in
+/// a tree costs its depth times the size of the tree (see
+/// `a_deep_mismatch_matches_each_pair_once`). A result depends on the pair
+/// alone, so remembering it keeps the semantics and makes the whole diff cost
+/// about one match. It is not used for the first pass: a map lookup costs
+/// more than comparing one head, so there it only slowed the common case, a
+/// tree that matches.
+///
+/// Measured with `tree_matching_timings` (a mismatch, first pass and diff,
+/// test profile; `spine N deep, W wide` is a chain of N levels each holding W
+/// decoys before the next level):
+///
+/// | shape                         | before  | after   |
+/// | ----------------------------- | ------- | ------- |
+/// | spine 10 deep, 3 wide         | 5.9 us  | 7.2 us  |
+/// | spine 100 deep, 5 wide        | 302 us  | 150 us  |
+/// | spine 400 deep, 5 wide        | 4.5 ms  | 0.67 ms |
+/// | spine 400 deep, 50 wide       | 28 ms   | 4.3 ms  |
+/// | spine 1000 deep, 5 wide       | 16.5 ms | 1.3 ms  |
+/// | flat, 1000 siblings           | 25 us   | 286 us  |
+///
+/// The diff drops from quadratic in the depth to linear, and a wide flat
+/// level pays for filling the map without gaining anything; both are well
+/// under a frame, and a tree that matches is as fast as before.
+#[derive(Debug, Default)]
+struct Matcher {
+    /// The answer for a pair, keyed by the addresses of the two lines. Both
+    /// trees outlive the matcher and are not moved while it runs, so an
+    /// address names one line. Only looked up, never iterated.
+    seen: BTreeMap<(usize, usize), bool>,
+    /// How many pairs were worked out rather than remembered.
+    #[cfg(test)]
+    computed: usize,
+    /// Remember nothing: the behaviour before the cache, for comparison.
+    #[cfg(test)]
+    uncached: bool,
+}
+
+impl Matcher {
+    /// Whether `expected` and everything below it is satisfied by `actual`.
+    fn matches(&mut self, expected: &Line, actual: &Line) -> bool {
+        let key = (
+            core::ptr::from_ref(expected).addr(),
+            core::ptr::from_ref(actual).addr(),
+        );
+        #[cfg(test)]
+        if self.uncached {
+            self.computed += 1;
+            return self.compute(expected, actual);
+        }
+        if let Some(known) = self.seen.get(&key) {
+            return *known;
+        }
+        #[cfg(test)]
+        {
+            self.computed += 1;
+        }
+        let result = self.compute(expected, actual);
+        self.seen.insert(key, result);
+        result
+    }
+
+    /// The uncached answer of [`Self::matches`].
+    fn compute(&mut self, expected: &Line, actual: &Line) -> bool {
+        if !expected.head_matches(actual) {
+            return false;
+        }
+        let mut cursor = 0;
+        for wanted in &expected.children {
+            let rest = actual.children.get(cursor..).unwrap_or_default();
+            let Some(found) = rest
+                .iter()
+                .position(|candidate| self.matches(wanted, candidate))
+            else {
                 return false;
             };
             cursor += found + 1;
@@ -530,7 +620,7 @@ impl Tree {
             return Ok(());
         }
         let mut diff = String::new();
-        render_diff(&self.0, &actual, 0, &mut diff);
+        render_diff(&mut Matcher::default(), &self.0, &actual, 0, &mut diff);
         Err(diff.trim_end().to_owned())
     }
 }
@@ -618,7 +708,13 @@ fn read_quoted(text: &str) -> Result<(String, &str), String> {
 /// Writes the diff of an expected line against the actual one it was matched
 /// with: context for what holds, `-` for what was expected and `+` for what
 /// is there.
-fn render_diff(expected: &Line, actual: &Line, depth: usize, out: &mut String) {
+fn render_diff(
+    matcher: &mut Matcher,
+    expected: &Line,
+    actual: &Line,
+    depth: usize,
+    out: &mut String,
+) {
     if !expected.head_matches(actual) {
         write_expected(expected, depth, '-', out);
         let _ = writeln!(
@@ -638,7 +734,10 @@ fn render_diff(expected: &Line, actual: &Line, depth: usize, out: &mut String) {
     let mut cursor = 0;
     for wanted in &expected.children {
         let rest = actual.children.get(cursor..).unwrap_or_default();
-        if let Some(found) = rest.iter().position(|candidate| wanted.matches(candidate)) {
+        if let Some(found) = rest
+            .iter()
+            .position(|candidate| matcher.matches(wanted, candidate))
+        {
             write_expected(wanted, depth + 1, ' ', out);
             cursor += found + 1;
         } else if let Some(found) = rest
@@ -646,7 +745,7 @@ fn render_diff(expected: &Line, actual: &Line, depth: usize, out: &mut String) {
             .position(|candidate| candidate.kind == wanted.kind)
         {
             if let Some(candidate) = rest.get(found) {
-                render_diff(wanted, candidate, depth + 1, out);
+                render_diff(matcher, wanted, candidate, depth + 1, out);
             }
             cursor += found + 1;
         } else {
@@ -726,5 +825,173 @@ mod tests {
     fn values_compare_as_numbers() {
         assert!(State::Value("0.50".into()).is_held_by(&State::Value("0.5".into())));
         assert!(!State::Value("0.6".into()).is_held_by(&State::Value("0.5".into())));
+    }
+
+    /// A line with a label and children.
+    fn node(label: &str, children: Vec<Line>) -> Line {
+        Line {
+            kind: Kind::Panel,
+            label: Some(label.into()),
+            states: Vec::new(),
+            value: None,
+            children,
+        }
+    }
+
+    /// A spine `depth` deep. Every level holds `width` text decoys, of another
+    /// kind than the expected panels, and then the next level; the bottom is
+    /// the panel "a".
+    fn spine(depth: usize, width: usize) -> Line {
+        (0..depth).fold(node("a", Vec::new()), |below, _| {
+            let mut children: Vec<Line> = (0..width)
+                .map(|_| Line {
+                    kind: Kind::Text,
+                    ..node("p", Vec::new())
+                })
+                .collect();
+            children.push(below);
+            node("p", children)
+        })
+    }
+
+    /// The expected chain of `depth` panels down to "b", which `spine` lacks.
+    fn wanted_chain(depth: usize) -> Line {
+        (0..depth).fold(node("b", Vec::new()), |below, _| node("p", vec![below]))
+    }
+
+    #[test]
+    fn matching_keeps_the_ordered_partial_semantics() {
+        let actual = node(
+            "r",
+            vec![
+                node("a", Vec::new()),
+                node("b", vec![node("x", Vec::new())]),
+                node("c", Vec::new()),
+            ],
+        );
+        let wants = |labels: &[&str]| {
+            node(
+                "r",
+                labels.iter().map(|label| node(label, Vec::new())).collect(),
+            )
+        };
+        assert!(wants(&["a", "c"]).matches(&actual));
+        assert!(wants(&["b"]).matches(&actual));
+        assert!(!wants(&["c", "a"]).matches(&actual), "order must hold");
+        assert!(!wants(&["a", "a"]).matches(&actual), "a line is used once");
+        assert!(!wants(&["z"]).matches(&actual));
+    }
+
+    #[test]
+    fn a_cached_answer_for_a_pair_is_the_uncached_one() {
+        for (depth, width) in [(1, 0), (3, 2), (5, 3)] {
+            let actual = spine(depth, width);
+            for expected in [wanted_chain(depth), wanted_chain(depth - 1)] {
+                let mut cached = Matcher::default();
+                let mut plain = Matcher {
+                    uncached: true,
+                    ..Matcher::default()
+                };
+                assert_eq!(
+                    cached.matches(&expected, &actual),
+                    plain.matches(&expected, &actual)
+                );
+                let (mut with, mut without) = (String::new(), String::new());
+                render_diff(&mut cached, &expected, &actual, 0, &mut with);
+                render_diff(&mut plain, &expected, &actual, 0, &mut without);
+                assert_eq!(with, without);
+            }
+        }
+    }
+
+    #[test]
+    fn the_diff_of_a_deep_mismatch_points_at_the_first_of_the_right_kind() {
+        let mut diff = String::new();
+        render_diff(
+            &mut Matcher::default(),
+            &wanted_chain(2),
+            &spine(2, 1),
+            0,
+            &mut diff,
+        );
+        assert!(diff.contains("-     - panel \"b\""), "{diff}");
+        assert!(diff.contains("+     - panel \"a\""), "{diff}");
+        assert!(!diff.contains("text"), "{diff}");
+    }
+
+    #[test]
+    fn a_deep_mismatch_matches_each_pair_once() {
+        let (depth, width) = (200, 5);
+        let (expected, actual) = (wanted_chain(depth), spine(depth, width));
+        let mut cached = Matcher::default();
+        render_diff(&mut cached, &expected, &actual, 0, &mut String::new());
+        let mut plain = Matcher {
+            uncached: true,
+            ..Matcher::default()
+        };
+        render_diff(&mut plain, &expected, &actual, 0, &mut String::new());
+        // One pair per level and decoy at most, where asking again at every
+        // level cost depth times more.
+        assert!(
+            cached.computed <= depth * (width + 2),
+            "{} pairs worked out",
+            cached.computed
+        );
+        assert!(
+            plain.computed > 10 * cached.computed,
+            "{} against {}",
+            plain.computed,
+            cached.computed
+        );
+    }
+
+    /// Run by hand for the numbers in the pull request that added `Matcher`:
+    /// `cargo test -p bevy_stagecraft tree_matching_timings -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    #[expect(clippy::print_stdout, reason = "the measurement is the output")]
+    fn tree_matching_timings() {
+        use std::time::Instant;
+        /// Runs averaged per shape.
+        const REPEATS: u32 = 20;
+        // The whole of `Tree::compare` on a mismatch: the first pass, then the diff.
+        let time = |expected: &Line, actual: &Line, uncached: bool| {
+            let start = Instant::now();
+            let mut pairs = 0;
+            for _ in 0..REPEATS {
+                let mut matcher = Matcher {
+                    uncached,
+                    ..Matcher::default()
+                };
+                expected.matches(actual);
+                render_diff(&mut matcher, expected, actual, 0, &mut String::new());
+                pairs = matcher.computed;
+            }
+            (start.elapsed() / REPEATS, pairs)
+        };
+        let flat = |count: usize| node("r", (0..count).map(|_| node("p", Vec::new())).collect());
+        let shapes = [
+            (
+                "flat, 1000 siblings, one wanted",
+                node("r", vec![node("z", Vec::new())]),
+                flat(1000),
+            ),
+            ("spine 10 deep, 3 wide", wanted_chain(10), spine(10, 3)),
+            ("spine 100 deep, 5 wide", wanted_chain(100), spine(100, 5)),
+            ("spine 400 deep, 5 wide", wanted_chain(400), spine(400, 5)),
+            ("spine 400 deep, 50 wide", wanted_chain(400), spine(400, 50)),
+            (
+                "spine 1000 deep, 5 wide",
+                wanted_chain(1000),
+                spine(1000, 5),
+            ),
+        ];
+        for (name, expected, actual) in &shapes {
+            let (before, before_pairs) = time(expected, actual, true);
+            let (after, after_pairs) = time(expected, actual, false);
+            std::println!(
+                "{name}: before {before:?} ({before_pairs} pairs in the diff), after {after:?} ({after_pairs})"
+            );
+        }
     }
 }
