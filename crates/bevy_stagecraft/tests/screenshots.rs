@@ -123,8 +123,8 @@ fn gpu_a_screenshot_check_compares_with_its_baseline_and_writes_a_diff_on_a_chan
     let green = Color::srgb_u8(30, 200, 60);
     let changed = solid_colours(&dir, green).run_in(&mut recorder_app(false));
     assert!(!changed.passed());
-    let actual = dir.join("solid-colours/home.actual.png");
-    let diff = dir.join("solid-colours/home.diff.png");
+    let actual = dir.join("solid-colours/.diagnostics/home.actual.png");
+    let diff = dir.join("solid-colours/.diagnostics/home.diff.png");
     assert!(actual.exists() && diff.exists(), "{:?}", changed.failures());
     let diff_picture = image::open(&diff).expect("the diff").to_rgba8();
     assert_eq!(diff_picture.get_pixel(150, 50).0, [255, 0, 255, 255]);
