@@ -2820,3 +2820,35 @@ fn the_catalogue_entry_of_a_file_that_does_not_load_shows_why() {
         });
     assert!(shown);
 }
+
+#[test]
+fn a_directory_that_cannot_be_read_keeps_the_entries_and_recovers_on_a_later_scan() {
+    let dir = scenario_dir("unreadable");
+    let away = dir.with_extension("away");
+    drop(std::fs::remove_dir_all(&away));
+    std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
+    std::fs::write(dir.join("b.ron"), scenario_file(0)).expect("written");
+    let mut app = watching_app(&dir);
+    // The directory cannot be scanned: moving it away makes the read fail.
+    std::fs::rename(&dir, &away).expect("moved");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    assert_eq!(gallery.len(), 2, "no entry is dropped");
+    for at in 0..2 {
+        let entry = gallery.get(at).expect("the entry stays");
+        assert!(!entry.is_unloaded(), "the last version is kept");
+        assert!(
+            entry
+                .error()
+                .is_some_and(|error| error.starts_with("The directory could not be read")),
+            "the failed scan is named: {:?}",
+            entry.error()
+        );
+    }
+    // The directory comes back, unchanged: the errors clear.
+    std::fs::rename(&away, &dir).expect("moved back");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    assert_eq!(gallery.len(), 2);
+    assert!((0..2).all(|at| gallery.get(at).is_some_and(|entry| entry.error().is_none())));
+}
