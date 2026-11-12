@@ -54,14 +54,6 @@ impl Modifiers {
         self.bits & other.bits == other.bits
     }
 
-    /// The set without the modifiers in `other`.
-    #[must_use]
-    pub(crate) const fn without(self, other: Self) -> Self {
-        Self {
-            bits: self.bits & !other.bits,
-        }
-    }
-
     /// Whether no modifier is in the set.
     #[must_use]
     pub const fn is_empty(self) -> bool {
