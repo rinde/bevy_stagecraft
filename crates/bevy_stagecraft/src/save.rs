@@ -40,6 +40,7 @@
 use core::{any::TypeId, fmt};
 use std::{
     fs,
+    io::{ErrorKind, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -269,29 +270,84 @@ fn resolve(base_dir: Option<&Path>, file: &str) -> PathBuf {
 /// written: `"{stem}.{extension}"`, which covers the saved world and what an
 /// app's own [`AppSetup::capture`](crate::AppSetup::capture) writes. Not
 /// `"{stem}.ron"`: that is the scenario the save is named for, and sits there
-/// to begin with. A directory that cannot be read has none.
-fn stem_is_taken(dir: &Path, stem: &str) -> bool {
+/// to begin with.
+///
+/// # Errors
+///
+/// A directory that cannot be listed, or an entry that cannot be read, is an
+/// error and never "free": an incomplete listing could hide the very file a
+/// save would then overwrite.
+fn stem_is_taken(dir: &Path, stem: &str) -> Result<bool, SaveError> {
     let prefix = format!("{stem}.");
     let scenario = format!("{stem}.ron");
-    let Ok(entries) = fs::read_dir(dir) else {
-        return false;
-    };
-    entries.filter_map(Result::ok).any(|entry| {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        name.starts_with(&prefix) && name != scenario
-    })
+    let unreadable =
+        |error: std::io::Error| SaveError::new(format!("cannot list {}: {error}", dir.display()));
+    for entry in fs::read_dir(dir).map_err(unreadable)? {
+        let name = entry.map_err(unreadable)?.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name != scenario {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
-/// The first stem from `name` that nothing saved in `dir` uses yet (see
-/// [`stem_is_taken`]), as `name`, `name-2`, `name-3`.
-fn free_scene_stem(dir: &Path, name: &str) -> String {
-    let mut candidate = name.to_owned();
-    let mut number = 1_u32;
-    while stem_is_taken(dir, &candidate) {
-        number += 1;
-        candidate = format!("{name}-{number}");
+/// The stem `name` numbered `number`: `name` for 1, then `name-2`, `name-3`.
+fn numbered_stem(name: &str, number: u32) -> String {
+    if number <= 1 {
+        name.to_owned()
+    } else {
+        format!("{name}-{number}")
     }
-    candidate
+}
+
+/// The first number from `from` whose stem nothing saved in `dir` uses yet
+/// (see [`stem_is_taken`]).
+fn free_stem_number(dir: &Path, name: &str, from: u32) -> Result<u32, SaveError> {
+    let mut number = from.max(1);
+    while stem_is_taken(dir, &numbered_stem(name, number))? {
+        number = number.checked_add(1).ok_or_else(|| {
+            SaveError::new(format!("no free name for {name} in {}", dir.display()))
+        })?;
+    }
+    Ok(number)
+}
+
+/// Writes `text` as the saved world of `stem` numbered `number` or, when that
+/// file exists by now, of the next free number; never over an existing file.
+/// Gives the file's name and path.
+fn write_new_scene(
+    dir: &Path,
+    stem: &str,
+    mut number: u32,
+    text: &str,
+) -> Result<(String, PathBuf), SaveError> {
+    loop {
+        let name = scene_file_name(&numbered_stem(stem, number));
+        let path = dir.join(&name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(text.as_bytes()).map_err(|error| {
+                    SaveError::new(format!("cannot write {}: {error}", path.display()))
+                })?;
+                return Ok((name, path));
+            }
+            // Another save took the name since the check: go on to the next.
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                number = free_stem_number(dir, stem, number.saturating_add(1))?;
+            }
+            Err(error) => {
+                return Err(SaveError::new(format!(
+                    "cannot write {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
 }
 
 /// A saved setup: the setup that gets back to the state saved, and the files
@@ -320,7 +376,17 @@ pub struct SavedSetup {
 /// # Errors
 ///
 /// [`SaveError`] when the directory or file cannot be written, the world
-/// cannot be saved, or the app's capture fails.
+/// cannot be saved, the directory cannot be listed (a stem is never taken to
+/// be free when the listing fails), or the app's capture fails.
+///
+/// # Races
+///
+/// The saved world is created exclusively (`create_new`): when another save
+/// took the file between the check and the write, the next number is tried, so
+/// a scene is never overwritten. The crate cannot do the same for an app's own
+/// files, which [`AppSetup::capture`](crate::AppSetup::capture) writes: the
+/// contract is that it creates them exclusively too and returns an error
+/// rather than replacing a file that exists.
 pub fn save_setup(
     world: &mut World,
     dir: &Path,
@@ -329,20 +395,76 @@ pub fn save_setup(
 ) -> Result<SavedSetup, SaveError> {
     fs::create_dir_all(dir)
         .map_err(|error| SaveError::new(format!("cannot create {}: {error}", dir.display())))?;
-    let stem = free_scene_stem(dir, stem);
-    let captured = capture_setup(world, dir, &stem).map_err(|error| {
+    let number = free_stem_number(dir, stem, 1)?;
+    let captured = capture_setup(world, dir, &numbered_stem(stem, number)).map_err(|error| {
         SaveError::new(format!("the app's setup could not be captured: {error}"))
     })?;
     if let Some(setup) = captured {
         return Ok(SavedSetup { setup, path: None });
     }
     let text = scene_ron(world, noise)?;
-    let name = scene_file_name(&stem);
-    let path = dir.join(&name);
-    fs::write(&path, text)
-        .map_err(|error| SaveError::new(format!("cannot write {}: {error}", path.display())))?;
+    let (name, path) = write_new_scene(dir, stem, number, &text)?;
     Ok(SavedSetup {
         setup: Setup::Scene(name),
         path: Some(path),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, reason = "tests may panic")]
+
+    use super::*;
+
+    /// A fresh empty directory for one test.
+    fn dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("stagecraft-save-unit-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("a directory");
+        dir
+    }
+
+    #[test]
+    fn a_directory_that_cannot_be_listed_is_an_error_and_not_a_free_stem() {
+        let dir = dir("unlistable");
+        let file = dir.join("not-a-directory");
+        fs::write(&file, "x").expect("writes");
+        let error = stem_is_taken(&file, "a").expect_err("cannot list a file");
+        assert!(error.to_string().contains("cannot list"), "{error}");
+        assert!(free_stem_number(&file, "a", 1).is_err());
+    }
+
+    #[test]
+    fn a_taken_stem_is_found_and_the_scenario_itself_does_not_count() {
+        let dir = dir("taken");
+        fs::write(dir.join("a.ron"), "x").expect("writes");
+        assert!(!stem_is_taken(&dir, "a").expect("lists"));
+        fs::write(dir.join("a.own"), "x").expect("writes");
+        assert!(stem_is_taken(&dir, "a").expect("lists"));
+        assert_eq!(free_stem_number(&dir, "a", 1).expect("free"), 2);
+    }
+
+    #[test]
+    fn a_scene_taken_by_a_racing_save_is_not_overwritten() {
+        let dir = dir("race");
+        // The check said stem 1 was free; then another save took it.
+        fs::write(dir.join("a.scene.ron"), "first").expect("writes");
+        let (name, _) = write_new_scene(&dir, "a", 1, "second").expect("writes");
+        assert_eq!(name, "a-2.scene.ron");
+        assert_eq!(
+            fs::read_to_string(dir.join("a.scene.ron")).expect("reads"),
+            "first"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("a-2.scene.ron")).expect("reads"),
+            "second"
+        );
+    }
+
+    #[test]
+    fn a_write_that_fails_for_another_reason_is_an_error() {
+        let dir = dir("unwritable");
+        let error = write_new_scene(&dir.join("missing"), "a", 1, "x").expect_err("no directory");
+        assert!(error.to_string().contains("cannot write"), "{error}");
+    }
 }
