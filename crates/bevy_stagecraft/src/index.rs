@@ -162,7 +162,7 @@ fn snapshot_links(out: &mut String, slug: &str, records: &[ScreenshotRecord]) {
                 let label = file.rsplit('.').nth(1).unwrap_or("picture").to_owned();
                 format!(
                     "<a href=\"{slug}/{SNAPSHOT_DIR}/{href}\">{label}</a>",
-                    href = escape(&file),
+                    href = escape(&percent_encode(&file)),
                 )
             })
             .collect();
@@ -175,6 +175,25 @@ fn snapshot_links(out: &mut String, slug: &str, records: &[ScreenshotRecord]) {
             );
         }
     }
+}
+
+/// Encodes one URL path segment: everything but the unreserved ASCII
+/// characters becomes `%XX` per UTF-8 byte, so `#`, `?`, `%`, spaces and
+/// non-ASCII text stay part of the file name instead of ending the path or
+/// starting a fragment.
+fn percent_encode(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for &byte in segment.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            for nibble in [byte >> 4, byte & 0xf] {
+                out.extend(char::from_digit(u32::from(nibble), 16).map(|c| c.to_ascii_uppercase()));
+            }
+        }
+    }
+    out
 }
 
 /// Escapes text for HTML.
@@ -618,6 +637,80 @@ mod tests {
     use super::*;
     use crate::{Step, player::ScenarioReport};
     use bevy::prelude::{Reflect, ReflectResource, Resource};
+
+    /// Reads `%XX` escapes back into bytes, as a browser does for a path.
+    fn percent_decode(text: &str) -> String {
+        let bytes = text.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while let Some(&byte) = bytes.get(i) {
+            let hex = bytes
+                .get(i + 1..i + 3)
+                .and_then(|h| core::str::from_utf8(h).ok())
+                .and_then(|h| u8::from_str_radix(h, 16).ok());
+            if let (b'%', Some(decoded)) = (byte, hex) {
+                out.push(decoded);
+                i += 3;
+            } else {
+                out.push(byte);
+                i += 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[test]
+    fn snapshot_links_point_at_the_copied_files_whatever_the_name()
+    -> Result<(), Box<dyn core::error::Error>> {
+        let root = std::env::temp_dir().join(format!("rin-links-{}", std::process::id()));
+        let source = root.join("baselines");
+        let _ = fs::remove_dir_all(&root);
+        create_dir(&source)?;
+        let names = [
+            "menu#open",
+            "what?",
+            "a b",
+            "100%",
+            "50%25",
+            "caf\u{e9} \u{65e5}\u{672c}",
+            "q&a<\">",
+        ];
+        let mut records = Vec::new();
+        for name in names {
+            let baseline = source.join(format!("{name}.png"));
+            fs::write(&baseline, name.as_bytes())?;
+            records.push(ScreenshotRecord {
+                name: name.to_owned(),
+                baseline,
+                result: ScreenshotResult::Created,
+            });
+        }
+        let folder = root.join("scenario");
+        create_dir(&folder)?;
+        copy_snapshots(&folder, &records)?;
+        let mut html = String::new();
+        snapshot_links(&mut html, "scenario", &records);
+        for name in names {
+            let marker = "<a href=\"scenario/snapshots/";
+            let hrefs: Vec<_> = html
+                .split(marker)
+                .skip(1)
+                .filter_map(|rest| rest.split_once("\">").map(|(href, _)| href))
+                .collect();
+            let wanted = format!("{name}.baseline.png");
+            let found = hrefs.iter().any(|href| {
+                assert!(
+                    !href.contains(['#', '?', ' ', '<', '>', '"']) && !href.contains("&amp"),
+                    "{href} is a plain path segment"
+                );
+                let file = folder.join(SNAPSHOT_DIR).join(percent_decode(href));
+                percent_decode(href) == wanted && file.exists()
+            });
+            assert!(found, "no link for {name:?} in {hrefs:?}");
+        }
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
 
     /// A recording with a finished report that passed or not.
     fn recording(name: &str, group: &str, passed: bool) -> ScenarioRecording {
