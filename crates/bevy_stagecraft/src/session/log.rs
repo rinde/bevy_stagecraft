@@ -227,8 +227,10 @@ struct Emitter {
     run: Vec<(u32, Vec2)>,
     /// How many steps came before each checkpoint so far.
     checkpoints: Vec<usize>,
-    /// The modifier keys held down, as far as the log has said.
-    held: Modifiers,
+    /// The modifier keys held down, as far as the log has said. Each physical
+    /// key is kept, so releasing one Control while the other is down leaves
+    /// Control held.
+    held: Vec<KeyCode>,
 }
 
 impl Emitter {
@@ -242,7 +244,7 @@ impl Emitter {
             pointer: None,
             run: Vec::new(),
             checkpoints: Vec::new(),
-            held: Modifiers::NONE,
+            held: Vec::new(),
         }
     }
 
@@ -600,11 +602,15 @@ impl Emitter {
             return typing.next;
         }
         self.wait_until(event.frame);
-        if let Some(modifier) = modifier_of(key) {
-            self.held = match state {
-                ButtonState::Pressed => self.held | modifier,
-                ButtonState::Released => self.held.without(modifier),
-            };
+        if modifier_of(key).is_some() {
+            match state {
+                ButtonState::Pressed => {
+                    if !self.held.contains(&key) {
+                        self.held.push(key);
+                    }
+                }
+                ButtonState::Released => self.held.retain(|held| *held != key),
+            }
         }
         if state == ButtonState::Released {
             self.emit(
@@ -628,6 +634,8 @@ impl Emitter {
             && release.frame.saturating_sub(event.frame) <= self.options.hold_frames
         {
             self.emit(Step::tap(key), 1);
+            // The tap swallows the release, so the key is up again.
+            self.held.retain(|held| *held != key);
             return release_at + 1;
         }
         self.emit(
@@ -650,9 +658,10 @@ impl Emitter {
     /// typed with Control, Alt or Super held: those stay `Tap`s, which say
     /// what the person pressed.
     fn typing_at(&self, events: &[RecordedEvent], at: usize) -> Option<Typing> {
-        let held_back = self.held.contains(Modifiers::CTRL)
-            || self.held.contains(Modifiers::ALT)
-            || self.held.contains(Modifiers::SUPER);
+        let held_back = self.held.iter().any(|key| {
+            [Modifiers::CTRL, Modifiers::ALT, Modifiers::SUPER]
+                .contains(&modifier_of(*key).unwrap_or(Modifiers::NONE))
+        });
         let mut last_frame = events.get(at)?.frame;
         let mut text = String::new();
         let mut typed = 0_u32;
