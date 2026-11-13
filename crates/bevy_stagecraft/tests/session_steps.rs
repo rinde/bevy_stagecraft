@@ -661,6 +661,39 @@ fn shift_held_across_several_characters_still_makes_one_type_step() {
     assert_eq!(typed_texts(&steps), ["AB"], "{steps:?}");
 }
 
+#[test]
+fn a_key_pressed_but_never_released_after_typing_is_not_part_of_the_run() {
+    let mut events = Vec::new();
+    events.extend(typed_pair(3, KeyCode::KeyA, "a"));
+    events.extend(typed_pair(6, KeyCode::KeyB, "b"));
+    events.push(typed_key(9, KeyCode::KeyC, "c"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["ab"], "{steps:?}");
+}
+
+#[test]
+fn shift_left_down_after_typing_is_not_part_of_the_run() {
+    let mut events = Vec::new();
+    events.extend(typed_pair(3, KeyCode::KeyA, "a"));
+    events.push(key(6, KeyCode::ShiftLeft, ButtonState::Pressed));
+    events.push(typed_key(8, KeyCode::KeyB, "B"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["a"], "{steps:?}");
+}
+
+#[test]
+fn a_long_run_of_single_keystrokes_becomes_one_exact_type_step() {
+    let mut events = Vec::new();
+    let mut expected = String::new();
+    for index in 0..20_000_u32 {
+        events.extend(typed_pair(index * 4, KeyCode::KeyA, "x"));
+        expected.push('x');
+    }
+    events.push(typed_key(20_000 * 4, KeyCode::KeyB, "tail"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), [expected.as_str()], "{steps:?}");
+}
+
 /// The frames the steps spend, as playback counts them: waits and glides by
 /// their length, a drag by its length plus its press and release, every other
 /// step as one.
