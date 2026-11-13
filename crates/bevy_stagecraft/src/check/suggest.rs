@@ -345,28 +345,27 @@ impl WorldSnapshot {
     fn read_ui(&mut self, world: &World) {
         let mut labels: Vec<(String, Entity)> = world
             .try_query::<(Entity, &Text)>()
-            .map(|query| {
+            .map_or_default(|query| {
                 query
                     .iter_manual(world)
                     .filter(|(entity, _)| !is_tooling(world, *entity))
                     .map(|(entity, text)| (text.0.clone(), entity))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         labels.sort();
         // What a text input holds is shown too; it names no widget, so it
         // only counts as a text, for `Shows` and its `Not`.
-        let values: Vec<String> = world
-            .try_query::<(Entity, &EditableText)>()
-            .map(|query| {
-                query
-                    .iter_manual(world)
-                    .filter(|(entity, _)| !is_tooling(world, *entity))
-                    .map(|(_, field)| field.value().to_string())
-                    .filter(|value| !value.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let values: Vec<String> =
+            world
+                .try_query::<(Entity, &EditableText)>()
+                .map_or_default(|query| {
+                    query
+                        .iter_manual(world)
+                        .filter(|(entity, _)| !is_tooling(world, *entity))
+                        .map(|(_, field)| field.value().to_string())
+                        .filter(|value| !value.is_empty())
+                        .collect()
+                });
         for value in values {
             *self.texts.entry(value).or_default() += 1;
         }
@@ -750,7 +749,7 @@ mod tests {
         let mut filter = NoiseFilter::default().keep(BEVY_TIME);
         assert!(!filter.ignores_path(BEVY_TIME));
         assert!(filter.hide(BEVY_TIME));
-        assert!(filter.kept().is_empty());
+        assert_eq!(filter.kept().len(), 0);
         assert_eq!(filter, NoiseFilter::default());
     }
 
@@ -774,7 +773,7 @@ mod tests {
         filter.reveal(GAME_SCORE);
         assert!(!filter.ignores_path(GAME_SCORE));
         assert_eq!(filter.ignored(), ["game::Lives"]);
-        assert!(filter.kept().is_empty());
+        assert_eq!(filter.kept().len(), 0);
     }
 
     #[test]

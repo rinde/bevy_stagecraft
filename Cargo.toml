@@ -6,7 +6,7 @@ members = ["crates/*"]
 
 edition = "2024"
 # Equal to the toolchain pinned in rust-toolchain.toml
-rust-version = "1.98.1"
+rust-version = "1.100.0"
 repository = "https://github.com/rinde/bevy_stagecraft"
 publish = false
 

@@ -320,7 +320,7 @@ fn picking_reads_the_world_and_changes_nothing_in_it() {
     let save = button_with(&mut app, "Save");
     let before = WorldSnapshot::take(app.world(), &NoiseFilter::default());
     let picked = Picked::new(app.world(), save, &NoiseFilter::default(), None);
-    assert!(!picked.checks().is_empty());
+    assert_ne!(picked.checks(), []);
     let after = WorldSnapshot::take(app.world(), &NoiseFilter::default());
     assert_eq!(before, after);
     assert_eq!(app.world().resource::<Activations>().0, 0);

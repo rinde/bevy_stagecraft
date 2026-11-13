@@ -692,7 +692,7 @@ fn the_scenarios_window_has_its_own_camera_and_the_overlay_stays_with_the_app() 
         .iter(world)
         .map(ComputedUiTargetCamera::get)
         .collect();
-    assert!(!overlay.is_empty());
+    assert_ne!(overlay.len(), 0);
     assert!(
         overlay.iter().all(|camera| *camera == Some(app_camera)),
         "the overlay is drawn by the app's camera, not the Scenarios one"

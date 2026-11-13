@@ -523,14 +523,13 @@ pub(crate) fn enclosing_button(world: &World, entity: Entity) -> Option<Entity> 
 fn resolve_world(world: &World, position: Vec3) -> Result<ResolvedTarget, String> {
     let mut cameras: Vec<_> = world
         .try_query::<(Entity, &Camera, &GlobalTransform)>()
-        .map(|query| {
+        .map_or_default(|query| {
             query
                 .iter_manual(world)
                 .filter(|(entity, camera, _)| camera.is_active && !is_tooling(world, *entity))
                 .map(|(entity, camera, transform)| (camera.order, entity, camera, *transform))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     cameras.sort_by_key(|(order, entity, _, _)| (*order, *entity));
     let Some((_, _, camera, transform)) = cameras.first() else {
         return Err("there is no active camera to project a world target through".into());

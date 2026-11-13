@@ -89,7 +89,7 @@ fn a_screenshot_check_is_skipped_in_a_plain_headless_run() {
     let dir = output_dir("screenshots-headless");
     let report = solid_colours(&dir, Color::WHITE).run_headless();
     assert!(report.passed(), "failures: {:?}", report.failures());
-    assert!(report.screenshots.is_empty());
+    assert_eq!(report.screenshots.len(), 0);
     assert!(!dir.exists(), "nothing is written without a renderer");
 }
 
