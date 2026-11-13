@@ -796,3 +796,74 @@ fn a_drag_longer_than_a_u16_is_spelt_out_and_events_after_it_stay_in_time() {
         "the tap plays at frame {before}: {steps:?}"
     );
 }
+
+/// Both keys of a modifier go down, then `released` comes up first; the other
+/// stays held while `a` is typed and released, then it comes up too.
+fn overlapping(first: KeyCode, second: KeyCode, released: KeyCode) -> Vec<RecordedEvent> {
+    let kept = if released == first { second } else { first };
+    let mut events = vec![
+        key(0, first, ButtonState::Pressed),
+        key(1, second, ButtonState::Pressed),
+        key(2, released, ButtonState::Released),
+    ];
+    events.extend(typed_pair(4, KeyCode::KeyA, "a"));
+    events.push(key(8, kept, ButtonState::Released));
+    events
+}
+
+#[test]
+fn text_stays_a_key_step_while_the_other_side_of_a_modifier_is_held() {
+    let pairs = [
+        (KeyCode::ControlLeft, KeyCode::ControlRight),
+        (KeyCode::AltLeft, KeyCode::AltRight),
+        (KeyCode::SuperLeft, KeyCode::SuperRight),
+    ];
+    for (left, right) in pairs {
+        for released in [left, right] {
+            let steps = convert(&overlapping(left, right, released));
+            assert!(
+                typed_texts(&steps).is_empty(),
+                "{released:?} released first: {steps:?}"
+            );
+            assert!(
+                steps.contains(&Step::tap(KeyCode::KeyA)),
+                "{released:?} released first: {steps:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn text_is_typed_again_once_both_sides_of_a_modifier_are_released() {
+    for released in [KeyCode::ControlLeft, KeyCode::ControlRight] {
+        let mut events = overlapping(KeyCode::ControlLeft, KeyCode::ControlRight, released);
+        events.extend(typed_pair(12, KeyCode::KeyB, "b"));
+        let steps = convert(&events);
+        assert_eq!(typed_texts(&steps), ["b"], "{steps:?}");
+    }
+}
+
+#[test]
+fn a_chord_folds_while_the_other_control_key_is_still_held() {
+    for released in [KeyCode::ControlLeft, KeyCode::ControlRight] {
+        let kept = if released == KeyCode::ControlLeft {
+            KeyCode::ControlRight
+        } else {
+            KeyCode::ControlLeft
+        };
+        let events = [
+            key(0, KeyCode::ControlLeft, ButtonState::Pressed),
+            key(1, KeyCode::ControlRight, ButtonState::Pressed),
+            key(2, released, ButtonState::Released),
+            typed_key(4, KeyCode::KeyS, "s"),
+            key(5, KeyCode::KeyS, ButtonState::Released),
+            key(6, kept, ButtonState::Released),
+        ];
+        let steps = convert(&events);
+        assert!(typed_texts(&steps).is_empty(), "{steps:?}");
+        assert!(
+            steps.contains(&Step::tap(KeyCode::KeyS)),
+            "{released:?} released first: {steps:?}"
+        );
+    }
+}
