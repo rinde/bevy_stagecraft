@@ -11,7 +11,6 @@
   `target/tmp/` (`recorder-*`). Anything drawn with text should be viewed once;
   a glyph the bundled font lacks renders as an empty box and no assertion
   notices.
-- Bevy builds with the dev profile are large (each test binary is over a
-  gigabyte with full debug info). On a tight disk set
-  `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, as CI does.
+- Bevy test binaries are large; see "Disk use" in
+  [running.md](running.md) for how the profiles keep them small.
 

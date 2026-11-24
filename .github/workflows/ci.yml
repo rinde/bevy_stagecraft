@@ -13,8 +13,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Bevy test binaries otherwise fill the runner's disk.
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   lint:

@@ -32,3 +32,19 @@ libraries, and warms the build cache in the background. It is idempotent and
 does nothing outside cloud sessions. Run it by hand with
 `.claude/hooks/session-start.sh --force` (this also waits for the cache warm-up).
 
+## Disk use
+
+`just ci` builds about 90 test binaries. With full debuginfo each was roughly
+1.5 GB, which filled a 250 GB volume ("No space left on device").
+The workspace `Cargo.toml` therefore sets, for the dev profile (which the
+test profile inherits):
+
+- `debug = "line-tables-only"` for our own crates: panics and backtraces keep
+  file and line, but a debugger cannot inspect variables;
+- `debug = false` for dependencies: their frames show symbol names only.
+
+No environment variable is needed locally or in CI. To debug with variables,
+override per run: `CARGO_PROFILE_DEV_DEBUG=2 cargo test -p bevy_stagecraft
+--test <name>`, preferably for one test binary. Merging the integration tests
+into fewer binaries was not done: it would save little once debuginfo is
+trimmed and would slow incremental builds. `cargo clean` frees the rest.
