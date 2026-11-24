@@ -1,4 +1,64 @@
 //! Plays a scenario through [`SyntheticInput`] and records what happened.
+//!
+//! [`ScenarioPlayerPlugin`] plays one step list one frame per update and
+//! writes a [`ScenarioReport`]: one [`StepRecord`] per leaf step, then the
+//! scenario's expected checks. [`Scenario::run_headless`] and
+//! [`Scenario::run_in`] wrap it for tests; `run_in` first gives the app's
+//! primary window the scenario's window size and scale factor where it sets
+//! them, and leaves the window alone where it does not. The `_traced`
+//! variants also return the [`ScenarioTrace`].
+//!
+//! # What the player waits for
+//!
+//! - Before the first step, until every scene the setup queued is loaded
+//!   (always on, counted in frames, at most the scenario's action timeout).
+//!   If one is still not loaded, the report has a `setup_failure` naming the
+//!   assets and no step plays. A setup that fails (`AppSetup::build` returned
+//!   an error) also finishes the report with `setup_failure` set and every
+//!   step skipped.
+//! - An action on a target that names a widget (`MoveTo`, `Glide`, `Drag`,
+//!   and a `Click` or `Press` right after a move to a widget, which checks
+//!   that widget) waits frame by frame until the target is actionable (see
+//!   [`crate::targets::actionable`]), up to the step's or scenario's timeout,
+//!   then fails naming the first condition that did not hold. An ambiguous
+//!   or non-UI target fails at once. `Force` skips the checks and the hover
+//!   check. A waiting action is not at a step boundary.
+//! - A check that waits (`Check::Within`, also in the expect list) is polled
+//!   once per frame until it settles.
+//! - A screenshot check waits for the recorder's picture first, and those
+//!   waiting frames do not count against a `Within`.
+//!
+//! # Steps and the report
+//!
+//! The player plays the flattened steps, so a `Group` is no step of its own;
+//! each [`StepRecord`] keeps its group path, which
+//! [`ScenarioReport::failures`] puts in front of the line. A `Capture` step
+//! reads the world while the step expands and takes no frame; the values are
+//! passed to every `Check::poll`, the expected checks included, and a read
+//! that fails aborts the script naming the capture. Touch steps keep each
+//! finger's position, and a step on a finger in the wrong state fails at once.
+//!
+//! [`Outcome::Skipped`] is also a check that could not run here: a
+//! screenshot without a renderer. [`ScenarioReport::passed`] fails on a
+//! `Fail` check only; skipped steps stay strict. Each screenshot check's
+//! files are kept in [`ScenarioReport::screenshots`].
+//!
+//! # Tracing and pausing
+//!
+//! With `enable_trace(filter)` on, the `Last` system `trace_point` takes a
+//! [`TracePoint`] at each step boundary where a later step became due, and at
+//! the end; the player records each step's targets, captured values and
+//! checks too. `pause_before(Some(k))` halts inside the frame before step
+//! k's operations are expanded and takes that frame back, so the world that
+//! is left equals the trace's `before(k)`; `halted()` says so.
+//!
+//! # Panics in the app
+//!
+//! A panic in a system, command or observer reaches Bevy's fallback error
+//! handler. While a scenario is active the player installs a handler that
+//! keeps such errors (see `catch`), and fails the step last started when the
+//! frame is over, which aborts the script like any failed step. The app's
+//! own handler is restored afterwards.
 
 use alloc::collections::{BTreeMap, VecDeque};
 

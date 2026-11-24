@@ -1,6 +1,22 @@
 //! Screenshot checks: the frame, or one node's rectangle of it, against a
 //! picture stored next to the scenario (Playwright's `toHaveScreenshot`).
 //!
+//! The baseline is `<base_dir>/<slug of the scenario name>/<name>.png`
+//! (see `directory_name`). A missing baseline is written and fails. A
+//! mismatch writes `.diagnostics/<name>.actual.png` and
+//! `.diagnostics/<name>.diff.png` in the baseline directory, and a match
+//! removes them; a name may not start with `.`, so no baseline can collide
+//! with them, and other files beside the baselines are never touched. Update
+//! mode (`RIN_UPDATE_SNAPSHOTS`) rewrites the baseline. With `of`, the picture
+//! is the target's node rectangle: the upright bounding box, in whole
+//! physical pixels, of its box under the complete `UiGlobalTransform`, so a
+//! quarter turn swaps width and height; it is clipped to the picture.
+//! [`Tolerance`] is `colour` per channel (default 2) and `pixels`, the
+//! share of pixels that may differ (default 0).
+//!
+//! The compare, crop and diff code is ungated; PNG encoding and decoding need
+//! feature `record`.
+//!
 //! Pixels need the renderer, so only the recorder (feature `record`) can
 //! take them. Everywhere else the check is *skipped*: it is recorded as
 //! [`Outcome::Skipped`](crate::Outcome::Skipped), which does not fail the
