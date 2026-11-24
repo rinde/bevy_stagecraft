@@ -29,7 +29,8 @@ probes over the world.
   `unimplemented!`, `dbg!`, printing, indexing and slicing, `unsafe`, and the
   Bevy methods in `clippy.toml`. Details: `agent-docs/code-practices.md`.
 - Before you call it done: `just fmt`, then `just ci`, then update the docs
-  your change touches (`agent-docs/writing-docs.md`).
+  your change touches (`agent-docs/writing-docs.md`). A docs budget failure
+  means split the file, not compress it.
 - British spelling (behaviour, colour, initialise). Every item is documented.
 - `publish = false` stays. There is no licence file and no open-source framing.
 - A CI job failing on billing or quota is not a failure of the change; say so
