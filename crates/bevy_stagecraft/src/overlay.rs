@@ -284,6 +284,15 @@ const fn button_name(button: MouseButton) -> &'static str {
     }
 }
 
+/// Which finger a touch step is about, unless it is the first.
+fn finger_suffix(finger: u8) -> String {
+    if finger == 0 {
+        String::new()
+    } else {
+        format!(" (finger {finger})")
+    }
+}
+
 /// The target the pointer was last sent to before step `index`, which is what
 /// a click or a press then acts on.
 fn last_target(steps: &[Step]) -> Option<&Target> {
@@ -317,6 +326,24 @@ pub fn describe_step(step: &Step, before: &[Step], descriptions: &TargetDescript
         Step::Click(button) => with_target(button_name(*button)),
         Step::Drag { from, to, .. } => format!(
             "Drag {} to {}",
+            descriptions.describe(from),
+            descriptions.describe(to)
+        ),
+        Step::TouchDown { at, finger } => format!(
+            "Touch down on {}{}",
+            descriptions.describe(at),
+            finger_suffix(*finger)
+        ),
+        Step::TouchMove { to, finger } => format!(
+            "Touch move to {}{}",
+            descriptions.describe(to),
+            finger_suffix(*finger)
+        ),
+        Step::TouchUp { finger } => format!("Touch up{}", finger_suffix(*finger)),
+        Step::TouchCancel { finger } => format!("Touch cancel{}", finger_suffix(*finger)),
+        Step::TouchTap(target) => format!("Tap {}", descriptions.describe(target)),
+        Step::TouchDrag { from, to, .. } => format!(
+            "Touch drag {} to {}",
             descriptions.describe(from),
             descriptions.describe(to)
         ),

@@ -1,6 +1,6 @@
 //! Plays a scenario through [`SyntheticInput`] and records what happened.
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 
 use bevy::{
     app::{App, First, Last, Plugin, PreUpdate},
@@ -18,6 +18,7 @@ use bevy::{
         ButtonState,
         keyboard::KeyCode,
         mouse::{MouseButton, MouseScrollUnit},
+        touch::TouchPhase,
     },
     math::{UVec2, Vec2},
     scene::{SceneListPatch, ScenePatch},
@@ -275,6 +276,8 @@ struct Running {
     ops: VecDeque<Op>,
     /// Where the pointer is, as far as the script has moved it.
     cursor: Vec2,
+    /// Where each finger that is down is, as far as the script has put it.
+    touches: BTreeMap<u8, Vec2>,
     /// The widget the last move sent the pointer to, until a press acts on
     /// it or the pointer goes elsewhere.
     aim: Option<Aim>,
@@ -631,6 +634,7 @@ impl ScenarioPlayer {
             next_step: 0,
             ops: VecDeque::new(),
             cursor,
+            touches: BTreeMap::new(),
             aim: None,
             aborted: false,
             tracing: self.tracing.is_some(),
@@ -1000,8 +1004,23 @@ impl Running {
             return;
         };
         for event in events {
-            if let SyntheticEvent::MoveCursor(position) = event {
-                self.cursor = position;
+            match event {
+                SyntheticEvent::MoveCursor(position) => self.cursor = position,
+                SyntheticEvent::Touch {
+                    finger,
+                    phase: TouchPhase::Started | TouchPhase::Moved,
+                    position,
+                } => {
+                    if let Ok(finger) = u8::try_from(finger) {
+                        self.touches.insert(finger, position);
+                    }
+                }
+                SyntheticEvent::Touch { finger, .. } => {
+                    if let Ok(finger) = u8::try_from(finger) {
+                        self.touches.remove(&finger);
+                    }
+                }
+                _ => {}
             }
             input.push(event);
         }
@@ -1025,6 +1044,10 @@ impl Running {
             Step::MoveTo(_)
             | Step::Glide { .. }
             | Step::Drag { .. }
+            | Step::TouchDown { .. }
+            | Step::TouchMove { .. }
+            | Step::TouchTap(_)
+            | Step::TouchDrag { .. }
             | Step::Click(_)
             | Step::Press(_)
             | Step::Type { into: Some(_), .. }
@@ -1040,6 +1063,10 @@ impl Running {
             Step::MoveTo(_)
             | Step::Glide { .. }
             | Step::Drag { .. }
+            | Step::TouchDown { .. }
+            | Step::TouchMove { .. }
+            | Step::TouchTap(_)
+            | Step::TouchDrag { .. }
             | Step::Click(_)
             | Step::Press(_)
             | Step::Type { into: Some(_), .. } => {
@@ -1049,6 +1076,8 @@ impl Running {
                     self.abort(report, index, message);
                 }
             }
+            Step::TouchUp { finger } => self.lift(report, index, finger, TouchPhase::Ended),
+            Step::TouchCancel { finger } => self.lift(report, index, finger, TouchPhase::Canceled),
             Step::Release(button) => self.frame(
                 index,
                 vec![SyntheticEvent::Button(button, ButtonState::Released)],
@@ -1181,6 +1210,10 @@ impl Running {
                 );
                 self.aim = None;
             }
+            Step::TouchDown { .. }
+            | Step::TouchMove { .. }
+            | Step::TouchTap(_)
+            | Step::TouchDrag { .. } => self.act_touch(world, index, step, forced)?,
             Step::Click(button) | Step::Press(button) => {
                 if !forced && let Some(aim) = &self.aim {
                     pressable(world, aim.widget, self.cursor, &aim.label)?;
@@ -1214,6 +1247,87 @@ impl Running {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Queues the frames of a touch step on a target, as [`Self::act`] does
+    /// for the mouse. The finger is checked first, so a mistake in the script
+    /// fails at once rather than waiting for the target.
+    fn act_touch(
+        &mut self,
+        world: &World,
+        index: usize,
+        step: &Step,
+        forced: bool,
+    ) -> Result<(), NotActionable> {
+        match step {
+            Step::TouchDown { at, finger } => {
+                self.finger_ready(*finger, false)?;
+                let to = self.reach_traced(world, index, at, Action::Press, forced)?;
+                self.frame(
+                    index,
+                    vec![touch_event(*finger, TouchPhase::Started, to.position)],
+                );
+            }
+            Step::TouchMove { to, finger } => {
+                self.finger_ready(*finger, true)?;
+                let to = self.reach_traced(world, index, to, Action::Point, forced)?;
+                self.frame(
+                    index,
+                    vec![touch_event(*finger, TouchPhase::Moved, to.position)],
+                );
+            }
+            Step::TouchTap(target) => {
+                self.finger_ready(0, false)?;
+                let at = self.reach_traced(world, index, target, Action::Press, forced)?;
+                // The lift waits a frame: Bevy clicks only an entity the
+                // pointer hovered the frame before.
+                self.frame(
+                    index,
+                    vec![touch_event(0, TouchPhase::Started, at.position)],
+                );
+                self.frame(index, vec![touch_event(0, TouchPhase::Ended, at.position)]);
+            }
+            Step::TouchDrag { from, to, frames } => {
+                self.finger_ready(0, false)?;
+                let start = self.reach_traced(world, index, from, Action::Press, forced)?;
+                let end = self.reach_traced(world, index, to, Action::Point, forced)?;
+                self.frame(
+                    index,
+                    vec![touch_event(0, TouchPhase::Started, start.position)],
+                );
+                let frames = (*frames).max(1);
+                for frame in 1..=frames {
+                    let position = start
+                        .position
+                        .lerp(end.position, ease(f32::from(frame) / f32::from(frames)));
+                    self.frame(index, vec![touch_event(0, TouchPhase::Moved, position)]);
+                }
+                self.frame(index, vec![touch_event(0, TouchPhase::Ended, end.position)]);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Fails at once if finger `finger` is down (or not) against what the
+    /// step needs.
+    fn finger_ready(&self, finger: u8, must_be_down: bool) -> Result<(), NotActionable> {
+        match (self.touches.contains_key(&finger), must_be_down) {
+            (true, false) => Err(NotActionable::Never(format!(
+                "finger {finger} is already down"
+            ))),
+            (false, true) => Err(NotActionable::Never(finger_not_down(finger))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Lifts or cancels finger `finger` where it is, or stops the script if
+    /// it is not down.
+    fn lift(&mut self, report: &mut ScenarioReport, index: usize, finger: u8, phase: TouchPhase) {
+        match self.touches.get(&finger).copied() {
+            Some(position) => self.frame(index, vec![touch_event(finger, phase, position)]),
+            None => self.abort(report, index, finger_not_down(finger)),
+        }
     }
 
     /// Queues one frame per character of `text`.
@@ -1369,6 +1483,20 @@ fn unwrapped(step: Step, timeout: u16) -> (Step, u16, bool) {
             (step, timeout, true)
         }
         other => (other, timeout, false),
+    }
+}
+
+/// The message for a step that needs a finger which is not down.
+fn finger_not_down(finger: u8) -> String {
+    format!("finger {finger} is not down")
+}
+
+/// One phase of one finger as a synthetic event.
+fn touch_event(finger: u8, phase: TouchPhase, position: Vec2) -> SyntheticEvent {
+    SyntheticEvent::Touch {
+        finger: u64::from(finger),
+        phase,
+        position,
     }
 }
 

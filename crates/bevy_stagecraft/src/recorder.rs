@@ -234,6 +234,9 @@ impl Plugin for RecorderSupport {
             // The synthetic pointer writes `PointerInput` itself; Bevy's own
             // mouse picking would add a second one aimed at the window, which
             // nothing renders to, and the last one wins.
+            // Touch is the same: a scripted finger writes `PointerInput` for
+            // `PointerId::Touch` itself, aimed at the image, and a headless
+            // app has no window events for Bevy's touch picking to read.
             .insert_resource(PointerInputSettings {
                 is_mouse_enabled: false,
                 is_touch_enabled: false,
