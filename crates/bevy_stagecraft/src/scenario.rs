@@ -228,7 +228,9 @@ pub enum Step {
         finger: u8,
     },
     /// The system takes a finger away without a lift (one frame): the
-    /// pointer ends with no click.
+    /// pointer ends with no click. On Bevy 0.20 widgets see `Pointer<Out>`
+    /// and never `Pointer<Cancel>`, as on a device; an app that must react
+    /// reads `Touches` (`just_canceled`).
     TouchCancel {
         /// Which finger; 0 unless it says.
         #[serde(default, skip_serializing_if = "is_first_finger")]

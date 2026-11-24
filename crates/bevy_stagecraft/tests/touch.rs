@@ -35,6 +35,25 @@ struct Presses(u32);
 #[derive(Resource, Default)]
 struct DraggedRight(f32);
 
+/// How a cancelled finger reached the pad, and what `Touches` said.
+#[derive(Resource, Default)]
+struct CancelLog {
+    /// `Pointer<Out>` events the pad got.
+    outs: u32,
+    /// `Pointer<Cancel>` events the pad got.
+    cancels: u32,
+    /// Whether `Touches::any_just_canceled` held in any frame.
+    touches_saw_cancel: bool,
+    /// Whether `Touches::just_canceled(0)` held in any frame.
+    finger_0_just_canceled: bool,
+}
+
+/// Records, each frame, whether `Touches` reports a cancelled finger.
+fn record_cancel(touches: Res<Touches>, mut log: ResMut<CancelLog>) {
+    log.touches_saw_cancel |= touches.any_just_canceled();
+    log.finger_0_just_canceled |= touches.just_canceled(0);
+}
+
 /// Every touch message, with the frame it arrived on.
 #[derive(Resource, Default)]
 struct TouchLog {
@@ -65,6 +84,7 @@ fn spawn_ui(world: &mut World) {
     world.init_resource::<Clicks>();
     world.init_resource::<Presses>();
     world.init_resource::<DraggedRight>();
+    world.init_resource::<CancelLog>();
     world.spawn(Camera2d);
     world
         .spawn((
@@ -94,7 +114,9 @@ fn spawn_ui(world: &mut World) {
         ))
         .observe(|_: On<PointerClick>, mut n: ResMut<Clicks>| n.0 += 1)
         .observe(|_: On<PointerPress>, mut n: ResMut<Presses>| n.0 += 1)
-        .observe(|drag: On<PointerDrag>, mut d: ResMut<DraggedRight>| d.0 += drag.delta.x);
+        .observe(|drag: On<PointerDrag>, mut d: ResMut<DraggedRight>| d.0 += drag.delta.x)
+        .observe(|_: On<PointerOut>, mut log: ResMut<CancelLog>| log.outs += 1)
+        .observe(|_: On<PointerCancel>, mut log: ResMut<CancelLog>| log.cancels += 1);
 }
 
 /// A scenario over the test UI with these steps.
@@ -106,7 +128,7 @@ fn scenario(steps: impl IntoIterator<Item = Step>) -> Scenario {
 fn play(scenario: &Scenario) -> (App, ScenarioReport) {
     let mut app = scenario.headless_app();
     app.init_resource::<TouchLog>();
-    app.add_systems(Update, record_touches);
+    app.add_systems(Update, (record_touches, record_cancel));
     let report = scenario.run_in(&mut app);
     (app, report)
 }
@@ -300,6 +322,56 @@ fn a_cancelled_finger_gives_no_click() {
     assert!(report.passed(), "{:?}", report.failures());
     assert_eq!(app.world().resource::<Presses>().0, 1);
     assert_eq!(app.world().resource::<Clicks>().0, 0);
+}
+
+/// Pins what Bevy 0.20 does with a cancelled touch, as a device does.
+///
+/// `TouchCancel` writes `PointerAction::Cancel` for the touch pointer, as
+/// Bevy's own `touch_pick_events` does for a real cancelled touch. But
+/// `bevy_picking::hover::generate_hovermap` builds the hover map with
+/// `build_over_map`, which drops the hits of every pointer that has a `Cancel`
+/// input this frame, so that pointer's `HoverMap` entry is empty.
+/// `pointer_events` sends `Pointer<Cancel>` to the entities in that entry,
+/// which is none, and still sends `Pointer<Out>` from the previous hover map.
+/// So no widget ever sees `Pointer<Cancel>` for a touch, on a device either.
+/// The tester must not send one of its own, or a scenario would pass where the
+/// gesture fails on a device; apps read `Touches` instead (see the next test).
+///
+/// This test is meant to fail once Bevy delivers `Pointer<Cancel>` for a
+/// cancelled touch. It should then be inverted.
+#[test]
+fn a_cancelled_finger_gives_out_and_no_pointer_cancel_on_bevy_0_20() {
+    let (app, report) = play(&scenario([
+        Step::touch_down(pad()),
+        Step::wait(1),
+        Step::touch_cancel(),
+        Step::wait(2),
+    ]));
+    assert!(report.passed(), "{:?}", report.failures());
+    let log = app.world().resource::<CancelLog>();
+    assert_eq!(log.outs, 1, "the pad is left once");
+    assert_eq!(
+        log.cancels, 0,
+        "Bevy 0.20 never sends Pointer<Cancel> to touch"
+    );
+}
+
+#[test]
+fn a_cancelled_finger_shows_in_touches_in_the_frame_the_step_plays() {
+    let (app, report) = play(&scenario([
+        Step::touch_down(pad()),
+        Step::wait(1),
+        Step::touch_cancel(),
+    ]));
+    assert!(report.passed(), "{:?}", report.failures());
+    assert!(
+        app.world().resource::<CancelLog>().touches_saw_cancel,
+        "Touches::any_just_canceled holds, the app-side way to see a cancel"
+    );
+    assert!(
+        app.world().resource::<CancelLog>().finger_0_just_canceled,
+        "Touches::just_canceled(0) holds too"
+    );
 }
 
 #[test]
