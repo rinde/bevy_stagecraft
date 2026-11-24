@@ -52,3 +52,4 @@ Read the file when its trigger applies. Each file is under `agent-docs/`.
 | [modules.md](agent-docs/modules.md) | you look for the module that does something |
 | [architecture-tooling.md](agent-docs/architecture-tooling.md) | you change how the player, recorder, trace, session or gallery work together |
 | [writing-docs.md](agent-docs/writing-docs.md) | you write or move documentation |
+| [usage guides](README.md#guides) | you change behaviour a user can see: update the guide for it |
