@@ -533,7 +533,11 @@ fn a_finger_circle_and_marks_come_and_go_with_a_touch_down_and_up_and_the_arrow_
 
     let report = Scenario::new("lift")
         .setup(spawn_ui)
-        .steps([Step::touch_up(), Step::wait(1)])
+        .steps([
+            Step::touch_down(Target::screen(Vec2::new(300.0, 200.0))),
+            Step::touch_up(),
+            Step::wait(1),
+        ])
         .run_in(&mut app);
     assert!(report.passed(), "{:?}", report.failures());
     let (fingers, marks) = touch_overlay(&mut app);
