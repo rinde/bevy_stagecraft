@@ -32,7 +32,6 @@ libraries, and warms the build cache in the background. It is idempotent and
 does nothing outside cloud sessions. Run it by hand with
 `.claude/hooks/session-start.sh --force` (this also waits for the cache warm-up).
 
-
 ## Disk use
 
 `just ci` builds about 90 test binaries. With full debuginfo each was roughly
