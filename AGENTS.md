@@ -51,3 +51,4 @@ Read the file when its trigger applies. Each file is under `agent-docs/`.
 | [modules.md](agent-docs/modules.md) | you look for the module that does something |
 | [module-details.md](agent-docs/module-details.md) | you change a module and need its detailed behaviour |
 | [writing-docs.md](agent-docs/writing-docs.md) | you write or move documentation |
+| [usage guides](README.md#guides) | you change behaviour a user can see: update the guide for it |
