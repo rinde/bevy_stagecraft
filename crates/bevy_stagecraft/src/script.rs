@@ -8,6 +8,35 @@
 //! against the registry's types when the script loads. Nothing is looked up
 //! by a name. Loading a script whose values or types the registry cannot
 //! read is an error, never a silent skip.
+//!
+//! # Format versions
+//!
+//! A script is written as [`FORMAT_VERSION`] and read from
+//! [`OLDEST_FORMAT_VERSION`] to it. The optional fields `action_timeout`,
+//! `scale_factor` (finite and above zero, else [`LoadError::Invalid`]) and
+//! `variants` (the variants a scenario runs in; a runner skips it elsewhere),
+//! and the forms `Group` and `Capture`, are additions, so a file that uses
+//! one is a newer version.
+//!
+//! # What loading checks
+//!
+//! - A `Timeout(..)` or `Force(..)` around a step that cannot wait is
+//!   `Invalid`.
+//! - A `Group` with an empty or blank name is `Invalid`; every error inside
+//!   one carries the group path in `used_by`.
+//! - A check that uses a captured name no earlier `Capture` took is
+//!   `BadCheck`; `expect` checks may use any name captured in the steps. A
+//!   name captured twice is `Invalid`. A measurement of an unknown type or
+//!   field is the usual `UnknownType` or `UnknownPath`, with close names
+//!   suggested.
+//! - Unknown types and fields name the step and suggest close names;
+//!   `BadAppValue` names the extension point and where, and lists the
+//!   variants; `SeveralAppTypes` names every type; `NoAppType` says how to
+//!   declare one.
+//! - The forms that used to name an app's code (`Named(..)`, `File(..)`
+//!   setups, a view's bare name, `Custom(resolver: ..)` targets, and
+//!   `expect_state`) are refused with a hint to write `App(..)` or to check a
+//!   reflected resource.
 
 use alloc::sync::Arc;
 use core::fmt;

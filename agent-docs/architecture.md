@@ -1,118 +1,125 @@
 # Architecture
 
-How the tooling modules work together. What one module or type does is in its
-rustdoc (`cargo doc --document-private-items`); this file is only the design
-across modules, with the items to read for each part. Paths are under
-`crates/bevy_stagecraft/src/`.
+How the modules fit together. What each module does is in its rustdoc
+(`just doc`); this file holds only the design facts that span modules. Start
+from [`player`](../crates/bevy_stagecraft/src/player.rs) and
+[`script`](../crates/bevy_stagecraft/src/script.rs).
 
-## One scenario, three ways
+## Data, not closures
 
-A [`Scenario`](../crates/bevy_stagecraft/src/scenario.rs) is played by the
-[`player`](../crates/bevy_stagecraft/src/player.rs) in a world. The same player
-runs headless in `cargo test` (`headless`), offscreen with the real renderer
-(`recorder`, feature `record`) and in the gallery window (`gallery`, feature
-`gallery`). The recorder and the gallery add the cursor `overlay`; headless
-tests never do. What differs between the three is only what is added around the
-player, so a scenario behaves the same in each.
+A scenario is a [`Script`](../crates/bevy_stagecraft/src/script.rs) in
+memory: steps, checks, targets and the app's setup and view are all plain
+data. A Rust scenario and a `.ron` file are two spellings of one thing, so
+every scenario exports (`Scenario::to_script`). The only closures are the
+setup and view closures a Rust author adds, which run after the data ones and
+never reach a file.
 
-## Screenshot checks: the `Pictures` hand-over
+The app's own parts are values of one reflected enum per extension point (see
+`extension` and `check::app`). Bevy's automatic type registration finds them;
+nothing is registered or looked up by name. A file keeps such a value as raw
+RON (`AppValue`) until it loads, then reads it with
+`TypedReflectDeserializer` against the app's type. A wrong variant or field
+is a load error naming where, never a failure mid-run.
 
-A screenshot check needs pixels, and only the recorder has a renderer. The
-`Pictures` resource in `check/screenshot.rs` is the hand-over: the player asks
-for the picture of the frame it just played, the recorder takes it, and the
-player's check then compares it with the baseline. A world without `Pictures`
-(headless, gallery) skips screenshot checks, which is recorded as skipped and
-does not fail the scenario.
+## Load time and run time
 
-The steps, all in `recorder.rs` (`RecorderSupport`):
+The same lookups serve two moments (`check::reflect`). At load, only type
+information is at hand (the `Registry`), and `Scenario::from_script` rejects
+whatever cannot be read: unknown types, fields, values, captured names used
+before they are taken, wrappers around steps that cannot wait, variants that
+change a window under a step in logical pixels. At run time the world
+supplies the values and the same lookups read them. Anything a load check can
+catch must not wait until a run.
 
-1. the player marks a picture as wanted in `Pictures`;
-2. `hide_overlay_for_picture` (`PostUpdate`, before visibility propagates)
-   sets every `OverlayRoot` hidden and remembers each one's visibility in
-   `Pictures`, so a baseline holds the app and not the cursor or caption;
-3. `request_check_picture` (`Last`, after `RecorderSystems::Capture`) spawns
-   the `Screenshot`, or, as Bevy keeps one screenshot per target per frame,
-   reuses the recording's own screenshot of that frame where `request_frames`
-   took one;
-4. `store_check_picture` (an observer of `ScreenshotCaptured`) delivers it to
-   `Pictures`, with a token so a picture that comes back late from a stopped
-   scenario is not taken for the next one's;
-5. `show_overlay_again` (`First`) puts the visibilities back.
+## One frame at a time
 
-Read: [`recorder`](../crates/bevy_stagecraft/src/recorder.rs),
-[`check::screenshot`](../crates/bevy_stagecraft/src/check/screenshot.rs),
-[`overlay::OverlayRoot`](../crates/bevy_stagecraft/src/overlay.rs).
+The player (`player`) advances a scenario one frame per `App::update`. It
+plays the flattened steps (groups are labels only), so numbering, reports and
+playback never see a group. Several things make it wait, none of which count
+as a step:
 
-## One trace, two renderers
+- Before the first step, until every scene the setup queued is loaded, at
+  most the scenario's action timeout (`await_scenes`). Failing that, the
+  report carries a `setup_failure` and no step plays. A setup that returns an
+  error does the same with every step skipped.
+- Before an action on a widget, until the target is actionable
+  (`targets::actionable`), up to the step's timeout; `Force` skips it.
+- While a `Check::Within` has not yet held, polled once per frame.
+- Before polling a check that holds a screenshot, for the picture (see
+  below).
 
-A `ScenarioTrace` (`trace.rs`) is taken in `Last` after each played frame,
-which is also when the recorder asks for that frame's picture, so a trace point
-and its picture show the same moment. `StepView` is the one plain-data
-description of a step (outcome, targets, captured values, checks, snapshot
-diff, the points before and after) and `step_title` the one wording. The
-recorder's `index::trace_html` and the gallery's Trace tab both render
-`StepView`s and add only their own markup, so the page and the tab read the
-same.
+Time is fixed at 1/60 s per update (`headless`), and nothing reads the wall
+clock, so a frame count means the same everywhere (see `determinism.md`).
 
-The recorder traces with its own noise filter and writes what it leaves out
-nowhere. The gallery traces with `NoiseFilter::nothing()` and filters the
-changes when the tab draws (`StepView::new` takes the filter), so the person
-can hide and show types without playing the scenario again. That filter lives
-in `GalleryState` and changes the Trace tab only.
+## Errors from the app
 
-Read: [`trace`](../crates/bevy_stagecraft/src/trace.rs),
-[`index`](../crates/bevy_stagecraft/src/index.rs),
-[`gallery::state`](../crates/bevy_stagecraft/src/gallery/state.rs).
+A panic in a system, command or observer reaches Bevy's
+`FallbackErrorHandler`, whose default panics again and would end the run.
+While a scenario is active the player installs its own handler
+(`player::catch`) in a `First` system and puts the app's back afterwards. The
+handler keeps errors of severity `Panic` in a thread local, so tests running
+in parallel threads stay apart; every other error, and any error on a thread
+that is not catching, goes to Bevy's default. A `Last` system turns what was
+kept into a failed step: the step last started, which aborts the script like
+any failed step. `run_in` syncs the handler around its own loop too.
 
-## One ranking of targets
+## How a check ends
 
-`check::pick::target_alternatives` is the only place targets are ranked (test
-id, role, text, name, the app's own target, screen position). Pick mode in the
-gallery lists the whole ranking; the session recorder (`session/target.rs`)
-writes the first for a click. A change to the ranking therefore changes what a
-recording writes and what pick mode offers, together.
+`Check::poll` gives `Option<Outcome>`: `None` while a `Within` still waits.
+Underneath, one frame yields a `Verdict`: holds, fails, pending, broken or
+unavailable. Broken is a check that cannot run at all (an ambiguous target)
+and fails even inside `Not` or `Any`. Unavailable is a check that cannot run
+here (a screenshot without a renderer): wrappers pass it through and it ends
+as `Outcome::Skipped`. `ScenarioReport::passed` fails on a failed check only,
+while a skipped step still fails the scenario.
 
-Read: [`check::pick`](../crates/bevy_stagecraft/src/check/pick.rs),
-[`session::target`](../crates/bevy_stagecraft/src/session/target.rs).
+## Captured values
 
-## How a recording becomes a scenario
+A `Capture` step reads the world in the player (`Running::captures`) and
+keeps the RON text and type name under a name, taking no frame. The store
+(`CapturedValues`) is the player's per-run state, passed to every
+`Check::poll`, expected checks included, and is never a world resource. A
+`Value::captured(name)` operand in a later check is resolved to a literal
+just before it is compared, so a failure reads `expected Captured("x") = 2`.
+The names are known at load time (`Check::captured_names`), which is how a
+check using a name no step took is refused before the run.
 
-`SessionPlugin` (`session/mod.rs`) logs the primary window's real mouse, keyboard
-and touch input as `RecordedEvent`s stamped with a frame counter at the fixed
-1/60 s, so playback does not depend on the frame rate of the session. On stop,
-the pure `session::log` (`steps_from_events`, `read_log`) turns the log into
-steps and says where each checkpoint falls; it needs no window, so it is tested
-without one. Clicks are named through `target_alternatives`, and the app's
-own setup, view and targets come from its reflected types
-(`AppSetup::capture`, `AppView::current`, `AppTarget::at`), not from hooks.
+## Screenshots
 
-Checks come from snapshots. `WorldSnapshot` (`check/suggest.rs`) is taken on
-start, at each checkpoint and on stop. The diff against the previous
-checkpoint, or the start, becomes `Check` steps at that checkpoint; the last
-diff becomes the script's `expect`. Every suggestion is kept only if it loads
-and holds in the world it came from. A named checkpoint turns the steps since
-the one before into a `Step::Group`. The checkpoint key is taken out of the
-primary window's keyboard messages before `InputSystems` while recording
-(`SessionSystems::Checkpoint`), so the app never sees it.
+The player cannot take a picture and the recorder can, so they meet in the
+crate-private `Pictures` resource (`check::screenshot`). Before polling a
+check that holds a screenshot, the player asks for a picture and waits; the
+recorder answers it in `Last` (reusing the recording's own frame where it has
+one), hides the overlay for it and puts the overlay back. A world without
+`Pictures` (headless, gallery) never gets an answer, so those checks end as
+skipped. The pure compare, crop and diff code is ungated; PNG encoding needs
+feature `record`.
 
-The gallery's **Record** button drives the session; its ticking of suggested
-checks rewrites the file through `SavedSession::save_checks` and `save_expect`.
-Pick mode adds a check chosen by hand with `session::add_check`. `save`
-turns a checkpoint into a setup other scenarios load.
+## Traces
 
-Read: [`session`](../crates/bevy_stagecraft/src/session/mod.rs),
-[`session::log`](../crates/bevy_stagecraft/src/session/log.rs),
-[`check::suggest`](../crates/bevy_stagecraft/src/check/suggest.rs),
-[`save`](../crates/bevy_stagecraft/src/save.rs).
+With tracing on, the player takes a `TracePoint` (a world snapshot and UI
+tree) at each step boundary where a later step became due, and at the end. It
+also keeps each step's targets, checks and captured values. `StepView`
+(`trace`) joins one step with its points and is the single description that
+`index::trace_html` and the gallery's Trace tab both render. `pause_before`
+lets the gallery jump to a step by halting before that step's operations are
+expanded and taking the frame back, so the world equals the trace's
+`before(k)`.
 
-## The gallery owns the primary window while a script plays
+## Variants
 
-While a script plays, `gallery::input` removes real mouse, keyboard and touch
-messages aimed at the primary window before `InputSystems` reads them and turns
-Bevy's own mouse picking off; the Scenarios window gets a pointer of its own.
-Pick mode keeps the app's input away the same way whether or not a script
-plays. Everything the gallery and the overlay spawn is `NotUnderTest`, so
-target lookups, picking and recording never see it.
+A `Variant` is the runner's environment for a scenario, not part of it. It
+sets the window size, scale factor, rem size, and may replace the setup or
+view. The runners (`files`, `recorder`, `gallery`) each play every scenario
+once per variant and skip a scenario that names other variants. A scale factor
+or rem size leaves the logical window alone, so a step in logical pixels
+(`Target::Screen`, `MoveBurst`) stays valid; only a window-size change is a
+load error for such a step.
 
-Read: [`gallery`](../crates/bevy_stagecraft/src/gallery/mod.rs),
-[`gallery::input`](../crates/bevy_stagecraft/src/gallery/input.rs).
+## Reading the world
+
+Checks read the world through `Probe`; targets resolve through `targets`;
+neither writes. Gallery and overlay UI is marked `NotUnderTest`, which hides
+it from lookups. A target names a UI node only where it has a `Node` (or a
+`ComputedNode` and `UiGlobalTransform`); `entity_of` is the one lookup that
+may name an entity that is not a UI node.

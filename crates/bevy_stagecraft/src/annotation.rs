@@ -6,6 +6,19 @@
 //! [`crate::Scenario::tags`]. A runner chooses scenarios by tag with a
 //! [`TagFilter`], which `run_ron_tests` reads from the environment variable
 //! [`TAGS_ENV`].
+//!
+//! Skip and fixme give [`Disabled`] (skip first); the file fields `tags`,
+//! `skip`, `fixme` and `should_fail` are forms added in format 3. A
+//! [`TagFilter`] matches when no forbidden tag is present and, if any tag is
+//! required, one is: `bridge,-slow`.
+//!
+//! Consumers: [`crate::run_ron_tests`] does not list a scenario outside the
+//! filter, reports skip and fixme as disabled (`ignored, ..`, apart from a
+//! variant skip), and flips the result of a `should_fail` scenario, failing
+//! with a hint when it passes. The recorder dims disabled cards in the index
+//! with the reason, lists them last and flips `should_fail`. The gallery has a
+//! **Tag** row, shows disabled entries as skipped and dimmed with their
+//! reason, and skips them in run-all.
 
 /// The environment variable `run_ron_tests` reads its [`TagFilter`] from:
 /// `RIN_SCENARIO_TAGS=bridge,-slow` plays the scenarios tagged `bridge`
