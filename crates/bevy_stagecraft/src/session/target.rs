@@ -1,4 +1,12 @@
 //! Working out what a click landed on while recording.
+//!
+//! A click is named by the first of
+//! [`crate::check::pick::target_alternatives`] for the
+//! widget under it, the one ranking pick mode uses too, but only where that
+//! widget has a role that is not positional (a slider is, since where on it
+//! the click lands matters) or the click is on a text. Anything else, such as
+//! a slider's track or a bare panel, keeps its position, which the app's
+//! [`AppTarget::at`](crate::AppTarget::at) may name.
 
 use bevy::{
     ecs::{entity::Entity, world::World},

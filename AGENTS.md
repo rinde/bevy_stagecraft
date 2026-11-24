@@ -49,5 +49,6 @@ Read the file when its trigger applies. Each file is under `agent-docs/`.
 | [testing.md](agent-docs/testing.md) | you write a test, or a test needs a GPU |
 | [dependencies.md](agent-docs/dependencies.md) | `just deny` fails or you add a dependency |
 | [modules.md](agent-docs/modules.md) | you look for the module that does something |
+| [architecture.md](agent-docs/architecture.md) | you change how the player, recorder, trace, session or gallery work together |
 | [module-details.md](agent-docs/module-details.md) | you change a module and need its detailed behaviour |
 | [writing-docs.md](agent-docs/writing-docs.md) | you write or move documentation |
