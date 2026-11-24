@@ -23,9 +23,12 @@ A fact is written in one place and linked from the others, never copied.
 | `README.md` | 200 | 10 KB |
 | any file in `agent-docs/` | 250 | 16 KB |
 
-No line is over 200 characters outside fenced code blocks. A later ticket
-enforces this. A file that outgrows its budget is split by topic, with an index
-entry for each part, not trimmed into shorthand.
+No line is over 200 characters outside fenced code blocks. The limits live as
+constants in `crates/bevy_stagecraft/tests/docs.rs`, their source of truth. It
+fails `just ci` (`just docs` runs it alone) on a file over budget, an orphaned
+file in `agent-docs/`, or a dead link or anchor. A file that outgrows its budget
+is split by topic, with an index entry for each part, not trimmed into
+shorthand.
 
 ## Updating
 
