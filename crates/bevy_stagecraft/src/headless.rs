@@ -1,4 +1,16 @@
 //! Running a real Bevy app, UI included, with no GPU and no display.
+//!
+//! [`HeadlessPlugins`] is the plugin group: Bevy's minimal plugins plus the
+//! UI, text, picking, input and widget plugins, and a virtual primary window
+//! that no operating system backs. Time advances by a fixed 1/60 s per
+//! update whatever the wall clock says, so a run is the same on every
+//! machine.
+//!
+//! The window is sized in logical pixels ([`DEFAULT_WINDOW_SIZE`]).
+//! [`HeadlessPlugins::with_scale_factor`] sets the physical pixels per logical
+//! one ([`DEFAULT_SCALE_FACTOR`] otherwise): the window keeps its logical
+//! size and its physical size is that times the factor. Input goes in
+//! through [`SyntheticInput`](crate::SyntheticInput), which the group adds.
 
 use core::time::Duration;
 

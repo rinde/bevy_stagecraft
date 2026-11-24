@@ -29,7 +29,8 @@ probes over the world.
   `unimplemented!`, `dbg!`, printing, indexing and slicing, `unsafe`, and the
   Bevy methods in `clippy.toml`. Details: `agent-docs/code-practices.md`.
 - Before you call it done: `just fmt`, then `just ci`, then update the docs
-  your change touches (`agent-docs/writing-docs.md`).
+  your change touches (`agent-docs/writing-docs.md`). A docs budget failure
+  means split the file, not compress it.
 - British spelling (behaviour, colour, initialise). Every item is documented.
 - `publish = false` stays. There is no licence file and no open-source framing.
 - A CI job failing on billing or quota is not a failure of the change; say so
@@ -48,6 +49,8 @@ Read the file when its trigger applies. Each file is under `agent-docs/`.
 | [determinism.md](agent-docs/determinism.md) | a scenario differs between runs or runners |
 | [testing.md](agent-docs/testing.md) | you write a test, or a test needs a GPU |
 | [dependencies.md](agent-docs/dependencies.md) | `just deny` fails or you add a dependency |
+| [architecture.md](agent-docs/architecture.md) | you need how the modules fit together: waiting, errors, captured values, screenshots |
 | [modules.md](agent-docs/modules.md) | you look for the module that does something |
-| [module-details.md](agent-docs/module-details.md) | you change a module and need its detailed behaviour |
+| [architecture-tooling.md](agent-docs/architecture-tooling.md) | you change how the player, recorder, trace, session or gallery work together |
 | [writing-docs.md](agent-docs/writing-docs.md) | you write or move documentation |
+| [usage guides](README.md#guides) | you change behaviour a user can see: update the guide for it |

@@ -69,5 +69,9 @@ test-gpu-headless:
 gallery-test:
     cargo run --quiet --example gallery --features gallery -- --run-all
 
+# Check the docs' size budgets and links (also part of `test`).
+docs:
+    cargo test --quiet -p bevy_stagecraft --test docs
+
 # Everything CI runs.
 ci: lint test features unused-deps deny

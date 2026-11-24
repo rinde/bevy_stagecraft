@@ -15,7 +15,8 @@
 | `just deny`        | Licences, advisories, bans                      | `cargo deny check`                                                                |
 | `just test-gpu`    | Tests needing a GPU, on the backend wgpu picks (needs a display) | `cargo test --workspace --features record gpu -- --include-ignored` |
 | `just test-gpu-headless` | The same on a software GPU (lavapipe), forcing Vulkan | `WGPU_BACKEND=vulkan cargo test --workspace --features record gpu -- --include-ignored` |
-| `just gallery-test` | Play every gallery scenario in a real window, exit non-zero naming failures (needs a display, not part of `ci`) | `cargo run --example gallery --features gallery -- --run-all` |
+| `just gallery-test` | Play every gallery scenario in a window; non-zero on failure (needs a display, not in `ci`) | `cargo run --example gallery --features gallery -- --run-all` |
+| `just docs`        | Docs size budgets and links (part of `test`)    | `cargo test -p bevy_stagecraft --test docs`                                       |
 | `just ci`          | Everything CI runs                              | all of the above except `test-gpu` and `test-gpu-headless`                                                |
 
 `just test-gpu-headless` needs a Vulkan driver. On a machine without a GPU, install

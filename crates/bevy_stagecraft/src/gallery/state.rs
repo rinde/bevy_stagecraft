@@ -1,4 +1,41 @@
 //! What the gallery is doing, and what can be asked of it.
+//!
+//! [`GalleryState`] holds the controls and what the gallery remembers: the
+//! selection, the [`GalleryPhase`], the [`Speed`], looping, the variant and
+//! each entry's last [`ScenarioResult`] per variant. Anything that changes it
+//! goes through [`GalleryState::request`] with a [`GalleryAction`], which
+//! buttons, keys and code all use, and is carried out before the script next
+//! advances.
+//!
+//! Beside that:
+//!
+//! * [`Suggestions`] are the checklists shown when **Record** stops, one per
+//!   checkpoint and one for the end. A click on a row rewrites the file's
+//!   `Check` steps at that checkpoint, or its `expect`; the wheel scrolls
+//!   them while hovered;
+//! * [`Picking`] is pick mode, and [`GalleryState::picked`] the node picked
+//!   last;
+//! * the **Trace** tab's state: [`GalleryTab`], [`TraceWorld`],
+//!   [`NoisePreset`], [`HiddenList`] and the trace stored when a run ends
+//!   (kept across jumps, cleared by `Select` and `Restart`; the tab reads
+//!   [`GalleryState::trace`] and otherwise the player's live one);
+//! * [`GalleryRunReport`], what a run of everything did.
+//!
+//! **Save as setup** is [`GalleryAction::SaveAsSetup`]: it writes the world as
+//! a setup into the export directory under the selected scenario's name (see
+//! [`crate::save`]), while recording, paused, taken over or finished but not
+//! while a script plays ([`GalleryState::is_script_playing`],
+//! [`GalleryState::can_save_as_setup`]). The button is dimmed then, and a click
+//! only says "Pause the script to save it as a setup", as the buttons a
+//! recording refuses say "Stop recording first".
+//!
+//! Variants: a **Variant** button row appears when the gallery has several
+//! ([`GalleryAction::SelectVariant`]). Results are kept per entry and variant.
+//! Run-all plays every entry in every variant and skips an entry whose
+//! scenario does not name the variant, reporting it as `SKIP` rather than a
+//! failure. The primary window's size and scale factor from before the first
+//! variant are put back where a scenario sets none; Export and the pick
+//! checks still use the catalogue's scenario as written.
 
 use alloc::collections::BTreeMap;
 use std::path::PathBuf;

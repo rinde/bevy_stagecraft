@@ -1,4 +1,23 @@
-//! Synthetic input: drive a Bevy UI like a mouse and keyboard.
+//! Synthetic input: drive a Bevy UI like a mouse, a keyboard and fingers.
+//!
+//! [`SyntheticInput`] queues events; the plugin drains the queue in
+//! `PreUpdate` into Bevy's own input messages and into `PointerInput`, so
+//! the app sees what a person's devices would produce.
+//!
+//! Keyboard: [`SyntheticInput::type_character`] queues one character as a
+//! [`SyntheticEvent::Character`]: Shift down where the layout needs it, the
+//! logical key with its text, its release, Shift up, all in one frame.
+//! [`keystroke`] and [`Keystroke`] are the US-layout mapping from a character
+//! to a key and whether Shift is held. Modifier key events carry the logical
+//! keys (`Key::Shift` and so on), so `ButtonInput<Key>` sees them as text
+//! fields do.
+//!
+//! Touch: `touch_down`, `touch_move`, `touch_up` and `touch_cancel` (and
+//! [`SyntheticEvent::Touch`]) write `TouchInput` and `PointerInput` for
+//! `PointerId::Touch(id)` directly, because Bevy's touch picking reads window
+//! events that a headless app never has. The pointer is spawned on `Started`
+//! and despawned by a system in `Last` once the finger has ended. Touch never
+//! moves the mouse pointer or sets `Hovered`.
 
 use alloc::collections::{BTreeMap, VecDeque};
 
