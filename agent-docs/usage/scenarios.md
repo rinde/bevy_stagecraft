@@ -40,16 +40,12 @@ fn clicking_the_button_increments_the_counter() {
 }
 ```
 
-A `Check` is one of:
-
-- `Check::app(value)`: one of the app's own checks (see [extension-points.md](extension-points.md));
-- `Check::shows(text)`: some UI node of the app shows exactly this text;
-- `Check::hovered(target)`: the target's widget, or something below it, is
-  under the pointer;
-- the built-in checks on plain Bevy data ([checks.md](checks.md)), such as
-  `Check::resource::<Score>(".0").eq(3)`;
-- `!check`: the check does not hold. A check that cannot run at all, such as
-  a type nobody defined, still fails.
+A `Check` is the app's own (`Check::app(value)`, see
+[extension-points.md](extension-points.md)), a built-in over plain Bevy data
+([checks.md](checks.md)), `Check::shows(text)`, `Check::hovered(target)`, or
+`!check`, which holds when the check does not. A check that cannot run at all,
+such as a type nobody defined, still fails inside `!`. The variants are listed
+on [`Check`](../../crates/bevy_stagecraft/src/check/mod.rs).
 
 Every check is data: there are no check closures, so every scenario can be
 written to a file, recorded over and shown in the gallery with its checks. A
@@ -59,21 +55,12 @@ check only your app can make is a variant of its own `AppCheck` enum.
 
 Scripts need no `Wait` that guesses how long the UI takes to settle. As
 Playwright's auto-waiting does, a step that acts on a target that names a
-widget (`MoveTo`, `Glide`, `Drag`, the touch steps that put a finger on a target, and
-a `Click` or `Press` right after a move to a widget) first waits, one frame at a time, until the target:
-
-1. exists: it names exactly one widget;
-2. is visible: not hidden, with a size, and with its middle neither clipped
-   away nor outside the window;
-3. is stable: neither its layout nor its transform changed during the last
-   frame, so it is where it was two frames running;
-4. is enabled, for a step that presses (`Click`, `Press`, the start of a
-   `Drag`, `TouchDown`, `TouchTap` and `TouchDrag`): neither the widget nor anything above it carries
-   `InteractionDisabled`;
-5. receives the pointer: at the point the step aims at (the middle of the
-   widget, or the pointer for a press), the topmost UI node that takes the
-   pointer is the widget or lies below it, not something covering it.
-
+widget (`MoveTo`, `Glide`, `Drag`, the touch steps that put a finger on a
+target, and a `Click` or `Press` right after a move to a widget) first waits,
+one frame at a time, until the target exists, is visible, is stable, is
+enabled (for a step that presses) and receives the pointer. The five
+conditions, in order, are in
+[`targets/actionable.rs`](../../crates/bevy_stagecraft/src/targets/actionable.rs).
 A move only points, so it does not need the widget to be enabled: hovering a
 disabled button is fine, clicking it is not. A press checks the widget the move
 before it went to: still there, enabled, and still receiving the pointer.
@@ -139,19 +126,13 @@ failed step skips the rest of the script.
 ## Typing text
 
 `Step::type_text("Alpha")` (`Type(text: "Alpha")` in a file) types into
-whatever has keyboard focus, like Playwright's `pressSequentially`. For every
-character it sends a key press and release with the logical key and the text
-the character produces, one character per frame, with Shift pressed and
-released in the same frame around the characters that need it (capitals and
-the shifted symbols of a US layout), so a Bevy text field (`TextInput`, with
-its `EditableText`) ends up holding exactly that text. A character no key of
-the US layout types is sent on an unidentified physical key, carrying the
-text, which text fields read all the same. `Step::type_into("Alpha", Target::text("Name"))`
+whatever has keyboard focus, like Playwright's `pressSequentially`, so a Bevy
+text field (`TextInput`) ends up holding exactly that text.
+`Step::type_into("Alpha", Target::text("Name"))`
 (`Type(text: "Alpha", into: Text("Name"))`, Playwright's `fill`) first moves
 to the target and clicks it, which focuses a text field (Bevy focuses a
-clicked field only if it has a `TabIndex`), waiting for it to be
-actionable as a click does (so `Timeout(..)` and `Force(..)` may wrap a `Type`
-that has an `into`, and no other).
+clicked field only if it has a `TabIndex`). How a character becomes key events
+is on `Step::Type` in [`scenario.rs`](../../crates/bevy_stagecraft/src/scenario.rs).
 
 ```ron
 steps: [
@@ -168,15 +149,11 @@ format version 3, so every older file still loads.
 
 ## A panic in the app
 
-Since Bevy 0.20 a panic in a system, command or observer reaches the world's
-`FallbackErrorHandler`. While a scenario plays (`run_headless`, `run_in`, so
-`run_ron_tests` and its variants, the recorder and the gallery) the player
-installs a handler that keeps such errors, and puts the app's own back
-afterwards. The step during which the app panicked fails, naming the system,
-command or observer and the message; the rest of the steps are skipped, and
-the runner goes on with the next scenario. Errors of lower severity go to
-Bevy's default handler as before. The errors are kept per thread, so this
-holds where the app updates on the thread that plays it (the default here).
+A panic in a system, command or observer (Bevy 0.20 sends it to the world's
+`FallbackErrorHandler`) fails the step during which it happened, naming the
+system and the message. The rest of the steps are skipped and the runner goes on
+with the next scenario. How the player catches it, and the one-thread limit, is
+in [`player/catch.rs`](../../crates/bevy_stagecraft/src/player/catch.rs).
 
 ## Several pointer moves in one frame
 
@@ -211,21 +188,16 @@ touch pointer, which exists from the finger going down until it lifts. The
 cursor and `Hovered` never move. `finger` is 0 unless a step says, and is left
 out of a file when it is 0.
 
-| Step                                  | What it does                                              | Frames     |
-| ------------------------------------- | --------------------------------------------------------- | ---------- |
-| `TouchDown(at: T, finger: n)`         | put a finger down at the target                           | 1          |
-| `TouchMove(to: T, finger: n)`         | move a finger that is down                                | 1          |
-| `TouchUp(finger: n)`                  | lift a finger, where it is                                | 1          |
-| `TouchCancel(finger: n)`              | the system takes the finger away: no click, `Pointer<Out>` only (below) | 1          |
-| `TouchTap(T)`                         | finger 0 down, then up on the next frame, as `Click`      | 2          |
-| `TouchDrag(from: T, to: T, frames: n)` | down, along `Glide`'s eased path, up                     | `n` + 2    |
-
-`TouchTap` takes two frames because Bevy clicks only an entity the pointer
-hovered the frame before. A step that needs a finger down (`TouchMove`,
-`TouchUp`, `TouchCancel`) on one that is not, or a `TouchDown` on one that is,
-fails at once. The steps that aim at a target wait for it to be actionable
-like `Click` and `Drag`, and `Timeout(..)` and `Force(..)` wrap them (not
-`TouchUp` or `TouchCancel`).
+The steps are `TouchDown`, `TouchMove`, `TouchUp`, `TouchCancel` (the system
+takes the finger away: no click, `Pointer<Out>` only, see below), `TouchTap`
+(down, then up on the next frame, as `Click`) and `TouchDrag` (down, along
+`Glide`'s eased path, up); their fields and frame counts are on
+[`Step`](../../crates/bevy_stagecraft/src/scenario.rs). `TouchTap` takes two
+frames because Bevy clicks only an entity the pointer hovered the frame
+before. A step that needs a finger down on one that is not, or a `TouchDown` on
+one that is, fails at once. The steps that aim at a target wait for it to be
+actionable like `Click` and `Drag`, and `Timeout(..)` and `Force(..)` wrap them
+(not `TouchUp` or `TouchCancel`).
 
 On Bevy 0.20 a cancelled finger reaches widgets as `Pointer<Out>` and never as
 `Pointer<Cancel>`: `bevy_picking` drops the hits of a pointer that has a cancel

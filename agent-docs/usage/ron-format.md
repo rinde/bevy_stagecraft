@@ -117,10 +117,8 @@ step that does something, wherever it sits. The name has to say something
 (an empty or blank one is a load error), and a group may be empty.
 
 Everything that tells you where a step is shows the path of group names in
-front of it, joined with `" > "` (`GROUP_SEPARATOR`; plain ASCII because the
-bundled font draws no `›`): a failure reads `open the menu > wait for it >
-step 4: ...`, and so do load errors, the gallery's step list and step
-captions, the trace and `trace.html`. Each step of a `ScenarioReport` keeps its
-path in `StepRecord::group`. `flatten(steps)` gives the leaf steps with their
-paths for code that walks a script, and `with_group_path(path, text)` puts a
-path in front of a line. A group adds a form to version 3, not a version.
+front of it, joined with `" > "` (`GROUP_SEPARATOR`): a failure reads
+`open the menu > wait for it > step 4: ...`, and so do load errors, the
+gallery's step list and captions, and the trace. `flatten(steps)` gives the
+leaf steps with their paths for code that walks a script. A group adds a form
+to version 3, not a version.
