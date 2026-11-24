@@ -216,7 +216,7 @@ out of a file when it is 0.
 | `TouchDown(at: T, finger: n)`         | put a finger down at the target                           | 1          |
 | `TouchMove(to: T, finger: n)`         | move a finger that is down                                | 1          |
 | `TouchUp(finger: n)`                  | lift a finger, where it is                                | 1          |
-| `TouchCancel(finger: n)`              | the system takes the finger away: no click                | 1          |
+| `TouchCancel(finger: n)`              | the system takes the finger away: no click, `Pointer<Out>` only (below) | 1          |
 | `TouchTap(T)`                         | finger 0 down, then up on the next frame, as `Click`      | 2          |
 | `TouchDrag(from: T, to: T, frames: n)` | down, along `Glide`'s eased path, up                     | `n` + 2    |
 
@@ -226,6 +226,13 @@ hovered the frame before. A step that needs a finger down (`TouchMove`,
 fails at once. The steps that aim at a target wait for it to be actionable
 like `Click` and `Drag`, and `Timeout(..)` and `Force(..)` wrap them (not
 `TouchUp` or `TouchCancel`).
+
+On Bevy 0.20 a cancelled finger reaches widgets as `Pointer<Out>` and never as
+`Pointer<Cancel>`: `bevy_picking` drops the hits of a pointer that has a cancel
+input, so there is nobody to send it to. A real touch screen does the same, and
+`TouchCancel` sends no `Pointer<Cancel>` of its own, so a scenario cannot pass
+where the gesture fails on a device. An app that must react reads `Touches`
+(`just_canceled`, `any_just_canceled`), which `TouchCancel` updates that frame.
 
 ```ron
 steps: [
