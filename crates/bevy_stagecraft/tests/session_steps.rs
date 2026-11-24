@@ -949,6 +949,33 @@ fn a_straight_finger_drag_is_one_touch_drag() {
 }
 
 #[test]
+fn a_very_short_straight_finger_drag_is_spelt_out_so_it_plays_no_longer_than_recorded() {
+    for held in 1_u32..=2 {
+        let events = [
+            touch(10, 0, TouchPhase::Started, 0.0, 0.0, at_point(0.0, 0.0)),
+            touch(
+                10 + held,
+                0,
+                TouchPhase::Ended,
+                100.0,
+                40.0,
+                at_point(100.0, 40.0),
+            ),
+        ];
+        let steps = without_waits(convert(&events));
+        assert_eq!(
+            steps,
+            vec![
+                Step::touch_down(at_point(0.0, 0.0)),
+                Step::touch_move(at_point(100.0, 40.0)),
+                Step::touch_up(),
+            ],
+            "held {held} frames"
+        );
+    }
+}
+
+#[test]
 fn a_bent_finger_path_keeps_its_corner_as_touch_moves() {
     let events = [
         touch(1, 0, TouchPhase::Started, 0.0, 0.0, at_point(0.0, 0.0)),
