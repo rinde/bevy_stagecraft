@@ -722,16 +722,17 @@ impl Emitter {
         } else if finger == 0
             && lifted
             && simplify(&path, self.options.path_tolerance).len() <= 2
-            && u16::try_from(held.saturating_sub(2).max(1)).is_ok()
+            && held > TOUCH_DRAG_OVERHEAD
+            && u16::try_from(held - TOUCH_DRAG_OVERHEAD).is_ok()
         {
-            let frames = held.saturating_sub(2).max(1);
+            let frames = held - TOUCH_DRAG_OVERHEAD;
             self.emit(
                 Step::touch_drag(
                     target.clone(),
                     gesture.end_target.clone(),
                     frames_u16(frames),
                 ),
-                frames.saturating_add(2),
+                frames + TOUCH_DRAG_OVERHEAD,
             );
         } else {
             self.emit(Step::touch_down(target.clone()).with_finger(finger), 1);
@@ -925,6 +926,11 @@ impl Emitter {
         })
     }
 }
+
+/// Frames a `TouchDrag` plays beyond its own `frames` (the touch down and the
+/// lift). A gesture held no longer than this cannot be one without playing
+/// longer than recorded, so it is spelt out instead.
+const TOUCH_DRAG_OVERHEAD: u32 = 2;
 
 /// One finger's gesture, from its touch down to its end, with nothing else
 /// logged in between.
