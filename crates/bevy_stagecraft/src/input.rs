@@ -164,6 +164,12 @@ impl SyntheticInput {
     }
 
     /// Queues the system cancelling finger `finger` at `position`.
+    ///
+    /// On Bevy 0.20 a cancelled touch reaches widgets as `Pointer<Out>` and
+    /// never as `Pointer<Cancel>` (`generate_hovermap` drops the cancelled
+    /// pointer's hits), on a device as here, and this does not send one of its
+    /// own so that a scenario fails where a device would. An app that must act
+    /// on a cancel reads `Touches` (`just_canceled`, `any_just_canceled`).
     pub fn touch_cancel(&mut self, finger: u64, position: Vec2) {
         self.touch(finger, TouchPhase::Canceled, position);
     }
