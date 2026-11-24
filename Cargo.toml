@@ -17,9 +17,15 @@ bevy = { version = "=0.20.1", default-features = false }
 # even in dev builds, while our own code stays quick to compile.
 [profile.dev]
 opt-level = 1
+# Full debuginfo made each test binary over a gigabyte and filled disks;
+# line tables keep backtraces and panic locations readable.
+# The test profile inherits this.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+# Dependencies keep symbol names for backtraces but no line tables.
+debug = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
