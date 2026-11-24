@@ -1,5 +1,15 @@
 //! Reading scenario files again when they change (see
 //! [`Gallery::directory`](super::Gallery::directory)).
+//!
+//! [`reload_changed_files`] runs every [`WATCH_INTERVAL`] updates, never during
+//! a run of everything. A good reload forgets that entry's results
+//! (`GalleryState::forget_results`) and, if the entry is selected and nothing
+//! is being recorded, asks for a `Restart`. An added entry shifts the selection
+//! and the results (`GalleryState::insert_entry`). A file that does not load
+//! leaves the entry as it was and puts the reason in the status line. Every
+//! change bumps the gallery's `revision`, on which
+//! `ui::rebuild_catalogue` respawns the catalogue, with an error shown under
+//! its entry.
 
 use bevy::ecs::system::{Local, ResMut};
 

@@ -11,11 +11,27 @@
 //!
 //! * runs of moves become `Glide`s along a simplified path;
 //! * a press and release in place becomes a `Click`, a straight press, move
-//!   and release a `Drag`;
+//!   and release a `Drag`, a key pressed and released on its own a `Tap`, and
+//!   keys that typed text, each released within
+//!   [`StepOptions::hold_frames`], one `Type` step (never Enter, Tab or
+//!   Backspace, nor a Ctrl, Alt or Super chord, which stay `Tap`s);
+//! * real touch becomes `TouchTap` (finger 0, in place), `TouchDrag` (finger
+//!   0, straight) or `TouchDown`, `TouchMove`s and `TouchUp` or `TouchCancel`,
+//!   with `with_finger` for the other fingers. Fingers are numbered from 0 by
+//!   the lowest free number, not by the system's touch id. A finger that came
+//!   down before the session is ignored, moves in one frame are merged, and
+//!   the fingers still down are lifted on stop. Touch never moves the
+//!   script's mouse pointer;
 //! * a click on a UI node with a label becomes `Target::text(..)`; anything
 //!   else is offered to the app's [`AppTarget::at`](crate::AppTarget::at)
 //!   and stays `screen(..)` if the app has no answer;
-//! * idle time beyond a threshold is shortened to a short `Wait`.
+//! * idle time beyond a threshold is shortened to a short `Wait`, and further
+//!   before the pointer goes to a widget (see
+//!   [`StepOptions::widget_idle_frames`]), as playback waits for it. A step
+//!   holds at most `u16::MAX` frames, so a longer pause is several `Wait`s, a
+//!   longer `Glide` several legs along the straight line, and a longer `Drag`
+//!   a move, press, `Glide`s and release; the clock of the emitted steps
+//!   always equals the frames they play.
 //!
 //! # What the app plugs in
 //!
@@ -93,8 +109,7 @@
 //!
 //! Only the primary window is recorded, and nothing carrying
 //! [`crate::NotUnderTest`] is ever named as a target. A click on a label plays
-//! back on the middle of the labelled node, not on the exact pixel. Typed
-//! text is not recorded, only key presses. Touch is not recorded.
+//! back on the middle of the labelled node, not on the exact pixel.
 
 use core::{fmt, time::Duration};
 use std::{fs, path::PathBuf};

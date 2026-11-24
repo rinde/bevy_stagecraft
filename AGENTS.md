@@ -50,5 +50,5 @@ Read the file when its trigger applies. Each file is under `agent-docs/`.
 | [dependencies.md](agent-docs/dependencies.md) | `just deny` fails or you add a dependency |
 | [architecture.md](agent-docs/architecture.md) | you need how the modules fit together: waiting, errors, captured values, screenshots |
 | [modules.md](agent-docs/modules.md) | you look for the module that does something |
-| [module-details.md](agent-docs/module-details.md) | you change a module and need its detailed behaviour |
+| [architecture-tooling.md](agent-docs/architecture-tooling.md) | you change how the player, recorder, trace, session or gallery work together |
 | [writing-docs.md](agent-docs/writing-docs.md) | you write or move documentation |

@@ -1,4 +1,19 @@
 //! The scenarios a gallery offers, grouped.
+//!
+//! A [`Gallery`] is a list of groups of [`GalleryEntry`]s. Scenarios are added
+//! one by one or as a directory of `.ron` files ([`Gallery::directory`]), which
+//! is then watched: [`Gallery::prepare_files`] is what is done to every
+//! scenario read from a file, on a reload as on the first load. An entry keeps
+//! its `source`, its `error` (why the file does not load now, with the last
+//! good version kept in place) and whether it was never loaded at all
+//! ([`GalleryEntry::is_unloaded`]): such a placeholder is refused when
+//! selected and counts as a failure in a run of everything.
+//!
+//! Watching is polling, with no file-watcher dependency: the gallery compares
+//! each file's modification time and length every [`WATCH_INTERVAL`] updates
+//! (see [`crate::gallery`]'s `watch` module) and reports what it found as a
+//! `Reload::Changed` or `Reload::Added`. [`Gallery::variants`] lists the
+//! variants the whole catalogue can be played in.
 
 use alloc::sync::Arc;
 use std::{
