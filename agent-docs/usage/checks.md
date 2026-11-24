@@ -21,28 +21,16 @@ Check::within(30, Check::shows("Saved"))             // waits up to 30 frames
 - Comparisons are `eq`, `ne`, `lt`, `le`, `gt`, `ge` and `between` (both ends
   included); a failure says what was found: `count of `Ghost` is 2, expected
   1`.
-- `Count` leaves out disabled entities, as queries do. The types must be
-  registered in the app (`app.register_type::<T>()`, or Bevy's automatic
-  registration); `Resource` and `Component` need `#[reflect(Resource)]` or
-  `#[reflect(Component)]`, and `InState` needs `app.register_type_state::<S>()`.
-- A short name that two registered types share (Bevy has two `Button`s) is
-  refused, listing their full type paths; write the full path instead, such as
-  `bevy_ui_widgets::button::Button`.
-- `Component` reads the component on the target's node or, failing that, the
-  nearest node above it that has one, so a label finds the widget it sits in.
-- The widget states read the components Bevy's widgets keep:
-  `InteractionDisabled`, `Checked`, `Selected`, `Pressed`,
-  `InputFocus` (the widget or something below it), `InheritedVisibility` and a
-  laid-out size. A text target names the nearest widget at or above the text.
-  `Visible` is about the named node itself, not the widget above it, so a
-  hidden list inside a visible selectable row is not `Visible`. `OnTop` reads
-  the named node too, so a plain popup root inside a widget is judged by its own
-  paint; only a text label stands for the widget it sits in. The other states
-  read the nearest widget at or above the node.
-- `TextOf` reads every text node at or below the target's widget, spans
-  included, joined by spaces, and matches `Exact`, `Contains` or `StartsWith`.
-  For a text input (`TextInput`) it reads the value the field holds, and
-  `Shows(..)` finds a field by its value too.
+- Types must be registered in the app (`app.register_type::<T>()`, or Bevy's
+  automatic registration); `Resource` and `Component` need
+  `#[reflect(Resource)]` or `#[reflect(Component)]`, and `InState` needs
+  `app.register_type_state::<S>()`. A short name that two registered types
+  share (Bevy has two `Button`s) is refused, listing their full type paths;
+  write the full path instead, such as `bevy_ui_widgets::button::Button`.
+- What each built-in reads (which components the widget states look at, how
+  `Visible` and `OnTop` differ from the others, how `TextOf` joins text and
+  reads a `TextInput`) is in
+  [`check/mod.rs`](../../crates/bevy_stagecraft/src/check/mod.rs).
 - `Tree(of: .., matches: "..")` compares the UI at and below the target's node
   with an expected tree, a snapshot in the manner of Playwright's aria
   snapshots (see [Tree snapshots](#tree-snapshots) below).
@@ -74,13 +62,9 @@ Capture(name: "x", value: Component(target: Name("popup"), path: "UiGlobalTransf
 ```
 
 The default is `unit: Physical`, the field as it is, so an older file reads the
-same. A logical value a `Capture` took is stored as the logical number and a
-later logical check compares with it, `plus` included; a check and its capture
-should name the same unit. `unit: Logical` applies to a number or a vector of
-numbers (`f32`, `f64`, `Vec2`, `Vec3`); on anything else it is a load error.
-In Rust the builder is `.logical()`:
-`Check::component::<ComputedNode>(target, "size.x").logical().eq(430.0_f32)`,
-`Measure::component::<ComputedNode>(target, "size.x").logical()`.
+same. It applies to numbers and vectors of numbers; the builder is
+`.logical()`, and a check and its capture should name the same unit. The rules
+are on `Unit` in [`check/mod.rs`](../../crates/bevy_stagecraft/src/check/mod.rs).
 
 ### Tree snapshots
 
@@ -98,25 +82,15 @@ Check(Tree(of: Name("Toolbar"), matches: r#"
 ```
 
 - A line is `- role "label" [state] [state]`, with a colon after it when lines
-  follow below. Roles are `panel` (a node that groups others, labelled by its
-  `Name` if it has one), `text`, and the widget roles written in kebab case:
-  `button`, `checkbox`, `radio`, `slider`, `menu-button`, `menu-item`,
-  `list-item`, `text-input`, `tab`, `tab-list`, read from the same components as `Role(..)` targets, not from
-  AccessKit. A widget's label is its text, as `TextOf` reads it, and the text
-  nodes inside a widget are not lines of their own. Widgets show states:
-  `disabled`, `checked`, `selected`, `pressed`, `focused`, and `value=..` on a
-  slider. A text input also shows the text it holds, after its states, as
-  `= "Alice"` (quoted like a label; leave it out to match any value).
+  follow below; a text input also shows `= "Alice"`. The roles, states and
+  matching rules (the expected tree is partial: siblings that do not matter are
+  left out, their order must hold, and every level from the root down is
+  written) are in
+  [`check/tree.rs`](../../crates/bevy_stagecraft/src/check/tree.rs).
 - An image or box set inline in text (`InlineImage`, `InlineBox`) is a line of
-  its own under its text, `image` or `inline-box`, so a snapshot can say an
-  icon is there. The label of a widget with one is its text alone, with no
-  gap or stray character, and nothing inside an inline box is read as text.
-- The expected tree is partial. A line matches an actual line of the same
-  role, with the same label if it gives one, and at least its states (a
-  value compares as a number, so `0.50` is `0.5`); the lines below it match
-  lines below the actual one as an ordered subsequence, so siblings that do
-  not matter are left out, but their order must hold. Parents are not
-  skipped: write every level from the root down.
+  its own, `image` or `inline-box`. The label of a widget with one is its text
+  alone, with no gap or stray character, and nothing inside an inline box is
+  read as text.
 - A snapshot leaves out what is not on screen (`Display::None`, hidden in the
   hierarchy), what is marked `NotUnderTest`, and panels with nothing in them.
 - A tree that differs fails with a line diff, `-` for what was expected and `+`
@@ -161,9 +135,9 @@ A test id is a unit struct with `#[derive(Component, Reflect)]` and
 `#[reflect(Component)]`, written by its short type path (its full one where
 two registered types share the short one); a misspelt or non-component type is
 a load error naming the step, with close names. Roles come from the
-components of `bevy_ui_widgets`, not from AccessKit, so they work headless:
-`Button` (`bevy_ui_widgets` or `bevy_ui`'s `Button`), `Checkbox`,
-`RadioButton`, `Slider`, `MenuButton`, `MenuItem`, `ListItem`, `TextInput`, `Tab` and `TabList`. A label is
+components of `bevy_ui_widgets`, not from AccessKit, so they work headless
+(the list is `WidgetRole` in
+[`targets/role.rs`](../../crates/bevy_stagecraft/src/targets/role.rs)). A label is
 every text at or below the widget, joined by spaces, as `TextOf` reads it, except
 that a `TextInput`'s label is the text below it and never the value it holds:
 `Role(role: TextInput, label: "Name")` names a field, and `TextOf` of it (or
