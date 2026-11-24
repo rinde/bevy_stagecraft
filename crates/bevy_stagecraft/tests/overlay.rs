@@ -22,7 +22,8 @@ use bevy_stagecraft::{
     describe_step,
     overlay::{
         CursorOverlayPlugin, OverlayCamera, OverlayCaptionStrip, OverlayChecksText, OverlayCursor,
-        OverlayHeld, OverlayRing, OverlayRoot, OverlayStepText, OverlayTheme, OverlayTrailDot,
+        OverlayFinger, OverlayHeld, OverlayRing, OverlayRoot, OverlayStepText, OverlayTheme,
+        OverlayTouchMark, OverlayTrailDot,
     },
 };
 
@@ -490,4 +491,78 @@ fn the_default_check_marks_are_ascii_the_bundled_font_can_draw() {
     for mark in [&theme.pass_mark, &theme.fail_mark, &theme.skipped_mark] {
         assert!(mark.is_ascii(), "{mark:?} would render as an empty box");
     }
+}
+
+/// How many fingers and marks the overlay has, and the fingers' positions.
+fn touch_overlay(app: &mut App) -> (Vec<Vec2>, usize) {
+    let world = app.world_mut();
+    let mut fingers = world.query_filtered::<&Node, With<OverlayFinger>>();
+    let positions = fingers
+        .iter(world)
+        .filter_map(|node| match (node.left, node.top) {
+            (Val::Px(left), Val::Px(top)) => Some(Vec2::new(left, top)),
+            _ => None,
+        })
+        .collect();
+    let marks = world.query::<&OverlayTouchMark>().iter(world).count();
+    (positions, marks)
+}
+
+#[test]
+fn a_finger_circle_and_marks_come_and_go_with_a_touch_down_and_up_and_the_arrow_stays() {
+    let mut app = overlay_app();
+    let report = Scenario::new("fingers")
+        .setup(spawn_ui)
+        .steps([
+            Step::touch_down(Target::screen(Vec2::new(300.0, 200.0))),
+            Step::wait(1),
+        ])
+        .run_in(&mut app);
+    assert!(report.passed(), "{:?}", report.failures());
+    let (fingers, marks) = touch_overlay(&mut app);
+    assert_eq!(fingers.len(), 1, "one finger is down");
+    assert_eq!(marks, 1, "a mark where it went down");
+    let hidden = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&Visibility, With<OverlayCursor>>()
+            .iter(world)
+            .all(|visibility| *visibility == Visibility::Hidden)
+    };
+    assert!(hidden, "a touch step never shows the mouse arrow");
+
+    let report = Scenario::new("lift")
+        .setup(spawn_ui)
+        .steps([
+            Step::touch_down(Target::screen(Vec2::new(300.0, 200.0))),
+            Step::touch_up(),
+            Step::wait(1),
+        ])
+        .run_in(&mut app);
+    assert!(report.passed(), "{:?}", report.failures());
+    let (fingers, marks) = touch_overlay(&mut app);
+    assert!(
+        fingers.is_empty(),
+        "the finger circle is gone once it lifts"
+    );
+    assert!(marks >= 1, "a mark where it lifted");
+    for _ in 0..bevy_stagecraft::overlay::TOUCH_MARK_FRAMES {
+        app.update();
+    }
+    assert_eq!(touch_overlay(&mut app).1, 0, "the marks fade away");
+}
+
+#[test]
+fn each_finger_has_its_own_circle() {
+    let mut app = overlay_app();
+    let report = Scenario::new("two fingers")
+        .setup(spawn_ui)
+        .steps([
+            Step::touch_down(Target::screen(Vec2::new(300.0, 200.0))),
+            Step::touch_down(Target::screen(Vec2::new(500.0, 300.0))).with_finger(1),
+            Step::wait(1),
+        ])
+        .run_in(&mut app);
+    assert!(report.passed(), "{:?}", report.failures());
+    assert_eq!(touch_overlay(&mut app).0.len(), 2);
 }

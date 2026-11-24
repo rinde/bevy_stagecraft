@@ -821,9 +821,12 @@ In code: `Scenario::tags([..])`, `skip(reason)`, `fixme(reason)`,
 at the cursor, a ring that expands and fades on each press, a held marker
 while a button is down, a short fading trail, and a caption strip along the
 bottom naming the current step ("Click: Rail", "Glide to (5, 0)", "Tap =") and
-each check's pass or fail mark. Everything is UI with `Pickable::IGNORE`, so it
-never takes a picking hit. Only the gallery and the recorder add it; headless
-tests do not.
+each check's pass or fail mark. For touch steps it draws a filled circle under
+each finger that is down (one per finger, a different colour from the arrow,
+which a touch step never moves) and a short mark that shrinks and fades where
+a finger went down and where it lifted or was cancelled. Everything is UI with
+`Pickable::IGNORE`, so it never takes a picking hit. Only the gallery and the
+recorder add it; headless tests do not.
 
 Replace the `OverlayTheme` resource to change colours, sizes, font and marks.
 The default marks are the words `PASS` and `FAIL`, because the bundled font has
@@ -865,7 +868,9 @@ if recording.any_failed() {
 
 Per scenario it writes `frame-NNNNN.png`, `filmstrip.png` (thumbnails with a
 tick or cross band and the frame number; the step and checks are in the
-pictures, drawn by the overlay) and `scenario.gif`. Overall it writes
+pictures, drawn by the overlay) and `scenario.gif`. Touch steps are in all of
+them: the fingers and marks are drawn into the pictures, and `trace.html` lists
+each touch step like any other. Overall it writes
 `index.html`, a contact sheet grouped by the groups you gave, groups with a
 failure first and failures first within each. A failed check fails the
 scenario, and `any_failed()` tells the calling binary to exit non-zero.
@@ -1103,7 +1108,11 @@ window for each update and the real one put back afterwards (so the operating
 system's pointer is never moved; an app reading `Window::cursor_position` in
 `First` or `Last` sees the real one). The Scenarios window keeps working: its
 mouse drives a pointer of its own. **Take over** pauses the script and hands
-the window back; **Resume script** carries on.
+the window back and lifts any finger the script still holds down (as a
+cancel); **Resume script** carries on. Scripted touch plays in the primary
+window the same way: real touch to it is removed, the step list, the Trace tab
+and run-all list the touch steps, and the overlay shows the fingers. Touch input
+to the Scenarios window does not work during playback.
 
 Try it with `cargo run --example gallery --features gallery` (needs a display).
 
@@ -1142,7 +1151,8 @@ UI into a window, which a library test never needs.
 
 Use the app by hand and save what you did as a `.ron` scenario. `SessionPlugin`
 (added by `GalleryPlugin` for you) logs the real mouse and keyboard of the
-primary window against a frame counter at the fixed 1/60 s, so playback is
+primary window against a frame counter at the fixed 1/60 s (touch is not
+recorded), so playback is
 deterministic whatever frame rate the session ran at. Start and stop with the
 gallery's **Record** / **Stop recording** button (**New: empty world** starts a
 recording from the app's reset state with nothing selected, **New: current

@@ -5,8 +5,9 @@ use std::fs;
 use bevy::{
     app::AppExit,
     ecs::world::World,
-    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
+    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton, touch::Touches},
     log::{error, info, warn},
+    math::Vec2,
     picking::input::PointerInputSettings,
     text::RemSize,
     window::{PrimaryWindow, Window},
@@ -52,7 +53,16 @@ fn release_held(world: &mut World) {
     let keys: Vec<KeyCode> = world
         .get_resource::<ButtonInput<KeyCode>>()
         .map_or_default(|input| input.get_pressed().copied().collect());
+    let fingers: Vec<(u64, Vec2)> = world.get_resource::<Touches>().map_or_default(|touches| {
+        touches
+            .iter()
+            .map(|touch| (touch.id(), touch.position()))
+            .collect()
+    });
     if let Some(mut input) = world.get_resource_mut::<SyntheticInput>() {
+        for (finger, position) in fingers {
+            input.touch_cancel(finger, position);
+        }
         for button in buttons {
             input.release_button(button);
         }
