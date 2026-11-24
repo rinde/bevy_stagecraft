@@ -7,7 +7,51 @@
 //!
 //! [`RecorderPlugins`] is the render set the app's own plugins go on top of.
 //! [`Recorder`] builds one app per scenario, plays it, and writes PNGs, a
-//! filmstrip, a GIF and an `index.html`.
+//! filmstrip, a GIF and an `index.html`, failures first (see
+//! [`crate::index`]). [`Recorder::check`] plays the same rendered scenarios
+//! and returns a [`Checked`] with no pictures, traces or files.
+//!
+//! # Variants and scale
+//!
+//! [`Recorder::variants`] records every scenario once per variant, one index
+//! entry each. With [`RecorderPlugins::with_scale_factor`] the image has the
+//! physical size, and the cameras' `ImageRenderTarget`, the synthetic
+//! pointer's and each `Screenshot`'s carry the scale factor; without it the
+//! pointer would be on no camera and the picture black. A scenario that does
+//! not name the variant is [`ScenarioRecording::skipped`]: nothing is played
+//! or written for it and its index card says `SKIPPED`. [`passed`],
+//! [`failed`] and [`Recording::any_failed`] keep skipped apart from failed.
+//!
+//! [`passed`]: ScenarioRecording::passed
+//! [`failed`]: ScenarioRecording::failed
+//!
+//! # Traces
+//!
+//! Every recorded scenario is traced (see [`crate::trace`]): the noise filter
+//! is [`Recorder::with_noise_filter`] and the result is
+//! [`ScenarioRecording::trace`]. `request_frames` runs after
+//! [`crate::ScenarioSystems::Trace`], so each trace
+//! point's frame has a picture.
+//!
+//! # Screenshot checks
+//!
+//! The recorder also answers screenshot checks (see
+//! [`crate::Check::screenshot`]). Its support plugin (`RecorderSupport`) has
+//! the `Pictures` resource, through which the player asks and the recorder
+//! answers, and the `ScreenshotSettings` resource:
+//!
+//! * `request_check_picture` (`Last`, after [`RecorderSystems::Capture`])
+//!   takes the picture the player wants. Bevy keeps one screenshot per target
+//!   per frame, so where `request_frames` already took one of that frame the
+//!   recording's own picture answers both;
+//! * `store_check_picture` hands the picture over;
+//! * `hide_overlay_for_picture` (`PostUpdate`, before visibility propagation)
+//!   hides every [`crate::overlay::OverlayRoot`] for it, so a
+//!   baseline holds the app and not the tooling, and `show_overlay_again`
+//!   (`First`) puts it back.
+//!
+//! A world without `Pictures` (headless tests, the gallery) skips screenshot
+//! checks.
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;

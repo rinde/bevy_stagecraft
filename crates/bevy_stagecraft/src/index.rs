@@ -1,4 +1,32 @@
-//! What the recorder writes for each scenario, and the page that lists them.
+//! What the recorder writes for each scenario, and the page that lists them
+//! (feature `record`).
+//!
+//! A scenario's folder in the output directory holds:
+//!
+//! * a PNG per picture, named by [`picture_file`], a filmstrip
+//!   ([`FILMSTRIP_FILE`]: the pictures as thumbnails, each marked passed or
+//!   failed and numbered by its frame) and a GIF ([`GIF_FILE`]) that shows
+//!   each picture for as long as the frames between it and the next took;
+//! * for a scenario with a trace, [`TRACE_FILE`], made by [`trace_html`]. It
+//!   renders one [`StepView`] per step as a `<details id="step-k">`: why it
+//!   failed, the targets it looked up, the checks it ran, the pictures before
+//!   and after, how the snapshot changed, and the UI tree and snapshot
+//!   afterwards. The same views are what the gallery's Trace tab shows;
+//! * for a screenshot check that created its baseline or did not match, copies
+//!   of its baseline, actual and diff pictures in [`SNAPSHOT_DIR`], so the page
+//!   links to files that sit beside it.
+//!
+//! [`index_html`] writes the page over all scenarios: a card each, in groups
+//! as the gallery's catalogue has them, groups with a failure first and
+//! failures first within a group. A skipped scenario's card says `SKIPPED`
+//! and a fixme one `FIXME`. A failed card lists its steps, each linking to its
+//! `<details>` in the trace; a step in a group is titled with the group's
+//! path (see [`step_title`]), so the card, the trace and the gallery name a
+//! step in the same words, and the links to the screenshot pictures are
+//! there too.
+//!
+//! The functions that write these are driven by [`crate::Recorder`]; nothing
+//! here needs a renderer except the pictures it is given.
 
 use core::fmt::Write as _;
 use std::{fs, path::Path};

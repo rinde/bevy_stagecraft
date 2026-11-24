@@ -6,6 +6,13 @@
 //! once per [`Variant`] (window size, scale factor, theme), as one test named
 //! `file [variant]`.
 //!
+//! `*.scene.ron` files are saved worlds, not scenarios, and [`ron_files`]
+//! skips them; each scenario's `base_dir` is its file's directory. A file
+//! that names the variants it runs in is [`FileOutcome::Skipped`] in the
+//! others, reported as `skipped` apart from `failed` and counted as passed. A
+//! file whose app panics fails (the player catches the panic as a failed
+//! step) and the runner goes on with the next file.
+//!
 //! ```toml
 //! [[test]]
 //! name = "ron_scenarios"

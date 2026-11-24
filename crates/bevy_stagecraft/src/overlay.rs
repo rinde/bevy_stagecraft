@@ -8,14 +8,43 @@
 //! tag naming its best target above it, and the picked node has an outline of
 //! its own (see [`PickHighlight`]).
 //!
+//! # What is drawn
+//!
+//! * the arrow cursor ([`OverlayCursor`]), a press ring ([`OverlayRing`]), a
+//!   marker while a button is held ([`OverlayHeld`]) and the trail
+//!   ([`OverlayTrailDot`]);
+//! * the caption strip: the scenario's caption, the step in words
+//!   ([`describe_step`], [`current_step_text`], which show the group path of a
+//!   step in a group) and the checks ([`checks_text`]);
+//! * a circle under every finger that is down ([`OverlayFinger`], read from
+//!   Bevy's `Touches`, which scripted fingers reach) and a mark where a finger
+//!   went down or lifted, or was cancelled ([`OverlayTouchMark`],
+//!   [`TouchMarkKind`]), shrinking and fading over [`TOUCH_MARK_FRAMES`]
+//!   frames, with its age counted in frames. A touch step never moves the
+//!   arrow. The systems are `show_fingers` and `animate_touch_marks`, in
+//!   [`OverlaySystems::Update`]; the colours are
+//!   [`OverlayTheme::finger`], [`OverlayTheme::touch_down_mark`] and
+//!   [`OverlayTheme::touch_up_mark`];
+//! * for a checkpoint taken by the session recorder, a flash and a caption
+//!   line ([`checkpoint_text`]); while the session asks for a checkpoint's
+//!   name (see [`crate::session::SessionRecorder::naming`]) the line is the
+//!   prompt instead ([`naming_text`]).
+//!
+//! The marks are ASCII (`PASS`, `FAIL`), because the bundled font draws the
+//! check and cross dingbats as empty boxes. Words for an app's own targets
+//! come from [`TargetDescriptions`]; colours and sizes from [`OverlayTheme`].
+//!
 //! Only the gallery and the recorder add [`CursorOverlayPlugin`]; headless
 //! tests never do. Everything it draws is screen-space UI with
 //! [`Pickable::IGNORE`], so it can never take a picking hit from the UI under
 //! it.
 //!
-//! Every top-level node carries a `UiTargetCamera` from the moment it is
-//! spawned, so an app can tell the overlay's roots from its own. The overlay
-//! therefore waits for a camera (see [`OverlayCamera`]).
+//! Every top-level node ([`OverlayRoot`]) carries a `UiTargetCamera` from the
+//! moment it is spawned, so an app's `Add<Node>` observer never sees an
+//! unaimed overlay root. The overlay therefore waits for a camera: the
+//! roots are spawned the first frame there is one, aimed at [`OverlayCamera`]
+//! if it names one and else at the default UI camera. They follow that camera
+//! if it changes and are despawned when it goes.
 
 use alloc::{collections::VecDeque, sync::Arc};
 use core::fmt;
