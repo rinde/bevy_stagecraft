@@ -18,6 +18,7 @@ use bevy::{
         ButtonState,
         keyboard::{Key, KeyCode, KeyboardInput},
         mouse::MouseButtonInput,
+        touch::{TouchInput, TouchPhase},
     },
     prelude::*,
     ui::{ComputedNode, UiGlobalTransform, px},
@@ -659,4 +660,45 @@ fn a_recorded_typing_session_exports_a_single_type_step() {
     );
     let text = fs::read_to_string(&saved.path).expect("written");
     assert!(text.contains("text: \"Hi5\","), "{text}");
+}
+
+/// What `bevy_winit` does for a finger.
+fn real_touch(app: &mut App, phase: TouchPhase, position: Vec2) {
+    let window = primary(app);
+    let input = TouchInput {
+        phase,
+        position,
+        window,
+        force: None,
+        id: 7,
+    };
+    app.world_mut().write_message(WindowEvent::from(input));
+    app.world_mut().write_message(input);
+    app.update();
+}
+
+#[test]
+fn a_recorded_real_tap_is_a_touch_tap_that_plays_back() {
+    let dir = dir("session-touch");
+    let mut app = app(&dir);
+    session::start(app.world_mut(), "Touch").expect("recording starts");
+    let button = centre_of(&mut app, "+1");
+    real_touch(&mut app, TouchPhase::Started, button);
+    real_touch(&mut app, TouchPhase::Ended, button);
+    for _ in 0..5 {
+        app.update();
+    }
+    let saved = session::stop(app.world_mut()).expect("the session is saved");
+    assert!(
+        saved
+            .script
+            .steps
+            .iter()
+            .any(|step| matches!(step, Step::TouchTap(Target::Role { .. }))),
+        "{:?}",
+        saved.script.steps
+    );
+    let (report, count) = play(&saved.path).expect("the file plays");
+    assert!(report.passed(), "{:?}", report.failures());
+    assert_eq!(count, 1, "playback taps the button once");
 }

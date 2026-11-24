@@ -6,7 +6,7 @@
 //! is tested without a window.
 
 use bevy::{
-    input::{ButtonState, keyboard::KeyCode, mouse::MouseButton},
+    input::{ButtonState, keyboard::KeyCode, mouse::MouseButton, touch::TouchPhase},
     math::Vec2,
 };
 
@@ -53,6 +53,19 @@ pub enum RecordedKind {
         /// what lets keys typed one after the other read as one `Type` step
         /// whatever the keyboard layout.
         text: Option<String>,
+    },
+    /// A finger changed state. The touch does not move the mouse cursor.
+    Touch {
+        /// Which finger, numbered from 0 in the order they came down (the
+        /// lowest number not in use), not the system's own touch id.
+        finger: u8,
+        /// Started, moved, ended or cancelled.
+        phase: TouchPhase,
+        /// Where the finger was, in logical pixels.
+        position: Vec2,
+        /// What `position` was worked out to while the session ran, as for
+        /// [`RecordedKind::Button`].
+        target: Target,
     },
     /// The person took a checkpoint: the checks it suggests go here, before
     /// anything else that happened in the same frame.
@@ -136,6 +149,10 @@ pub struct LoggedSteps {
 /// * a press and release in place is a `Click`; a straight press, move and
 ///   release of the left button is a `Drag`; anything else is spelt out as
 ///   `Press`, glides and `Release`;
+/// * a finger that goes down and up in place is a `TouchTap`; finger 0 going
+///   straight is a `TouchDrag`; anything else is spelt out as `TouchDown`,
+///   a `TouchMove` per vertex of the simplified path (with waits between, as a
+///   `TouchMove` takes one frame) and `TouchUp` or `TouchCancel`;
 /// * a key pressed and released on its own is a `Tap`, and a modifier held
 ///   around one folds into it;
 /// * idle time beyond [`StepOptions::idle_frames`] becomes a short `Wait`;
@@ -199,6 +216,7 @@ pub fn read_log(events: &[RecordedEvent], end: u32, options: &StepOptions) -> Lo
             RecordedKind::Key { key, state, .. } => {
                 next = out.key(events, next - 1, *key, *state);
             }
+            RecordedKind::Touch { .. } => next = out.touch(events, next - 1),
             RecordedKind::Checkpoint => out.checkpoint(event.frame),
             RecordedKind::Check(check) => out.check(event.frame, check),
         }
@@ -580,6 +598,180 @@ impl Emitter {
         self.emit(Step::Wheel { x, y }, 1);
     }
 
+    /// A finger changed state at event `at`. Returns the index to carry on
+    /// from. Touch never moves the script's mouse pointer.
+    fn touch(&mut self, events: &[RecordedEvent], at: usize) -> usize {
+        let Some(RecordedEvent {
+            frame,
+            kind:
+                RecordedKind::Touch {
+                    finger,
+                    phase,
+                    position,
+                    target,
+                },
+        }) = events.get(at)
+        else {
+            return at + 1;
+        };
+        let (frame, finger) = (*frame, *finger);
+        self.flush(None);
+        match phase {
+            TouchPhase::Started => return self.finger_down(events, at, finger, *position, target),
+            TouchPhase::Moved => {
+                self.wait_until(frame);
+                self.emit(
+                    Step::touch_move(Target::screen(*position)).with_finger(finger),
+                    1,
+                );
+            }
+            TouchPhase::Ended => {
+                self.wait_until(frame);
+                self.emit(Step::touch_up().with_finger(finger), 1);
+            }
+            TouchPhase::Canceled => {
+                self.wait_until(frame);
+                self.emit(Step::touch_cancel().with_finger(finger), 1);
+            }
+        }
+        at + 1
+    }
+
+    /// Finger `finger` went down at `position` in event `at`. When nothing
+    /// but its own moves happens before it ends, the whole gesture is read at
+    /// once: a tap, a straight drag, or a spelt out one with a simplified
+    /// path. Otherwise only the touch down is emitted and the rest follows
+    /// event by event.
+    fn finger_down(
+        &mut self,
+        events: &[RecordedEvent],
+        at: usize,
+        finger: u8,
+        position: Vec2,
+        target: &Target,
+    ) -> usize {
+        let Some(down) = events.get(at) else {
+            return at + 1;
+        };
+        let frame = down.frame;
+        let ends = events.iter().enumerate().skip(at + 1).find(|(_, event)| {
+            matches!(
+                &event.kind,
+                RecordedKind::Touch {
+                    finger: other,
+                    phase: TouchPhase::Ended | TouchPhase::Canceled,
+                    ..
+                } if *other == finger
+            )
+        });
+        let gesture = ends.and_then(|(end_at, end)| {
+            let RecordedKind::Touch {
+                phase,
+                position: end_position,
+                target: end_target,
+                ..
+            } = &end.kind
+            else {
+                return None;
+            };
+            let between = events.get(at + 1..end_at).unwrap_or_default();
+            let moves: Option<Vec<(u32, Vec2)>> = between
+                .iter()
+                .map(|event| match &event.kind {
+                    RecordedKind::Touch {
+                        finger: other,
+                        phase: TouchPhase::Moved,
+                        position,
+                        ..
+                    } if *other == finger => Some((event.frame, *position)),
+                    _ => None,
+                })
+                .collect();
+            Some(Gesture {
+                end_at,
+                end_frame: end.frame,
+                phase: *phase,
+                end_position: *end_position,
+                end_target,
+                moves: moves?,
+            })
+        });
+        let Some(gesture) = gesture else {
+            self.wait_until(frame);
+            self.emit(Step::touch_down(target.clone()).with_finger(finger), 1);
+            return at + 1;
+        };
+        self.wait_until(frame);
+        let held = gesture.end_frame.saturating_sub(frame);
+        let mut path = vec![position];
+        path.extend(gesture.moves.iter().map(|(_, moved)| *moved));
+        path.push(gesture.end_position);
+        let travelled = path
+            .iter()
+            .map(|point| point.distance(position))
+            .fold(0.0, f32::max);
+        let lifted = gesture.phase == TouchPhase::Ended;
+        if finger == 0 && lifted && travelled <= self.options.drag_distance {
+            if held <= self.options.hold_frames {
+                self.emit(Step::touch_tap(target.clone()), 2);
+            } else {
+                self.emit(Step::touch_down(target.clone()), 1);
+                self.wait_until(gesture.end_frame);
+                self.emit(Step::touch_up(), 1);
+            }
+        } else if finger == 0
+            && lifted
+            && simplify(&path, self.options.path_tolerance).len() <= 2
+            && u16::try_from(held.saturating_sub(2).max(1)).is_ok()
+        {
+            let frames = held.saturating_sub(2).max(1);
+            self.emit(
+                Step::touch_drag(
+                    target.clone(),
+                    gesture.end_target.clone(),
+                    frames_u16(frames),
+                ),
+                frames.saturating_add(2),
+            );
+        } else {
+            self.emit(Step::touch_down(target.clone()).with_finger(finger), 1);
+            self.touch_path(finger, &gesture, &path, frame);
+        }
+        gesture.end_at + 1
+    }
+
+    /// The rest of a spelt out touch gesture: a `TouchMove` for each vertex of
+    /// the simplified `path` (which starts at the touch down in frame `start`
+    /// and ends where the finger left), then the lift or cancel.
+    fn touch_path(&mut self, finger: u8, gesture: &Gesture<'_>, path: &[Vec2], start: u32) {
+        let mut frames = vec![start];
+        frames.extend(gesture.moves.iter().map(|(frame, _)| *frame));
+        frames.push(gesture.end_frame);
+        let kept = simplify(path, self.options.path_tolerance);
+        let mut there = path.first().copied();
+        for index in kept.into_iter().skip(1) {
+            let (Some(&frame), Some(&position)) = (frames.get(index), path.get(index)) else {
+                continue;
+            };
+            if there.is_some_and(|there| there.distance(position) < SAME_PLACE) {
+                continue;
+            }
+            self.wait_until(frame);
+            self.emit(
+                Step::touch_move(Target::screen(position)).with_finger(finger),
+                1,
+            );
+            there = Some(position);
+        }
+        self.wait_until(gesture.end_frame);
+        let end = if gesture.phase == TouchPhase::Ended {
+            Step::touch_up()
+        } else {
+            Step::touch_cancel()
+        };
+        self.emit(end.with_finger(finger), 1);
+    }
+
     /// A key changed state. Returns the index to carry on from.
     fn key(
         &mut self,
@@ -732,6 +924,23 @@ impl Emitter {
             end_frame,
         })
     }
+}
+
+/// One finger's gesture, from its touch down to its end, with nothing else
+/// logged in between.
+struct Gesture<'a> {
+    /// The index of the event that ended it.
+    end_at: usize,
+    /// The recorded frame it ended in.
+    end_frame: u32,
+    /// Ended or cancelled.
+    phase: TouchPhase,
+    /// Where it ended.
+    end_position: Vec2,
+    /// What that was worked out to.
+    end_target: &'a Target,
+    /// The moves in between, with their frames.
+    moves: Vec<(u32, Vec2)>,
 }
 
 /// A run of keys read as one `Type` step.

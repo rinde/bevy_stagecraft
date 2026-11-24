@@ -114,6 +114,7 @@ use bevy::{
         ButtonState, InputSystems,
         keyboard::{KeyCode, KeyboardInput},
         mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
+        touch::{TouchInput, TouchPhase},
     },
     math::Vec2,
     time::{Real, Time},
@@ -409,6 +410,9 @@ struct Active {
     held_buttons: Vec<MouseButton>,
     /// Keys held down.
     held_keys: Vec<KeyCode>,
+    /// Fingers down: the system's touch id, the finger number the log gives
+    /// it and where it last was.
+    held_touches: Vec<(u64, u8, Vec2)>,
 }
 
 /// The session recorder: whether a session is on, and the last result.
@@ -449,6 +453,8 @@ struct Cursors {
     wheel: MessageCursor<MouseWheel>,
     /// Keys.
     keys: MessageCursor<KeyboardInput>,
+    /// Fingers.
+    touches: MessageCursor<TouchInput>,
 }
 
 impl SessionRecorder {
@@ -786,6 +792,75 @@ fn unread<M: Message + Clone>(world: &World, cursor: &mut MessageCursor<M>) -> V
         .map_or_default(|messages| cursor.read(messages).cloned().collect())
 }
 
+impl Active {
+    /// Logs one finger message of the primary window. Fingers are numbered
+    /// from 0 in the order they come down, the lowest number free; a finger
+    /// that came down before the session began is ignored, as is a second
+    /// touch down of one that is already down.
+    fn log_touch(&mut self, world: &World, frame: u32, touch: &TouchInput) {
+        let position = tidy(touch.position);
+        let held = self
+            .held_touches
+            .iter()
+            .position(|(id, ..)| *id == touch.id);
+        let finger = match (touch.phase, held) {
+            (TouchPhase::Started, None) => {
+                // Going back to touch is done with the name.
+                self.close_naming();
+                let Some(finger) = (0..=u8::MAX).find(|candidate| {
+                    self.held_touches
+                        .iter()
+                        .all(|(_, used, _)| used != candidate)
+                }) else {
+                    return;
+                };
+                self.held_touches.push((touch.id, finger, position));
+                finger
+            }
+            (TouchPhase::Moved, Some(at)) => {
+                let Some((_, finger, last)) = self.held_touches.get_mut(at) else {
+                    return;
+                };
+                *last = position;
+                let finger = *finger;
+                // Several moves in one frame are one move, to where it ended.
+                if let Some(RecordedEvent {
+                    frame: last_frame,
+                    kind:
+                        RecordedKind::Touch {
+                            finger: last_finger,
+                            phase: TouchPhase::Moved,
+                            position: last_position,
+                            target,
+                        },
+                }) = self.events.last_mut()
+                    && *last_frame == frame
+                    && *last_finger == finger
+                {
+                    *last_position = position;
+                    *target = target::classify(world, position);
+                    return;
+                }
+                finger
+            }
+            (TouchPhase::Ended | TouchPhase::Canceled, Some(at)) => {
+                let (_, finger, _) = self.held_touches.remove(at);
+                finger
+            }
+            _ => return,
+        };
+        self.events.push(RecordedEvent {
+            frame,
+            kind: RecordedKind::Touch {
+                finger,
+                phase: touch.phase,
+                position,
+                target: target::classify(world, position),
+            },
+        });
+    }
+}
+
 impl SessionRecorder {
     /// Logs this update's real input, or skips it when not recording.
     fn log(&mut self, world: &mut World) {
@@ -793,6 +868,7 @@ impl SessionRecorder {
         let buttons = unread(world, &mut self.cursors.buttons);
         let wheel = unread(world, &mut self.cursors.wheel);
         let keys = unread(world, &mut self.cursors.keys);
+        let touches = unread(world, &mut self.cursors.touches);
         let delta = world
             .get_resource::<Time<Real>>()
             .map_or(FRAME_STEP, Time::delta);
@@ -859,6 +935,9 @@ impl SessionRecorder {
                 },
             });
         }
+        for touch in touches.iter().filter(|touch| touch.window == window) {
+            active.log_touch(world, frame, touch);
+        }
         // The operating system repeats a held key; a script holds it once.
         for key in keys
             .iter()
@@ -915,6 +994,7 @@ impl SessionRecorder {
         drop(unread(world, &mut self.cursors.buttons));
         drop(unread(world, &mut self.cursors.wheel));
         drop(unread(world, &mut self.cursors.keys));
+        drop(unread(world, &mut self.cursors.touches));
         self.active = Some(Active {
             name: name.to_owned(),
             stem,
@@ -931,6 +1011,7 @@ impl SessionRecorder {
             cursor: cursor.flatten(),
             held_buttons: Vec::new(),
             held_keys: Vec::new(),
+            held_touches: Vec::new(),
         });
         Ok(())
     }
@@ -1003,6 +1084,17 @@ impl SessionRecorder {
                     key,
                     state: ButtonState::Released,
                     text: None,
+                },
+            });
+        }
+        for (_, finger, position) in core::mem::take(&mut active.held_touches) {
+            active.events.push(RecordedEvent {
+                frame: end,
+                kind: RecordedKind::Touch {
+                    finger,
+                    phase: TouchPhase::Ended,
+                    position,
+                    target: crate::targets::Target::screen(position),
                 },
             });
         }

@@ -7,7 +7,7 @@
 )]
 
 use bevy::{
-    input::{ButtonState, keyboard::KeyCode, mouse::MouseButton},
+    input::{ButtonState, keyboard::KeyCode, mouse::MouseButton, touch::TouchPhase},
     math::Vec2,
 };
 use bevy_stagecraft::{
@@ -866,4 +866,163 @@ fn a_chord_folds_while_the_other_control_key_is_still_held() {
             "{released:?} released first: {steps:?}"
         );
     }
+}
+
+const fn touch(
+    frame: u32,
+    finger: u8,
+    phase: TouchPhase,
+    x: f32,
+    y: f32,
+    target: Target,
+) -> RecordedEvent {
+    at(
+        frame,
+        RecordedKind::Touch {
+            finger,
+            phase,
+            position: Vec2::new(x, y),
+            target,
+        },
+    )
+}
+
+const fn at_point(x: f32, y: f32) -> Target {
+    Target::screen(Vec2::new(x, y))
+}
+
+fn without_waits(steps: Vec<Step>) -> Vec<Step> {
+    steps
+        .into_iter()
+        .filter(|step| !matches!(step, Step::Wait(_)))
+        .collect()
+}
+
+#[test]
+fn a_finger_down_and_up_in_place_is_a_touch_tap_on_the_label() {
+    let label = Target::text("+1");
+    let steps = convert(&[
+        touch(5, 0, TouchPhase::Started, 50.0, 50.0, label.clone()),
+        touch(8, 0, TouchPhase::Ended, 50.0, 50.0, label.clone()),
+    ]);
+    assert_eq!(without_waits(steps), vec![Step::touch_tap(label)]);
+}
+
+#[test]
+fn a_straight_finger_drag_is_one_touch_drag() {
+    let mut events = vec![touch(
+        10,
+        0,
+        TouchPhase::Started,
+        0.0,
+        0.0,
+        at_point(0.0, 0.0),
+    )];
+    for step in 1_u8..=20 {
+        let i = f32::from(step);
+        events.push(touch(
+            10 + u32::from(step),
+            0,
+            TouchPhase::Moved,
+            5.0 * i,
+            2.0 * i,
+            at_point(5.0 * i, 2.0 * i),
+        ));
+    }
+    events.push(touch(
+        31,
+        0,
+        TouchPhase::Ended,
+        100.0,
+        40.0,
+        at_point(100.0, 40.0),
+    ));
+    let steps = without_waits(convert(&events));
+    assert_eq!(
+        steps,
+        vec![Step::touch_drag(
+            at_point(0.0, 0.0),
+            at_point(100.0, 40.0),
+            19
+        )]
+    );
+}
+
+#[test]
+fn a_bent_finger_path_keeps_its_corner_as_touch_moves() {
+    let events = [
+        touch(1, 0, TouchPhase::Started, 0.0, 0.0, at_point(0.0, 0.0)),
+        touch(5, 0, TouchPhase::Moved, 20.0, 0.0, at_point(20.0, 0.0)),
+        touch(10, 0, TouchPhase::Moved, 40.0, 0.0, at_point(40.0, 0.0)),
+        touch(15, 0, TouchPhase::Moved, 40.0, 20.0, at_point(40.0, 20.0)),
+        touch(20, 0, TouchPhase::Moved, 40.0, 40.0, at_point(40.0, 40.0)),
+        touch(22, 0, TouchPhase::Ended, 40.0, 40.0, at_point(40.0, 40.0)),
+    ];
+    let steps = without_waits(convert(&events));
+    assert_eq!(
+        steps,
+        vec![
+            Step::touch_down(at_point(0.0, 0.0)),
+            Step::touch_move(at_point(40.0, 0.0)),
+            Step::touch_move(at_point(40.0, 40.0)),
+            Step::touch_up(),
+        ]
+    );
+}
+
+#[test]
+fn a_cancelled_finger_is_a_touch_cancel() {
+    let events = [
+        touch(1, 0, TouchPhase::Started, 9.0, 9.0, at_point(9.0, 9.0)),
+        touch(30, 0, TouchPhase::Canceled, 9.0, 9.0, at_point(9.0, 9.0)),
+    ];
+    let steps = without_waits(convert(&events));
+    assert_eq!(
+        steps,
+        vec![Step::touch_down(at_point(9.0, 9.0)), Step::touch_cancel()]
+    );
+}
+
+#[test]
+fn two_fingers_at_once_are_spelt_out_with_their_finger_numbers() {
+    let events = [
+        touch(1, 0, TouchPhase::Started, 10.0, 10.0, at_point(10.0, 10.0)),
+        touch(2, 1, TouchPhase::Started, 90.0, 10.0, at_point(90.0, 10.0)),
+        touch(6, 1, TouchPhase::Ended, 90.0, 10.0, at_point(90.0, 10.0)),
+        touch(8, 0, TouchPhase::Ended, 10.0, 10.0, at_point(10.0, 10.0)),
+    ];
+    let steps = without_waits(convert(&events));
+    assert_eq!(
+        steps,
+        vec![
+            Step::touch_down(at_point(10.0, 10.0)),
+            Step::touch_down(at_point(90.0, 10.0)).with_finger(1),
+            Step::touch_up().with_finger(1),
+            Step::touch_up(),
+        ]
+    );
+}
+
+#[test]
+fn touch_leaves_the_scripts_mouse_pointer_alone() {
+    let steps = convert(&[
+        moved(1, 5.0, 5.0),
+        touch(10, 0, TouchPhase::Started, 70.0, 70.0, at_point(70.0, 70.0)),
+        touch(12, 0, TouchPhase::Ended, 70.0, 70.0, at_point(70.0, 70.0)),
+        button(20, ButtonState::Pressed, 5.0, 5.0, at_point(5.0, 5.0)),
+        button(21, ButtonState::Released, 5.0, 5.0, at_point(5.0, 5.0)),
+    ]);
+    let steps = without_waits(steps);
+    assert!(
+        steps.contains(&Step::Click(MouseButton::Left)),
+        "no extra MoveTo needed for the click: {steps:?}"
+    );
+    assert_eq!(
+        steps
+            .iter()
+            .filter(|step| matches!(step, Step::MoveTo(_)))
+            .count(),
+        1,
+        "{steps:?}"
+    );
 }
