@@ -707,8 +707,11 @@ fn step_targets(step: &mut Step) -> Vec<&mut Target> {
         | Step::Glide { target, .. }
         | Step::Type {
             into: Some(target), ..
-        } => vec![target],
-        Step::Drag { from, to, .. } => vec![from, to],
+        }
+        | Step::TouchDown { at: target, .. }
+        | Step::TouchMove { to: target, .. }
+        | Step::TouchTap(target) => vec![target],
+        Step::Drag { from, to, .. } | Step::TouchDrag { from, to, .. } => vec![from, to],
         Step::Capture { value, .. } => value.target_mut().into_iter().collect(),
         Step::Timeout(_, inner) | Step::Force(inner) => step_targets(inner),
         _ => Vec::new(),
@@ -727,7 +730,7 @@ fn check_wrapper(step: &Step, used_by: &str) -> Result<(), LoadError> {
     Err(LoadError::Invalid {
         used_by: used_by.to_owned(),
         message: format!(
-            "`Timeout(..)` and `Force(..)` wrap one MoveTo, Glide, Drag, Click, Press or Type with an `into`, not {inner:?}; \
+            "`Timeout(..)` and `Force(..)` wrap one MoveTo, Glide, Drag, Click, Press, Type with an `into`, or TouchDown, TouchMove, TouchTap or TouchDrag, not {inner:?}; \
              a check waits with `Check(Within(frames, ..))`"
         ),
     })

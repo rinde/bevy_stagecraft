@@ -1,28 +1,31 @@
 //! Synthetic input: drive a Bevy UI like a mouse and keyboard.
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 
 use bevy::{
-    app::{App, Plugin, PreUpdate},
+    app::{App, Last, Plugin, PreUpdate},
     camera::NormalizedRenderTarget,
     ecs::{
-        message::MessageWriter,
+        entity::Entity,
+        message::{MessageReader, MessageWriter},
         query::With,
         resource::Resource,
         schedule::{IntoScheduleConfigs, SystemSet},
-        system::{Local, Query, ResMut},
+        system::{Commands, Local, Query, ResMut},
     },
     input::{
         ButtonState, InputSystems,
         keyboard::{Key, KeyCode, KeyboardInput, NativeKey, NativeKeyCode},
         mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
-        touch::TouchPhase,
+        touch::{TouchInput, TouchPhase},
     },
     log::warn,
     math::Vec2,
     picking::{
         PickingSystems,
-        pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput},
+        pointer::{
+            Location, PointerAction, PointerButton, PointerId, PointerInput, PointerLocation,
+        },
     },
     window::{CursorMoved, PrimaryWindow, Window, WindowRef},
 };
@@ -66,6 +69,16 @@ pub enum SyntheticEvent {
         /// Pressed or released.
         state: ButtonState,
     },
+    /// One phase of one finger at a logical position in the window. It
+    /// never moves the mouse.
+    Touch {
+        /// The finger's id.
+        finger: u64,
+        /// Started, moved, ended or cancelled.
+        phase: TouchPhase,
+        /// Where the finger is.
+        position: Vec2,
+    },
 }
 
 /// A queue of synthetic input, drained once per frame in `PreUpdate`.
@@ -73,6 +86,10 @@ pub enum SyntheticEvent {
 /// It writes what `bevy_winit` would: `Window::set_cursor_position`,
 /// `CursorMoved`, `MouseButtonInput`, `MouseWheel` and `KeyboardInput`
 /// messages, plus `PointerInput` for `PointerId::Mouse`, written directly.
+/// Touch writes `TouchInput` and `PointerInput` for `PointerId::Touch`, also
+/// directly: Bevy's own touch picking reads window events a headless app
+/// never has. The pointer of a finger is spawned when it starts and
+/// despawned in `Last` once it ended or was cancelled.
 #[derive(Resource, Debug, Default)]
 pub struct SyntheticInput {
     /// Events waiting for the next drain, oldest first.
@@ -110,6 +127,35 @@ impl SyntheticInput {
     pub fn click(&mut self, button: MouseButton) {
         self.press_button(button);
         self.release_button(button);
+    }
+
+    /// Queues finger `finger` touching down at `position` (logical pixels).
+    pub fn touch_down(&mut self, finger: u64, position: Vec2) {
+        self.touch(finger, TouchPhase::Started, position);
+    }
+
+    /// Queues finger `finger` moving to `position`.
+    pub fn touch_move(&mut self, finger: u64, position: Vec2) {
+        self.touch(finger, TouchPhase::Moved, position);
+    }
+
+    /// Queues finger `finger` lifting at `position`.
+    pub fn touch_up(&mut self, finger: u64, position: Vec2) {
+        self.touch(finger, TouchPhase::Ended, position);
+    }
+
+    /// Queues the system cancelling finger `finger` at `position`.
+    pub fn touch_cancel(&mut self, finger: u64, position: Vec2) {
+        self.touch(finger, TouchPhase::Canceled, position);
+    }
+
+    /// Queues one phase of a finger.
+    fn touch(&mut self, finger: u64, phase: TouchPhase, position: Vec2) {
+        self.push(SyntheticEvent::Touch {
+            finger,
+            phase,
+            position,
+        });
     }
 
     /// Queues a turn of the mouse wheel.
@@ -174,13 +220,15 @@ pub struct SyntheticInputPlugin;
 
 impl Plugin for SyntheticInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SyntheticInput>().add_systems(
-            PreUpdate,
-            drain_synthetic_input
-                .in_set(SyntheticInputSystems::Drain)
-                .before(InputSystems)
-                .before(PickingSystems::ProcessInput),
-        );
+        app.init_resource::<SyntheticInput>()
+            .add_systems(
+                PreUpdate,
+                drain_synthetic_input
+                    .in_set(SyntheticInputSystems::Drain)
+                    .before(InputSystems)
+                    .before(PickingSystems::ProcessInput),
+            )
+            .add_systems(Last, despawn_ended_touch_pointers);
     }
 }
 
@@ -361,16 +409,85 @@ const fn pointer_button(button: MouseButton) -> Option<PointerButton> {
     }
 }
 
+/// The pointer action a button press or release stands for.
+const fn button_action(button: PointerButton, state: ButtonState) -> PointerAction {
+    match state {
+        ButtonState::Pressed => PointerAction::Press(button),
+        ButtonState::Released => PointerAction::Release(button),
+    }
+}
+
+/// The Bevy touch message for one phase of a finger.
+const fn touch_input(finger: u64, phase: TouchPhase, position: Vec2, window: Entity) -> TouchInput {
+    TouchInput {
+        phase,
+        position,
+        window,
+        force: None,
+        id: finger,
+    }
+}
+
+/// The keyboard message for a key that produces no text.
+fn modifier_input(key_code: KeyCode, state: ButtonState, window: Entity) -> KeyboardInput {
+    KeyboardInput {
+        key_code,
+        logical_key: modifier_logical_key(key_code)
+            .unwrap_or(Key::Unidentified(NativeKey::Unidentified)),
+        state,
+        text: None,
+        repeat: false,
+        window,
+    }
+}
+
+/// The pointer message a touch phase stands for. A finger's pointer is spawned
+/// on `Started`, since Bevy's own touch picking reads window events a headless
+/// app never has.
+fn touch_pointer_input(
+    commands: &mut Commands,
+    positions: &mut BTreeMap<u64, Vec2>,
+    finger: u64,
+    phase: TouchPhase,
+    at: Location,
+) -> PointerInput {
+    let position = at.position;
+    let pointer = PointerId::Touch(finger);
+    let action = match phase {
+        TouchPhase::Started => {
+            commands.spawn((pointer, PointerLocation::new(at.clone())));
+            PointerAction::Press(PointerButton::Primary)
+        }
+        TouchPhase::Moved => PointerAction::Move {
+            delta: position - positions.get(&finger).copied().unwrap_or(position),
+        },
+        TouchPhase::Ended => PointerAction::Release(PointerButton::Primary),
+        TouchPhase::Canceled => PointerAction::Cancel,
+    };
+    match phase {
+        TouchPhase::Started | TouchPhase::Moved => {
+            positions.insert(finger, position);
+        }
+        TouchPhase::Ended | TouchPhase::Canceled => {
+            positions.remove(&finger);
+        }
+    }
+    PointerInput::new(pointer, at, action)
+}
+
 /// Moves queued synthetic events into Bevy's input messages.
 fn drain_synthetic_input(
     mut input: ResMut<SyntheticInput>,
-    mut windows: Query<(bevy::ecs::entity::Entity, &mut Window), With<PrimaryWindow>>,
+    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     mut cursor_moved: MessageWriter<CursorMoved>,
     mut mouse_buttons: MessageWriter<MouseButtonInput>,
     mut wheel: MessageWriter<MouseWheel>,
     mut keys: MessageWriter<KeyboardInput>,
+    mut touches: MessageWriter<TouchInput>,
     mut pointer_inputs: MessageWriter<PointerInput>,
+    mut commands: Commands,
     mut last_position: Local<Vec2>,
+    mut touch_positions: Local<BTreeMap<u64, Vec2>>,
 ) {
     if input.queue.is_empty() {
         return;
@@ -420,14 +537,10 @@ fn drain_synthetic_input(
                     window: window_entity,
                 });
                 if let Some(pointer_button) = pointer_button(button) {
-                    let action = match state {
-                        ButtonState::Pressed => PointerAction::Press(pointer_button),
-                        ButtonState::Released => PointerAction::Release(pointer_button),
-                    };
                     pointer_inputs.write(PointerInput::new(
                         PointerId::Mouse,
                         location(*last_position),
-                        action,
+                        button_action(pointer_button, state),
                     ));
                 }
             }
@@ -451,15 +564,7 @@ fn drain_synthetic_input(
                 ));
             }
             SyntheticEvent::Key(key_code, state) => {
-                keys.write(KeyboardInput {
-                    key_code,
-                    logical_key: modifier_logical_key(key_code)
-                        .unwrap_or(Key::Unidentified(NativeKey::Unidentified)),
-                    state,
-                    text: None,
-                    repeat: false,
-                    window: window_entity,
-                });
+                keys.write(modifier_input(key_code, state, window_entity));
             }
             SyntheticEvent::Character {
                 key,
@@ -467,6 +572,20 @@ fn drain_synthetic_input(
                 state,
             } => {
                 keys.write(character_input(key, character, state, window_entity));
+            }
+            SyntheticEvent::Touch {
+                finger,
+                phase,
+                position,
+            } => {
+                touches.write(touch_input(finger, phase, position, window_entity));
+                pointer_inputs.write(touch_pointer_input(
+                    &mut commands,
+                    &mut touch_positions,
+                    finger,
+                    phase,
+                    location(position),
+                ));
             }
         }
     }
@@ -478,7 +597,7 @@ fn character_input(
     key_code: KeyCode,
     character: char,
     state: ButtonState,
-    window: bevy::ecs::entity::Entity,
+    window: Entity,
 ) -> KeyboardInput {
     let text = character.to_string();
     let logical_key = if character == ' ' {
@@ -493,5 +612,24 @@ fn character_input(
         text: (state == ButtonState::Pressed).then(|| text.into()),
         repeat: false,
         window,
+    }
+}
+
+/// Despawns the pointer of every finger that ended or was cancelled, after the
+/// picking systems have seen its last message.
+fn despawn_ended_touch_pointers(
+    mut touches: MessageReader<TouchInput>,
+    pointers: Query<(Entity, &PointerId)>,
+    mut commands: Commands,
+) {
+    for touch in touches.read() {
+        if !matches!(touch.phase, TouchPhase::Ended | TouchPhase::Canceled) {
+            continue;
+        }
+        for (entity, id) in &pointers {
+            if id.get_touch_id() == Some(touch.id) {
+                commands.entity(entity).try_despawn();
+            }
+        }
     }
 }

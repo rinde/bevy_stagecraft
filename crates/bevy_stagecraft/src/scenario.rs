@@ -75,6 +75,15 @@ impl Modifiers {
     }
 }
 
+/// For serde: leave finger 0 out of a file.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+const fn is_first_finger(finger: &u8) -> bool {
+    *finger == 0
+}
+
 /// For serde: leave the modifiers out of a file when there are none.
 fn no_modifiers<T: Default + PartialEq>(modifiers: &T) -> bool {
     *modifiers == T::default()
@@ -153,7 +162,8 @@ impl BitOr for Modifiers {
 /// last frame) and receives the pointer (nothing covers it). A press
 /// ([`Step::Click`] or [`Step::Press`]) right after a step that moved the
 /// pointer to a widget also waits for that widget to be enabled and still
-/// to receive the pointer, and so does the start of a [`Step::Drag`]. The
+/// to receive the pointer, and so does the start of a [`Step::Drag`]; the touch
+/// steps that put a finger on a target wait the same way. The
 /// wait lasts at most the scenario's action timeout
 /// ([`Scenario::action_timeout`], [`DEFAULT_ACTION_TIMEOUT`] frames unless
 /// it says), or the step's own ([`Step::Timeout`]); when it runs out the
@@ -187,6 +197,51 @@ pub enum Step {
     /// Move to `from`, press the left button, glide to `to` over `frames`
     /// frames, and release. Takes `frames + 2` frames.
     Drag {
+        /// Where the drag starts.
+        from: Target,
+        /// Where the drag ends.
+        to: Target,
+        /// How many frames the movement takes; at least one.
+        frames: u16,
+    },
+    /// Put a finger down at the target (one frame). The finger is not the
+    /// mouse: the cursor and `Hovered` stay where they are.
+    TouchDown {
+        /// Where the finger lands.
+        at: Target,
+        /// Which finger; 0 unless it says.
+        #[serde(default, skip_serializing_if = "is_first_finger")]
+        finger: u8,
+    },
+    /// Move a finger that is down to the target (one frame).
+    TouchMove {
+        /// Where the finger goes.
+        to: Target,
+        /// Which finger; 0 unless it says.
+        #[serde(default, skip_serializing_if = "is_first_finger")]
+        finger: u8,
+    },
+    /// Lift a finger that is down, where it is (one frame).
+    TouchUp {
+        /// Which finger; 0 unless it says.
+        #[serde(default, skip_serializing_if = "is_first_finger")]
+        finger: u8,
+    },
+    /// The system takes a finger away without a lift (one frame): the
+    /// pointer ends with no click.
+    TouchCancel {
+        /// Which finger; 0 unless it says.
+        #[serde(default, skip_serializing_if = "is_first_finger")]
+        finger: u8,
+    },
+    /// Put finger 0 down at the target and lift it on the next frame (two
+    /// frames, because Bevy only clicks an entity a pointer hovered the frame
+    /// before).
+    TouchTap(Target),
+    /// Put finger 0 down at `from`, move it to `to` along the eased path of
+    /// [`Step::Glide`] over `frames` frames, and lift it. Takes `frames + 2`
+    /// frames.
+    TouchDrag {
         /// Where the drag starts.
         from: Target,
         /// Where the drag ends.
@@ -265,7 +320,9 @@ pub enum Step {
     /// The step, waiting at most this many frames for its target to be
     /// actionable instead of the scenario's action timeout. Wraps a
     /// [`Step::MoveTo`], [`Step::Glide`], [`Step::Drag`], [`Step::Click`],
-    /// [`Step::Press`] or a [`Step::Type`] with an `into`:
+    /// [`Step::Press`], a [`Step::Type`] with an `into`, or a touch step that
+    /// acts on a target ([`Step::TouchDown`], [`Step::TouchMove`],
+    /// [`Step::TouchTap`], [`Step::TouchDrag`]):
     /// `Timeout(120, MoveTo(Text("Go")))`.
     Timeout(u16, Box<Self>),
     /// The step at once, with no waiting and no check that its target can be
@@ -389,6 +446,55 @@ impl Step {
         Self::Drag { from, to, frames }
     }
 
+    /// Put finger 0 down at `at`.
+    #[must_use]
+    pub const fn touch_down(at: Target) -> Self {
+        Self::TouchDown { at, finger: 0 }
+    }
+
+    /// Move finger 0 to `to`.
+    #[must_use]
+    pub const fn touch_move(to: Target) -> Self {
+        Self::TouchMove { to, finger: 0 }
+    }
+
+    /// Lift finger 0.
+    #[must_use]
+    pub const fn touch_up() -> Self {
+        Self::TouchUp { finger: 0 }
+    }
+
+    /// Cancel finger 0.
+    #[must_use]
+    pub const fn touch_cancel() -> Self {
+        Self::TouchCancel { finger: 0 }
+    }
+
+    /// Tap `target` with finger 0.
+    #[must_use]
+    pub const fn touch_tap(target: Target) -> Self {
+        Self::TouchTap(target)
+    }
+
+    /// Drag finger 0 from `from` to `to` over `frames` frames.
+    #[must_use]
+    pub const fn touch_drag(from: Target, to: Target, frames: u16) -> Self {
+        Self::TouchDrag { from, to, frames }
+    }
+
+    /// The same touch step for another finger; other steps are unchanged.
+    #[must_use]
+    pub const fn with_finger(mut self, id: u8) -> Self {
+        match &mut self {
+            Self::TouchDown { finger, .. }
+            | Self::TouchMove { finger, .. }
+            | Self::TouchUp { finger }
+            | Self::TouchCancel { finger } => *finger = id,
+            _ => {}
+        }
+        self
+    }
+
     /// Turn the wheel by `x` and `y` pixels.
     #[must_use]
     pub const fn wheel(x: f32, y: f32) -> Self {
@@ -487,6 +593,10 @@ impl Step {
             Self::MoveTo(_)
                 | Self::Glide { .. }
                 | Self::Drag { .. }
+                | Self::TouchDown { .. }
+                | Self::TouchMove { .. }
+                | Self::TouchTap(_)
+                | Self::TouchDrag { .. }
                 | Self::Click(_)
                 | Self::Press(_)
                 | Self::Type { into: Some(_), .. }

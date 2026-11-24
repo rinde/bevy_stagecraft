@@ -389,8 +389,8 @@ The locators work wherever a target does: in steps, in checks and in a
 
 Scripts need no `Wait` that guesses how long the UI takes to settle. As
 Playwright's auto-waiting does, a step that acts on a target that names a
-widget (`MoveTo`, `Glide`, `Drag`, and a `Click` or `Press` right after a move
-to a widget) first waits, one frame at a time, until the target:
+widget (`MoveTo`, `Glide`, `Drag`, the touch steps that put a finger on a target, and
+a `Click` or `Press` right after a move to a widget) first waits, one frame at a time, until the target:
 
 1. exists: it names exactly one widget;
 2. is visible: not hidden, with a size, and with its middle neither clipped
@@ -398,7 +398,7 @@ to a widget) first waits, one frame at a time, until the target:
 3. is stable: neither its layout nor its transform changed during the last
    frame, so it is where it was two frames running;
 4. is enabled, for a step that presses (`Click`, `Press`, the start of a
-   `Drag`): neither the widget nor anything above it carries
+   `Drag`, `TouchDown`, `TouchTap` and `TouchDrag`): neither the widget nor anything above it carries
    `InteractionDisabled`;
 5. receives the pointer: at the point the step aims at (the middle of the
    widget, or the pointer for a press), the topmost UI node that takes the
@@ -428,8 +428,9 @@ node, fails at once: waiting would not fix the script. Positions (`Screen`,
 wait. `step.forced()` (`Force(Click(Left))`, Playwright's `force`) acts at
 once, with none of these checks and no hover check after it, for a script that
 means to click a disabled or covered widget. `Timeout(..)` and `Force(..)`
-wrap one `MoveTo`, `Glide`, `Drag`, `Click` or `Press`, or a `Type` that has an
-`into`; around anything else
+wrap one `MoveTo`, `Glide`, `Drag`, `Click` or `Press`, a `Type` that has an
+`into`, or a `TouchDown`, `TouchMove`, `TouchTap` or `TouchDrag`; around
+anything else
 the file is refused when it loads.
 
 Frames are fixed at 1/60 s and stability is told by Bevy's change detection
@@ -530,6 +531,43 @@ Like `Screen(..)`, a burst names fixed positions of the window (logical
 pixels), so a variant that runs the scenario in another window size refuses a
 script that holds one; a scale factor or a theme change does not. It only
 adds a form to format version 3, so every older file still loads.
+
+### Touch
+
+A finger is not the mouse. The touch steps write Bevy `TouchInput` messages
+for the primary window (logical positions), so `Touches` works, and a
+`PointerInput` for `PointerId::Touch(finger)` so picking and the widgets see a
+touch pointer, which exists from the finger going down until it lifts. The
+cursor and `Hovered` never move. `finger` is 0 unless a step says, and is left
+out of a file when it is 0.
+
+| Step                                  | What it does                                              | Frames     |
+| ------------------------------------- | --------------------------------------------------------- | ---------- |
+| `TouchDown(at: T, finger: n)`         | put a finger down at the target                           | 1          |
+| `TouchMove(to: T, finger: n)`         | move a finger that is down                                | 1          |
+| `TouchUp(finger: n)`                  | lift a finger, where it is                                | 1          |
+| `TouchCancel(finger: n)`              | the system takes the finger away: no click                | 1          |
+| `TouchTap(T)`                         | finger 0 down, then up on the next frame, as `Click`      | 2          |
+| `TouchDrag(from: T, to: T, frames: n)` | down, along `Glide`'s eased path, up                     | `n` + 2    |
+
+`TouchTap` takes two frames because Bevy clicks only an entity the pointer
+hovered the frame before. A step that needs a finger down (`TouchMove`,
+`TouchUp`, `TouchCancel`) on one that is not, or a `TouchDown` on one that is,
+fails at once. The steps that aim at a target wait for it to be actionable
+like `Click` and `Drag`, and `Timeout(..)` and `Force(..)` wrap them (not
+`TouchUp` or `TouchCancel`).
+
+```ron
+steps: [
+    TouchTap(Text("Pause")),
+    TouchDown(at: Name("a"), finger: 1),
+    TouchDown(at: Name("b"), finger: 2),
+    TouchUp(finger: 1),
+    TouchCancel(finger: 2),
+],
+```
+
+They only add forms to format version 3, so every older file still loads.
 
 ## Scenarios as RON
 

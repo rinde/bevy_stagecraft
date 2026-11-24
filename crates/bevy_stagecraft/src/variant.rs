@@ -336,8 +336,12 @@ fn aims_at_screen(step: &Step) -> bool {
 /// The targets a step aims at, inside any `Timeout(..)` or `Force(..)`.
 fn step_targets(step: &Step) -> Vec<&Target> {
     match step {
-        Step::MoveTo(target) | Step::Glide { target, .. } => vec![target],
-        Step::Drag { from, to, .. } => vec![from, to],
+        Step::MoveTo(target)
+        | Step::Glide { target, .. }
+        | Step::TouchDown { at: target, .. }
+        | Step::TouchMove { to: target, .. }
+        | Step::TouchTap(target) => vec![target],
+        Step::Drag { from, to, .. } | Step::TouchDrag { from, to, .. } => vec![from, to],
         Step::Timeout(_, inner) | Step::Force(inner) => step_targets(inner),
         _ => Vec::new(),
     }
