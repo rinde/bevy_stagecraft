@@ -825,8 +825,8 @@ each check's pass or fail mark. For touch steps it draws a filled circle under
 each finger that is down (one per finger, a different colour from the arrow,
 which a touch step never moves) and a short mark that shrinks and fades where
 a finger went down and where it lifted or was cancelled. Everything is UI with
-`Pickable::IGNORE`, so it never takes a picking hit. Only the gallery and the recorder add it; headless
-tests do not.
+`Pickable::IGNORE`, so it never takes a picking hit. Only the gallery and the
+recorder add it; headless tests do not.
 
 Replace the `OverlayTheme` resource to change colours, sizes, font and marks.
 The default marks are the words `PASS` and `FAIL`, because the bundled font has
