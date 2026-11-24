@@ -1,8 +1,10 @@
 # Module map
 
 One line per module: what it is for and where it lives. Paths are under
-`crates/bevy_stagecraft/src/`. The details of each module are in
-[module-details.md](module-details.md) until they move into rustdoc.
+`crates/bevy_stagecraft/src/`. The details of the core modules are in their
+rustdoc, and how they fit together is in [architecture.md](architecture.md);
+the others are in [module-details.md](module-details.md) until they move into
+rustdoc.
 
 | Module | Purpose | Source |
 | ------ | ------- | ------ |

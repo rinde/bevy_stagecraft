@@ -4,6 +4,54 @@
 //! serialisable [`Script`] and back (see [`crate::script`]). The setup and
 //! view closures are the exception: they are Rust only, so they stay out of
 //! the script.
+//!
+//! # What a scenario holds
+//!
+//! The app's setup and view (`app_setup`, `scene_setup`, `app_view`, which a
+//! file holds), steps, and expected [`Check`]s
+//! (`expect_check`). Nothing else is a check: there are no check closures, so
+//! every scenario exports. Closures for setup and view run after the data
+//! ones and are never in a file. Beside them:
+//!
+//! - `base_dir`: where a setup that names a file (and a screenshot baseline)
+//!   looks for it. `load_ron_file` sets it to the file's directory.
+//! - `action_timeout`: frames a step waits for its target, else
+//!   [`DEFAULT_ACTION_TIMEOUT`].
+//! - `scale_factor`: physical pixels per logical pixel, `None` meaning 1.
+//! - `variants`: the names of the [`Variant`](crate::Variant)s it runs in
+//!   (a file's `variants: [..]`), empty for every one. The default variant
+//!   answers to `default`.
+//! - tags and annotations (see [`crate::annotation`]).
+//!
+//! # Steps
+//!
+//! A [`Step::Group`] is only a label and may nest. [`flatten`] gives the leaf
+//! steps as [`FlatStep`]s with the path of names, and everything that plays,
+//! numbers or reports steps works on that flat list, so playback is frame for
+//! frame the same as without groups. [`with_group_path`] puts the path, joined
+//! by [`GROUP_SEPARATOR`] (ASCII, as the bundled font has no `›`), before a
+//! line.
+//!
+//! [`Step::Type`] types one character per frame through
+//! [`SyntheticInput`](crate::SyntheticInput); `into` clicks its target first.
+//! [`Step::MoveBurst`] makes several pointer moves in one frame, as a
+//! high-rate mouse does. [`Step::Capture`] reads the world and keeps the
+//! value under a name for later comparisons (see
+//! [`Value`](crate::Value)); it takes no frame and cannot sit under a
+//! `Timeout` or `Force`.
+//!
+//! [`Step::Timeout`] and [`Step::Force`] wrap one step: a `MoveTo`, `Glide`,
+//! `Drag`, `Click`, `Press`, or a `Type` with an `into`; any other step inside
+//! one is a load error. [`Step::inner`] sees through them and
+//! [`Step::waits_for_target`] says whether a step waits on its target.
+//!
+//! Touch steps (`TouchDown`, `TouchMove`, `TouchUp`, `TouchCancel`) name a
+//! finger (`finger`; 0 is left out of a file; `with_finger` sets it).
+//! `TouchTap` is down, then up the next frame, since Bevy clicks only an
+//! entity hovered the frame before; `TouchDrag` takes `frames + 2`. The ones
+//! that aim at a target wait for it and take `Timeout` and `Force`.
+//!
+//! [`Modifiers`] is written as a list in a file, `[Ctrl, Shift]`.
 
 use alloc::sync::Arc;
 use core::{fmt, ops::BitOr};

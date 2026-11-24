@@ -27,8 +27,8 @@ No line is over 200 characters outside fenced code blocks. A later ticket
 enforces this. A file that outgrows its budget is split by topic, with an index
 entry for each part, not trimmed into shorthand.
 
-`module-details.md` is over budget for now: it is a temporary holding place,
-being dissolved into rustdoc.
+`module-details.md` is over budget for now: it is a temporary holding place
+for the modules not yet dissolved into rustdoc.
 
 ## Updating
 
