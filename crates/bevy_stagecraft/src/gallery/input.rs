@@ -1,24 +1,5 @@
-//! Keeping the real mouse and keyboard out of the app while a scenario plays,
-//! and routing what the Scenarios window gets.
-//!
-//! While the script has the primary window ([`GalleryState::input_is_scripted`]):
-//!
-//! * `PointerInputSettings::is_mouse_enabled` (and touch) is off, so Bevy's own
-//!   mouse picking stays quiet;
-//! * the real mouse, keyboard and touch messages aimed at the primary window
-//!   are removed before `InputSystems` reads them;
-//! * the Scenarios window's mouse goes to a pointer of its own
-//!   ([`scenarios_pointer`]), so its buttons work while the script's pointer
-//!   is somewhere else;
-//! * the synthetic cursor position is set on the primary window each frame
-//!   for the update, and put back before the window system sees it, so the
-//!   operating system's pointer is never moved.
-//!
-//! Pick mode ([`GalleryState::is_picking`]) keeps the app's mouse and
-//! keyboard the same way, scripted or not: the app window's mouse goes to the
-//! gallery, which outlines and picks the node under it, and while the person
-//! has the window the app sees no cursor on it at all. Escape in the app
-//! window ends pick mode.
+//! Removes the real mouse, keyboard and touch input aimed at the primary window
+//! while the script or pick mode has it, and routes the Scenarios window's.
 
 use bevy::camera::NormalizedRenderTarget;
 use bevy::{
@@ -51,71 +32,51 @@ use super::{
 };
 use crate::input::SyntheticInput;
 
-/// Stable identity of the pointer the Scenarios window's real mouse drives.
 const SCENARIOS_POINTER: Uuid = Uuid::from_u128(0x7363_656e_6172_696f_732d_706f_696e_7465);
 
-/// How many pixels one line of mouse wheel scrolls the catalogue.
 pub(super) const LINE_PIXELS: f32 = 24.0;
 
-/// The pointer the Scenarios window's real mouse drives while the script has
-/// the primary window.
 #[must_use]
 pub const fn scenarios_pointer() -> PointerId {
     PointerId::Custom(SCENARIOS_POINTER)
 }
 
-/// How far the mouse wheel has asked the catalogue to scroll, in pixels,
-/// since the list last used it.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub(super) struct ScenariosScroll(pub(super) f32);
 
-/// The real cursor position, set aside while the script's is on show.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub(super) struct RealCursor {
-    /// Whether the script's position is in, to be taken out again.
     active: bool,
-    /// What the window's cursor was before the script's went in.
     cursor: Option<Vec2>,
 }
 
 impl RealCursor {
-    /// Where the real cursor is on the primary window, as of this update.
     pub(super) const fn position(&self) -> Option<Vec2> {
         self.cursor
     }
 }
 
-/// How many times the real mouse clicked the app window in pick mode since
-/// the gallery last picked.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub(super) struct PickClicks(pub(super) u32);
 
-/// Spawns the pointer for the Scenarios window.
 pub(super) fn spawn_scenarios_pointer(mut commands: Commands) {
     commands.spawn(scenarios_pointer());
 }
 
-/// Where a message goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Route {
-    /// Leave it for the app and Bevy.
     Keep,
-    /// Remove it.
     Drop,
-    /// Remove it and hand it to the gallery.
     Take,
 }
 
-/// Empties `messages`, writes back those routed [`Route::Keep`], and returns
-/// those routed [`Route::Take`].
 fn sort_messages<T: Message>(
     messages: &mut Messages<T>,
     window: impl Fn(&T) -> Entity,
     route: impl Fn(Entity) -> Route,
 ) -> Vec<T> {
-    // Taking messages out and writing the rest back gives the rest new ids,
-    // so every reader sees them again. Only do it when something is to be
-    // removed, or messages nobody wanted gone would be replayed every update.
+    // Rewriting messages gives them new ids so readers see them again: only do
+    // it when something is removed, or unwanted messages replay every update.
     let needs_routing = messages
         .get_cursor()
         .read(messages)
@@ -137,7 +98,6 @@ fn sort_messages<T: Message>(
     taken
 }
 
-/// The action a key in the Scenarios window stands for.
 const fn shortcut(key: KeyCode) -> Option<GalleryAction> {
     match key {
         KeyCode::Space => Some(GalleryAction::TogglePlay),
@@ -148,7 +108,6 @@ const fn shortcut(key: KeyCode) -> Option<GalleryAction> {
     }
 }
 
-/// The pointer location for a point in the Scenarios window.
 fn location(window: Entity, position: Vec2) -> Option<Location> {
     WindowRef::Entity(window)
         .normalize(Some(window))
@@ -158,8 +117,6 @@ fn location(window: Entity, position: Vec2) -> Option<Location> {
         })
 }
 
-/// What a key taken from a window asks the gallery for: a shortcut in the
-/// Scenarios window, or the end of pick mode for Escape in the app window.
 fn key_action(key: &KeyboardInput, scenarios: Option<Entity>) -> Option<GalleryAction> {
     if key.state != ButtonState::Pressed || key.repeat {
         return None;
@@ -171,9 +128,7 @@ fn key_action(key: &KeyboardInput, scenarios: Option<Entity>) -> Option<GalleryA
     }
 }
 
-/// How many left clicks of `presses` went to a window other than the
-/// Scenarios window, which is what pick mode took from the app window: only
-/// its clicks matter, the cursor is read from the window itself.
+/// Counts clicks outside the Scenarios window; pick mode took them from the app.
 fn app_clicks(presses: &[MouseButtonInput], scenarios: Option<Entity>) -> u32 {
     let clicks = presses
         .iter()
@@ -186,8 +141,6 @@ fn app_clicks(presses: &[MouseButtonInput], scenarios: Option<Entity>) -> u32 {
     u32::try_from(clicks).unwrap_or(u32::MAX)
 }
 
-/// Sorts the real input of this update: what the script must not see, what the
-/// Scenarios window gets, and what is left for the app.
 pub(super) fn route_real_input(
     mut state: ResMut<GalleryState>,
     mut settings: ResMut<PointerInputSettings>,
@@ -204,11 +157,9 @@ pub(super) fn route_real_input(
     mut last_position: bevy::ecs::system::Local<Vec2>,
 ) {
     let picking = state.is_picking();
-    // The app gets none of the mouse while the script or pick mode has it.
     let scripted = state.input_is_scripted() || picking;
-    // Bevy's mouse picking reads every window's events, the Scenarios
-    // window's too, so it is off for the whole time and the Scenarios
-    // window gets a pointer of its own instead.
+    // Bevy's mouse picking reads every window's events, so it is off throughout
+    // and the Scenarios window gets a pointer of its own.
     if settings.is_mouse_enabled == scripted {
         settings.is_mouse_enabled = !scripted;
     }
@@ -221,7 +172,6 @@ pub(super) fn route_real_input(
         if !scripted {
             Route::Keep
         } else if Some(window) == primary {
-            // Pick mode reads the app window's clicks; the app never does.
             if picking { Route::Take } else { Route::Drop }
         } else if Some(window) == scenarios {
             Route::Take
@@ -229,9 +179,8 @@ pub(super) fn route_real_input(
             Route::Keep
         }
     };
-    // The Scenarios window's wheel is always the gallery's: Bevy's own pointer
-    // handles its other mouse input while nothing is scripted, but nothing
-    // scrolls the catalogue except this.
+    // The wheel in the Scenarios window is always the gallery's: nothing else
+    // scrolls the catalog.
     let route_wheel = |window: Entity| {
         if Some(window) == scenarios {
             Route::Take
@@ -314,8 +263,7 @@ pub(super) fn route_real_input(
     }
 }
 
-/// Keeps the real cursor position to put back later. It runs before the
-/// synthetic input is drained, because draining moves the window's cursor too.
+/// Runs before the synthetic input is drained, which moves the cursor too.
 pub(super) fn save_real_cursor(
     state: Res<GalleryState>,
     mut real: ResMut<RealCursor>,
@@ -325,9 +273,6 @@ pub(super) fn save_real_cursor(
     real.cursor = windows.iter().next().and_then(Window::cursor_position);
 }
 
-/// Puts the script's cursor on the primary window for this update; in pick
-/// mode without a script, no cursor at all, so the app sees none of the
-/// pointing.
 pub(super) fn assert_script_cursor(
     real: Res<RealCursor>,
     state: Res<GalleryState>,
@@ -347,8 +292,7 @@ pub(super) fn assert_script_cursor(
     }
 }
 
-/// Puts the real cursor back before the window system compares it with what it
-/// last told the operating system, so the pointer is never warped.
+/// Runs before the window system compares positions, so the pointer is never warped.
 pub(super) fn restore_real_cursor(
     mut real: ResMut<RealCursor>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
@@ -362,8 +306,6 @@ pub(super) fn restore_real_cursor(
     }
 }
 
-/// Ends the app when either window closes, so closing one never leaves the
-/// other behind: the app without its gallery, or the gallery without its app.
 pub(super) fn exit_with_either_window(
     mut primary: bevy::ecs::lifecycle::RemovedComponents<PrimaryWindow>,
     mut scenarios: bevy::ecs::lifecycle::RemovedComponents<ScenariosWindow>,

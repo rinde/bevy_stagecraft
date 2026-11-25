@@ -1,9 +1,5 @@
-//! Pick mode: the node under the real pointer in the app window is outlined,
-//! and a click picks it instead of reaching the app.
-//!
-//! Everything here reads the app's world and writes only the gallery's own
-//! state and the overlay's [`PickHighlight`], so picking changes nothing in
-//! the app.
+//! Pick mode: outlines the node under the real pointer in the app window and
+//! picks it on click. Writes only the gallery's state and [`PickHighlight`].
 
 use bevy::ecs::{entity::Entity, system::Local, world::World};
 
@@ -20,15 +16,10 @@ use crate::{
     session::{SessionConfig, SessionHooks},
 };
 
-/// A check as a file spells it, such as `Disabled(Text("Save"))`, or in
-/// words when it cannot be written to one.
 pub(super) fn spelled(check: &Check) -> String {
     ron::to_string(check).unwrap_or_else(|_| check.to_string())
 }
 
-/// Outlines the node under the real pointer while pick mode is on, and picks
-/// it when the app window was clicked. Clears the outlines once pick mode is
-/// off.
 pub(super) fn update(world: &mut World, mut tagged: Local<Option<(Entity, String)>>) {
     let clicks = world
         .get_resource_mut::<PickClicks>()
@@ -46,8 +37,7 @@ pub(super) fn update(world: &mut World, mut tagged: Local<Option<(Entity, String
         .and_then(RealCursor::position);
     let hit = position.and_then(|position| node_at(world, position));
     let subject = hit.map(|node| subject_of(world, node));
-    // Ranking the targets reads every text of the app, so only when the
-    // pointer has moved on to another node.
+    // Ranking the targets reads every text of the app: only on a new node.
     let tag = match (subject, tagged.as_ref()) {
         (Some(subject), Some((was, tag))) if *was == subject => tag.clone(),
         (Some(subject), _) => target_alternatives(world, Some(subject), position)
@@ -82,7 +72,6 @@ pub(super) fn update(world: &mut World, mut tagged: Local<Option<(Entity, String
     );
 }
 
-/// What the status line says once a node is picked.
 fn picked_status(picked: &Picked, recording: bool) -> String {
     let target = picked
         .target()
@@ -100,7 +89,6 @@ fn picked_status(picked: &Picked, recording: bool) -> String {
     format!("Picked {target}: {checks}; click one to add it to {place}")
 }
 
-/// Sets the overlay's outlines, touching the resource only when they change.
 fn set_highlight(world: &mut World, wanted: PickHighlight) {
     if let Some(mut highlight) = world.get_resource_mut::<PickHighlight>()
         && *highlight != wanted
