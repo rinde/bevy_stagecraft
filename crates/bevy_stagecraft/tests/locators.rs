@@ -289,7 +289,7 @@ fn a_target_that_matches_nothing_suggests_close_matches() {
         ),
         (
             Target::role(WidgetRole::Button, "Delte"),
-            "no Button is labelled \"Delte\"; did you mean \"Delete\"?",
+            "no Button is labeled \"Delte\"; did you mean \"Delete\"?",
         ),
         (Target::of_role(WidgetRole::Slider), "there is no Slider"),
         (
@@ -433,7 +433,7 @@ fn laid_out() -> App {
     app
 }
 
-fn centre(app: &App, entity: Entity) -> Vec2 {
+fn center(app: &App, entity: Entity) -> Vec2 {
     let world = app.world();
     let node = world.get::<ComputedNode>(entity).expect("laid out");
     let transform = world.get::<UiGlobalTransform>(entity).expect("positioned");
@@ -454,7 +454,7 @@ fn named(app: &mut App, name: &str) -> Entity {
 fn targets_rank_a_test_id_then_role_and_label_then_text_then_name_then_the_position() {
     let mut app = laid_out();
     let pause = named(&mut app, "pause");
-    let at = centre(&app, pause);
+    let at = center(&app, pause);
     assert_eq!(
         target_alternatives(app.world(), Some(pause), None),
         [
@@ -466,7 +466,7 @@ fn targets_rank_a_test_id_then_role_and_label_then_text_then_name_then_the_posit
         ]
     );
     let row = named(&mut app, "first row");
-    let at = centre(&app, row);
+    let at = center(&app, row);
     assert_eq!(
         target_alternatives(app.world(), Some(row), Some(at)),
         [Target::name("first row"), Target::screen(at)]

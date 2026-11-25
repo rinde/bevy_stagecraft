@@ -191,7 +191,7 @@ fn real_tap(app: &mut App, key_code: KeyCode, logical_key: &Key) {
     }
 }
 
-fn button_centre(app: &mut App) -> Vec2 {
+fn button_center(app: &mut App) -> Vec2 {
     let world = app.world_mut();
     let label = world
         .query::<(Entity, &Text)>()
@@ -216,9 +216,9 @@ fn record_with_two_checkpoints(name: &str) -> (SavedSession, App) {
     let dir = dir(name);
     let mut app = recording_app(&dir, SessionHooks::new(), false);
     session::start(app.world_mut(), "two checkpoints").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
+    real_move(&mut app, center);
     for _ in 0..2 {
         click_and_settle(&mut app);
         real_tap(&mut app, KeyCode::F8, &Key::F8);
@@ -462,8 +462,8 @@ fn a_checkpoint_taken_from_code_lands_where_the_key_would() {
         "not recording"
     );
     session::start(app.world_mut(), "code").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
     click_and_settle(&mut app);
     let taken = session::checkpoint(app.world_mut()).expect("taken");
     assert_eq!(taken.number, 1);
@@ -481,8 +481,8 @@ fn the_overlay_flashes_and_names_a_checkpoint_then_fades() {
     let dir = dir("checkpoints-overlay");
     let mut app = recording_app(&dir, SessionHooks::new().checkpoint_names(false), true);
     session::start(app.world_mut(), "overlay").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
     click_and_settle(&mut app);
 
     let flash_shown = |app: &mut App| {
@@ -565,9 +565,9 @@ fn record_named_checkpoint(
     let dir = dir(name);
     let mut app = recording_app(&dir, SessionHooks::new(), false);
     session::start(app.world_mut(), "named").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
+    real_move(&mut app, center);
     click_and_settle(&mut app);
     real_tap(&mut app, KeyCode::F8, &Key::F8);
     type_text(&mut app, typed);
@@ -679,8 +679,8 @@ fn stopping_keeps_the_name_typed_so_far() {
     let dir = dir("checkpoints-stop-names");
     let mut app = recording_app(&dir, SessionHooks::new(), false);
     session::start(app.world_mut(), "stop").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
     click_and_settle(&mut app);
     real_tap(&mut app, KeyCode::F8, &Key::F8);
     type_text(&mut app, "the end");
@@ -697,8 +697,8 @@ fn backspace_edits_the_name_and_blanks_are_no_name() {
     let dir = dir("checkpoints-backspace");
     let mut app = recording_app(&dir, SessionHooks::new(), false);
     session::start(app.world_mut(), "backspace").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
     click_and_settle(&mut app);
     real_tap(&mut app, KeyCode::F8, &Key::F8);
     type_text(&mut app, "abx");
@@ -781,8 +781,8 @@ fn a_checkpoint_named_from_code_opens_no_prompt_and_groups_the_steps() {
         "not recording"
     );
     session::start(app.world_mut(), "named code").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
     click_and_settle(&mut app);
     let taken = session::checkpoint_named(app.world_mut(), "one click").expect("taken");
     assert_eq!(taken.number, 1);
@@ -827,9 +827,9 @@ fn two_named_checkpoints_each_group_only_the_steps_since_the_one_before() {
     let dir = dir("checkpoints-named-two");
     let mut app = recording_app(&dir, SessionHooks::new(), false);
     session::start(app.world_mut(), "two names").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
+    real_move(&mut app, center);
     click_and_settle(&mut app);
     session::checkpoint_named(app.world_mut(), "first click").expect("taken");
     click_and_settle(&mut app);
@@ -872,9 +872,9 @@ fn a_named_checkpoint_straight_after_another_is_a_group_of_only_its_checks() {
     let dir = dir("checkpoints-named-empty");
     let mut app = recording_app(&dir, SessionHooks::new(), false);
     session::start(app.world_mut(), "empty segment").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
+    real_move(&mut app, center);
     click_and_settle(&mut app);
     session::checkpoint_named(app.world_mut(), "before").expect("taken");
     session::checkpoint_named(app.world_mut(), "again").expect("taken");

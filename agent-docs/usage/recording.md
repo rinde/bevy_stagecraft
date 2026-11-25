@@ -81,16 +81,16 @@ their baselines, which are test data.
 
 ```ron
 Check(Screenshot(name: "home")),
-Check(Screenshot(name: "toolbar", of: Name("Toolbar"), tolerance: (colour: 4, pixels: 0.01))),
+Check(Screenshot(name: "toolbar", of: Name("Toolbar"), tolerance: (color: 4, pixels: 0.01))),
 ```
 
 `Check::screenshot("home")` and `Check::screenshot_of("toolbar", target)` (with
-`.with_tolerance(Tolerance::default().with_colour(4).with_pixels(0.01))`)
+`.with_tolerance(Tolerance::default().with_color(4).with_pixels(0.01))`)
 compare the frame, or the rectangle the target's node covers, with the
 baseline `<base dir>/<scenario name as a slug>/<name>.png`. The base directory
 is the one set with `Scenario::with_base_dir`, and for a `.ron` file the
 directory the file is in. A pixel differs when a channel is further than
-`colour` (default 2, of 255) from the baseline's; the check fails when more
+`color` (default 2, of 255) from the baseline's; the check fails when more
 than the share `pixels` (default 0, so none) of the pixels differ.
 
 - Names that make the same slug (`A B` and `A-B`, or a variant label such as

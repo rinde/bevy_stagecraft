@@ -32,7 +32,7 @@ fn spawn_go(world: &mut World) {
     ));
 }
 
-fn spawn_popup(world: &mut World, z: i32, colour: Color) {
+fn spawn_popup(world: &mut World, z: i32, color: Color) {
     world.spawn((
         Name::new("Popup"),
         Node {
@@ -43,7 +43,7 @@ fn spawn_popup(world: &mut World, z: i32, colour: Color) {
             height: px(100),
             ..Node::default()
         },
-        BackgroundColor(colour),
+        BackgroundColor(color),
         GlobalZIndex(z),
         Pickable {
             should_block_lower: false,
@@ -52,11 +52,11 @@ fn spawn_popup(world: &mut World, z: i32, colour: Color) {
     ));
 }
 
-fn with_popup(name: &str, z: i32, colour: Color) -> Scenario {
+fn with_popup(name: &str, z: i32, color: Color) -> Scenario {
     Scenario::new(name)
         .setup(move |world| {
             spawn_go(world);
-            spawn_popup(world, z, colour);
+            spawn_popup(world, z, color);
         })
         .step(Step::wait(SETTLE_FRAMES))
 }

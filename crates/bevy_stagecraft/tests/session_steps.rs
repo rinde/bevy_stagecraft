@@ -984,7 +984,7 @@ fn a_bent_finger_path_keeps_its_corner_as_touch_moves() {
 }
 
 #[test]
-fn a_cancelled_finger_is_a_touch_cancel() {
+fn a_canceled_finger_is_a_touch_cancel() {
     let events = [
         touch(1, 0, TouchPhase::Started, 9.0, 9.0, at_point(9.0, 9.0)),
         touch(30, 0, TouchPhase::Canceled, 9.0, 9.0, at_point(9.0, 9.0)),

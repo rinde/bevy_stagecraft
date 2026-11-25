@@ -97,7 +97,7 @@ fn text_node(app: &mut App, text: &str) -> Entity {
         .0
 }
 
-fn centre(app: &App, entity: Entity) -> Vec2 {
+fn center(app: &App, entity: Entity) -> Vec2 {
     let world = app.world();
     let node = world.get::<ComputedNode>(entity).expect("laid out");
     let transform = world.get::<UiGlobalTransform>(entity).expect("positioned");
@@ -149,9 +149,9 @@ fn picking_at_a_rotated_clip_finds_what_shows_and_nothing_where_it_is_clipped() 
     let mut app = app_with(rotated_clip);
     let shown = text_node(&mut app, "Shown");
     let away = text_node(&mut app, "Away");
-    let hit = node_at(app.world(), centre(&app, shown)).expect("the shown button is picked");
+    let hit = node_at(app.world(), center(&app, shown)).expect("the shown button is picked");
     assert!(is_label_or_button(&app, hit, shown));
-    assert_eq!(node_at(app.world(), centre(&app, away)), None);
+    assert_eq!(node_at(app.world(), center(&app, away)), None);
 }
 
 fn fully_clipped(world: &mut World) {
@@ -193,7 +193,7 @@ fn a_fully_clipped_button_is_never_picked() {
         world.get::<CalculatedClip>(gone),
         Some(CalculatedClip::FullyClipped)
     ));
-    assert_eq!(node_at(world, centre(&app, gone)), None);
+    assert_eq!(node_at(world, center(&app, gone)), None);
     assert_eq!(node_at(world, Vec2::new(100.0, 75.0)), None);
 }
 
@@ -245,7 +245,7 @@ fn a_fixed_node_outside_its_parents_clip_is_clicked_where_it_lies_on_screen() {
 fn a_fixed_node_outside_its_parents_clip_is_picked() {
     let mut app = app_with(fixed_in_clip);
     let label = text_node(&mut app, "Fixed");
-    let hit = node_at(app.world(), centre(&app, label)).expect("the fixed node is picked");
+    let hit = node_at(app.world(), center(&app, label)).expect("the fixed node is picked");
     assert!(is_label_or_button(&app, hit, label));
 }
 
@@ -270,7 +270,7 @@ fn a_fixed_node_ignores_the_transform_of_its_parent() {
         });
     });
     let label = text_node(&mut app, "Fixed");
-    let middle = centre(&app, label);
+    let middle = center(&app, label);
     assert!(
         (300.0..380.0).contains(&middle.x) && (200.0..240.0).contains(&middle.y),
         "{middle}"
