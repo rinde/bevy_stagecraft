@@ -1,9 +1,6 @@
-//! Finding the node a target names, strictly: a target that matches several
-//! nodes names none, as in Playwright's strict mode.
+//! Strict lookup: a target that matches several nodes names none.
 //!
-//! Every match list is in document order (the order of the UI hierarchy,
-//! depth first, roots by entity), never hash order, so [`Target::Nth`] counts
-//! the way the UI reads.
+//! Match lists are in document order, never hash order, so `Target::Nth` counts as the UI reads.
 
 use bevy::{
     ecs::{
@@ -21,24 +18,15 @@ use crate::{
     probe::describe_entity,
 };
 
-/// How a position is rounded in messages: to a tenth of a pixel.
 const MESSAGE_PRECISION: f32 = 10.0;
 
-/// Every node a target matches, before strictness is applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Matches {
-    /// The matching nodes, in document order; perhaps none, perhaps several.
     Nodes(Vec<Entity>),
-    /// Nothing can match now, and why.
     Missing(String),
-    /// Nothing can ever match, and why.
     NotANode(String),
 }
 
-/// The one node `target` names.
-///
-/// A target that matches nothing says what is close to it; one that matches
-/// several lists them and says how to pick one.
 pub(super) fn locate(world: &World, target: &Target) -> Lookup {
     match matches(world, target) {
         Matches::Nodes(nodes) => match nodes.as_slice() {
@@ -51,7 +39,6 @@ pub(super) fn locate(world: &World, target: &Target) -> Lookup {
     }
 }
 
-/// Every node of the app `target` matches, in document order.
 fn matches(world: &World, target: &Target) -> Matches {
     match target {
         Target::Screen(_) | Target::World(_) => {
@@ -121,7 +108,6 @@ fn matches(world: &World, target: &Target) -> Matches {
     }
 }
 
-/// `1 widget` or `3 widgets`.
 fn count_of(count: usize) -> String {
     if count == 1 {
         "1 widget".to_owned()
@@ -130,8 +116,6 @@ fn count_of(count: usize) -> String {
     }
 }
 
-/// The app's entities (not the tooling's, not disabled ones) for which
-/// `keep` holds, in document order.
 fn app_nodes(world: &World, keep: impl Fn(&EntityRef<'_>) -> bool) -> Vec<Entity> {
     let mut found: Vec<Entity> = world.try_query::<EntityRef>().map_or_default(|query| {
         query
@@ -144,14 +128,10 @@ fn app_nodes(world: &World, keep: impl Fn(&EntityRef<'_>) -> bool) -> Vec<Entity
     found
 }
 
-/// Sorts `entities` as the UI hierarchy reads, depth first: by their root
-/// entity, then by where each sits among its parent's children.
 fn in_document_order(world: &World, entities: &mut [Entity]) {
     entities.sort_by_cached_key(|entity| tree_key(world, *entity));
 }
 
-/// Where `entity` sits in the hierarchy: its root, then its index among its
-/// parent's children at each level down.
 fn tree_key(world: &World, entity: Entity) -> (Entity, Vec<usize>) {
     let mut indices = Vec::new();
     let mut current = entity;
@@ -168,7 +148,6 @@ fn tree_key(world: &World, entity: Entity) -> (Entity, Vec<usize>) {
     (current, indices)
 }
 
-/// Whether `entity` lies below `ancestor`, not counting `ancestor` itself.
 fn is_below(world: &World, entity: Entity, ancestor: Entity) -> bool {
     let mut current = entity;
     while let Some(parent) = world.get::<ChildOf>(current) {
@@ -180,8 +159,6 @@ fn is_below(world: &World, entity: Entity, ancestor: Entity) -> bool {
     false
 }
 
-/// Why `target` matches nothing, with what is close to it where that can
-/// be told: `no widget shows "Pasue"; did you mean "Pause"?`.
 fn nothing_matches(world: &World, target: &Target) -> String {
     match target {
         Target::Text(text) => {
@@ -232,8 +209,6 @@ fn nothing_matches(world: &World, target: &Target) -> String {
     }
 }
 
-/// Every non-empty value `read` takes from an entity of the app, each once,
-/// sorted.
 fn app_values(world: &World, read: impl Fn(&EntityRef<'_>) -> Option<String>) -> Vec<String> {
     let mut values: Vec<String> = world.try_query::<EntityRef>().map_or_default(|query| {
         query
@@ -248,8 +223,6 @@ fn app_values(world: &World, read: impl Fn(&EntityRef<'_>) -> Option<String>) ->
     values
 }
 
-/// A hint such as `; did you mean "Pause"?` naming the values close to
-/// `wanted`, or nothing when none is.
 fn did_you_mean_quoted(wanted: &str, candidates: &[String]) -> String {
     let close = close_matches(wanted, candidates.iter().map(String::as_str));
     if close.is_empty() {
@@ -259,8 +232,6 @@ fn did_you_mean_quoted(wanted: &str, candidates: &[String]) -> String {
     format!("; did you mean {}?", quoted.join(" or "))
 }
 
-/// Why `target` names no one node when it matches all of `nodes`, listing
-/// them: Playwright's strict mode.
 fn ambiguous(world: &World, target: &Target, nodes: &[Entity]) -> String {
     let listed: Vec<String> = nodes
         .iter()
@@ -273,8 +244,6 @@ fn ambiguous(world: &World, target: &Target, nodes: &[Entity]) -> String {
     )
 }
 
-/// One match in an ambiguity message: what it is, its entity and, once it
-/// is laid out, where its middle is.
 fn describe_match(world: &World, entity: Entity) -> String {
     let what = describe_entity(world, entity);
     match (
