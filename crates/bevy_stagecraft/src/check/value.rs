@@ -1,8 +1,5 @@
-//! Values a script writes, and how checks compare against them.
-//!
-//! A value stays RON text until compared: `Eq(Lay)` is read as a variant of
-//! the field's own enum. `Captured(..)` is always a captured operand, so an app
-//! variant of that name cannot be written as a value.
+//! Values a script writes, and how checks compare against them. A value stays
+//! RON text until compared, so `Eq(Lay)` reads as the field's own enum.
 
 use core::{cmp::Ordering, fmt};
 
@@ -16,15 +13,8 @@ use super::CapturedValues;
 
 const CAPTURED: &str = "Captured";
 
-/// Whether a reflected number is a physical or a logical pixel value.
-///
-/// Bevy's UI mixes both (`ComputedNode.size` is physical, `ScrollPosition`
-/// logical); `Logical` divides by the primary window's scale factor.
-///
-/// ```ron
-/// Check(Component(target: Name("popup"), path: "ComputedNode.size.x", unit: Logical, is: Eq(430.0))),
-/// Capture(name: "x", value: Component(target: Name("popup"), path: "UiGlobalTransform.0.translation.x", unit: Logical)),
-/// ```
+/// Whether a number is a physical or logical pixel value. Bevy's UI mixes both
+/// (`ComputedNode.size` is physical, `ScrollPosition` logical).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Unit {
@@ -45,10 +35,8 @@ impl Unit {
     }
 }
 
-/// A value as a script writes it: RON text, or a captured one.
-///
 /// `plus` adds exactly to a whole number, so a `u64` above 2^53 keeps every
-/// digit, and as an `f64` to anything else.
+/// digit.
 ///
 /// ```
 /// use bevy_stagecraft::check::Value;
@@ -67,15 +55,8 @@ pub struct Value(Repr);
 #[derive(Debug, Clone, PartialEq)]
 enum Repr {
     Literal(Result<String, String>),
-    Captured {
-        name: String,
-        plus: Option<f64>,
-    },
-    /// Never read from a file nor written to one.
-    Resolved {
-        from: String,
-        ron: String,
-    },
+    Captured { name: String, plus: Option<f64> },
+    Resolved { from: String, ron: String },
 }
 
 /// Sound because the only `f64` is a finite offset (`from_raw` and
@@ -264,7 +245,6 @@ fn add(ron: &str, plus: f64) -> Result<String, &'static str> {
     }
 }
 
-/// Written as bare RON, so a file reads `Eq(Lay)`, not a string.
 impl Serialize for Value {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let text = match &self.0 {
@@ -310,15 +290,7 @@ impl fmt::Display for Value {
     }
 }
 
-/// How a measured value must compare with the values in the script, literal
-/// or captured:
-///
-/// ```ron
-/// Count(with: ["Ghost"], is: Eq(1)),
-/// Resource(path: "Score.0", is: Between(1, 3)),
-/// Count(with: ["Ghost"], is: Eq(Captured("ghosts"))),
-/// Resource(path: "Score.0", is: Ge(Captured(name: "score", plus: 1))),
-/// ```
+/// How a measured value must compare with the values in the script.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Comparison {
@@ -436,11 +408,6 @@ impl Comparable for Counted {
     }
 }
 
-/// How the text of a target must read.
-///
-/// ```ron
-/// TextOf(Text("Score"), StartsWith("Score: ")),
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum TextMatch {
@@ -465,7 +432,6 @@ impl TextMatch {
         Self::StartsWith(text.into())
     }
 
-    /// Whether `text` matches.
     #[must_use]
     pub fn matches(&self, text: &str) -> bool {
         match self {
@@ -476,7 +442,6 @@ impl TextMatch {
     }
 }
 
-/// `is "OK"`, `contains "OK"`, `starts with "OK"`.
 impl fmt::Display for TextMatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

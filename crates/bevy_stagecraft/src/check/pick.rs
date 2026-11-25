@@ -1,7 +1,5 @@
-//! Checks and targets for one node picked by pointing at it, for the
-//! gallery's **Pick** mode. It reads the world only.
-//!
-//! Every list is in a fixed order, never hash order.
+//! Checks and targets for one node picked by pointing at it, for the gallery's
+//! Pick mode. Every list is in a fixed order, never hash order.
 
 use alloc::collections::BTreeSet;
 
@@ -69,8 +67,6 @@ fn is_hit(world: &World, entity: Entity, position: Vec2) -> bool {
         && !is_tooling(world, entity)
 }
 
-/// The widget `node` belongs to, as the built-in checks find it from a label;
-/// otherwise `node` itself.
 #[must_use]
 pub fn subject_of(world: &World, node: Entity) -> Entity {
     widget::widget(world, node)
@@ -101,12 +97,8 @@ fn texts_within(world: &World, entity: Entity) -> Vec<String> {
     texts
 }
 
-/// The targets that name `subject`, sturdiest first: each test-id
-/// `Component(..)`, `Role(..)`, each `Text(..)`, `Name(..)`, what the app's
-/// [`AppTarget::at`](crate::AppTarget::at) makes of `at`, then `Screen(..)`.
-///
-/// The first four are kept only if they name exactly one node, `subject` or
-/// inside it. This is the one ranking; the session recorder uses it too.
+/// The targets that name `subject`, sturdiest first. The first four kinds are
+/// kept only if they name exactly one node.
 #[must_use]
 pub fn target_alternatives(
     world: &World,
@@ -184,11 +176,8 @@ fn role_target(world: &World, subject: Entity) -> Option<Target> {
     })
 }
 
-/// The built-in checks about `subject` that hold now, in a fixed order: text,
-/// states, component fields, then `Tree(..)`.
-///
-/// A position-only target names no node, so only `Shows(..)` is offered. A
-/// check is kept only if it would load from a file.
+/// A position-only target names no node, so only `Shows(..)` is offered. A check
+/// is kept only if it would load from a file.
 #[must_use]
 pub fn checks_that_hold(
     world: &World,
@@ -314,19 +303,12 @@ fn chain_up_to(world: &World, start: Entity, top: Entity) -> Vec<Entity> {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum FieldValue {
-    /// A whole number; `signed` says whether it may go below zero.
-    Integer {
-        value: i128,
-        signed: bool,
-    },
+    Integer { value: i128, signed: bool },
     Float(f64),
     Bool(bool),
     Target(Target),
     Text(String),
-    /// A value the form cannot change, as RON: `None`, or the type's default.
     Ron(String),
-    /// A type the form cannot fill: no default and nothing to take it from.
-    /// Its type path.
     Unfillable(String),
 }
 
@@ -395,7 +377,6 @@ pub struct AppCheckForm {
 }
 
 impl AppCheckForm {
-    /// `None` while a field cannot be filled.
     #[must_use]
     pub fn ron(&self) -> Option<String> {
         if self.values.is_empty() {
@@ -435,8 +416,7 @@ impl AppCheckForm {
     }
 }
 
-/// A form per variant, in declaration order, each field filled from what
-/// `subject` shows; empty unless the app has exactly one check type.
+/// Empty unless the app has exactly one check type.
 #[must_use]
 pub fn app_check_forms(
     world: &World,
@@ -503,7 +483,6 @@ fn default_of(types: &TypeRegistry, type_path: &str) -> Option<String> {
     ron_of(types, value.as_partial_reflect())
 }
 
-/// With a minus sign when `signed`: 3 in `Score: 3`.
 fn first_number(text: &str, signed: bool) -> Option<i128> {
     let start = text.find(|c: char| c.is_ascii_digit())?;
     let digits: String = text

@@ -1,6 +1,6 @@
 //! Checks an app declares itself, as one reflected enum.
 //!
-//! A misspelt variant or a wrong argument is a load error, not a failure
+//! A misspelled variant or a wrong argument is a load error, not a failure
 //! part way through a run.
 
 use core::fmt;

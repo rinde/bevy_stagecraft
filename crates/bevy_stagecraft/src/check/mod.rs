@@ -1,32 +1,5 @@
-//! Checks as data, spelled out in the script so a `.ron` file reads on its own.
-//!
-//! A [`Step::Check`](crate::Step::Check) or an expectation asks one of the
-//! world. Anything not built in is one of the app's own checks, written inside
-//! `App(..)` (see [`AppCheck`]).
-//!
-//! # How a check is polled
-//!
-//! [`Check::poll`] gives `None` while a [`Check::Within`] inside it still
-//! waits, else an [`Outcome`]. Each frame a check comes to one `Verdict`:
-//! holds, fails, pending, broken (cannot run at all: an ambiguous target) or
-//! unavailable (cannot run here: a screenshot without the recorder).
-//! `Not`, `All`, `Any` and `Within` pass unavailable through, so it is skipped
-//! rather than failed. A broken check fails even inside `Not` or `Any`.
-//!
-//! A check is read from RON whole so values keep their spelling. Its serde
-//! form goes through a private mirror enum so no derived functions are public;
-//! a bare name, `Named(..)` or `Custom(..)` is refused with a hint to write
-//! `App(..)`.
-//!
-//! # What the built-ins read
-//!
-//! - `Visible` and `OnTop` are about the named node itself, never the widget
-//!   above it (a hidden list inside a visible `Selectable` row is not
-//!   `Visible`); the other states read the nearest widget at or above the node.
-//! - `OnTop` ignores `Pickable` (the actionability wait honors it), and only
-//!   nodes that paint cover.
-//! - `TextOf` reads a `TextInput`'s value, not its label; `Shows` finds a
-//!   value too.
+//! Checks as data, spelled out in the script. Anything not built in is one of
+//! the app's own checks, written inside `App(..)` (see [`AppCheck`]).
 
 mod app;
 mod capture;
@@ -113,93 +86,66 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Check {
-    /// One of the app's own checks; see [`AppCheck`].
     App(AppCheckValue),
-    /// Some UI node of the app shows exactly this text.
     Shows(String),
-    /// The target's widget, or something below it, is under the pointer. A
-    /// target that is only a position names no widget, and the check fails.
+    /// A target that is only a position names no widget, so this fails.
     Hovered(Target),
-    /// How many entities of the app have every one of these components.
-    /// Disabled entities are left out, as queries leave them out.
-    Count { with: Vec<String>, is: Comparison },
-    /// A field of a reflected resource: its type path, then a reflect path
-    /// (`Editor.tool`), or the type alone for the whole resource.
+    /// Disabled entities are not counted.
+    Count {
+        with: Vec<String>,
+        is: Comparison,
+    },
+    /// `path` may be the type alone, for the whole resource.
     Resource {
         path: String,
         unit: Unit,
         is: Comparison,
     },
-    /// A field of a reflected component on the target's node, else on the
-    /// nearest node above it that has it, so a label finds the slider it sits
-    /// in.
+    /// Falls back to the nearest node above that has it, so a label finds its
+    /// slider.
     Component {
         target: Target,
         path: String,
         unit: Unit,
         is: Comparison,
     },
-    /// The current value of a Bevy `State<S>` registered with
-    /// `register_type_state`.
-    InState { state: String, value: Value },
-    /// The target's widget carries `InteractionDisabled`.
+    /// Needs `register_type_state`.
+    InState {
+        state: String,
+        value: Value,
+    },
     Disabled(Target),
-    /// The target's widget carries `Checked`.
     Checked(Target),
-    /// The target's widget carries `Selected`, as a list item or a swatch
-    /// that is the chosen one, or a tab its list's `SelectedTab` names.
+    /// A tab is selected when its list's `SelectedTab` names it.
     Selected(Target),
-    /// The target's widget carries `Pressed`.
     Pressed(Target),
-    /// The target's widget, or something below it, has input focus.
     Focused(Target),
-    /// The target's widget is visible in the hierarchy and takes up room on
-    /// screen.
     Visible(Target),
-    /// Painted topmost at its middle: nothing drawn later covers it, whatever
-    /// its `Pickable` says (the player's own wait asks what the pointer
-    /// reaches). Only nodes that paint something cover, so an empty full-window
+    /// Ignores `Pickable`. Only nodes that paint cover, so an empty full-window
     /// container does not.
     OnTop(Target),
-    /// The target can be found: exactly one widget matches it (for a text
-    /// target, exactly one node shows the text).
     Exists(Target),
-    /// The text the target's widget shows, which is every text node at or
-    /// below it in order, joined by spaces, matches.
+    /// Reads a `TextInput`'s value, not its label.
     TextOf(Target, TextMatch),
-    /// The UI at and below the target's node matches an expected tree, as
-    /// [`tree_snapshot`] writes it. Partial: it lists only what matters,
-    /// siblings may be left out, their order must hold.
-    ///
-    /// ```text
-    /// - panel:
-    ///   - button "Pause"
-    ///   - slider "Speed" [value=0.5]
-    /// ```
-    Tree { of: Target, matches: String },
-    /// The frame, or the target's node rectangle of it, looks like its
-    /// baseline within the tolerance; see [`screenshot`]. Written
-    /// `Screenshot(name: "home", of: Name("Toolbar"), tolerance: (colour: 4))`.
+    /// Partial: siblings may be left out, their order must hold.
+    Tree {
+        of: Target,
+        matches: String,
+    },
     Screenshot {
         name: String,
-        /// The node whose rectangle is compared; the whole frame when `None`.
         of: Option<Target>,
         tolerance: Tolerance,
     },
-    /// The check inside does not hold. A check that cannot run at all, such
-    /// as a name nobody defined, still fails.
+    /// A check that cannot run at all still fails.
     Not(Box<Self>),
-    /// Every check inside holds; an empty list holds.
+    /// An empty list holds.
     All(Vec<Self>),
-    /// At least one check inside holds; an empty list fails.
+    /// An empty list fails.
     Any(Vec<Self>),
-    /// The check inside holds now or within this many frames, like
-    /// Playwright's `expect.poll`. The step takes only the frames it waits.
     Within(u16, Box<Self>),
 }
 
-/// [`Check`] with every variant written out by name, which [`Check`]'s own
-/// impls add the bare name to. A mirror, so the derived functions stay private.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(remote = "Check", rename = "Check")]
 enum Spelled {
@@ -301,8 +247,6 @@ fn parse(text: &str) -> Result<Check, String> {
     }
     options.from_str_seed(text, SpelledSeed).map_err(|error| {
         let message = error.code.to_string();
-        // A check nested in another, or a target inside, has said this
-        // already.
         if message.contains(FORMS)
             || message.contains(BY_NAME)
             || message.contains(NO_CUSTOM_TARGET)
@@ -581,7 +525,6 @@ impl Check {
         }
     }
 
-    /// Any other check is returned as it is.
     #[must_use]
     pub const fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         if let Self::Screenshot { tolerance: own, .. } = &mut self {
@@ -706,8 +649,7 @@ impl Check {
             .any(|part| matches!(part, Self::Screenshot { .. }))
     }
 
-    /// `None` while a [`Check::Within`] inside still waits; a check that cannot
-    /// run here is [`Outcome::Skipped`].
+    /// `None` while a [`Check::Within`] inside still waits.
     pub(crate) fn poll(
         &self,
         world: &World,
@@ -800,9 +742,6 @@ impl Check {
                 Err(format!("no UI node shows \"{text}\""))
             }),
             Self::Hovered(target) => {
-                // Only a target that names widgets by what they are can match
-                // several; the error from `resolve` would not tell that apart
-                // from a miss.
                 if !matches!(
                     target,
                     Target::Screen(_) | Target::World(_) | Target::App(_)
@@ -983,8 +922,6 @@ fn root_of<'w, 'p>(
     let Some(target) = target else {
         let registration =
             find_type(types, type_name, Role::Resource).map_err(|problem| problem.message())?;
-        // A field the type cannot have is a mistake, not a state the world
-        // may yet reach.
         reflect::field_type(types, registration, path, field)
             .map_err(|problem| problem.message())?;
         return Ok(reflect::resource(world, registration)
@@ -1030,7 +967,6 @@ pub(crate) fn label_of(world: &World, entity: Entity) -> String {
     widget::label_of(world, entity)
 }
 
-///
 /// # Errors
 ///
 /// Says why when `target` names no one node.
@@ -1169,7 +1105,6 @@ fn compare_field(
     unit: Unit,
     subject: impl Fn() -> String,
 ) -> Result<CheckResult, String> {
-    // A field of another enum variant than the current one fails the check.
     let value = match reflect::field_value(root, path, field) {
         Ok(value) => value,
         Err(message) => return Ok(Err(message)),
@@ -1197,7 +1132,6 @@ fn compare(
     subject: impl Fn() -> String,
 ) -> Result<CheckResult, String> {
     let holds = is.test(measured).map_err(|message| {
-        // A captured value is named in the message, so the check should be.
         if is.is_captured() {
             format!("{}: {message}", subject())
         } else {
@@ -1215,9 +1149,8 @@ fn compare(
     })
 }
 
-/// `Visible` is about the named node itself: a hidden list inside a visible
-/// selectable row is hidden. `OnTop` too, but a text label stands for its
-/// widget. The other states climb to the widget.
+/// `Visible` and `OnTop` are about the named node itself; the other states
+/// climb to the widget.
 fn widget_state(world: &World, target: &Target, state: WidgetState) -> Result<CheckResult, String> {
     match widget::node(world, target) {
         Lookup::Found(node) => Ok(widget::in_state(

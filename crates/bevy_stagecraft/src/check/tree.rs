@@ -1,22 +1,5 @@
-//! UI tree snapshots, and partial matching of an expected tree against one.
-//!
-//! ```text
-//! - panel:
-//!   - button "Pause"
-//!   - button "Lay" [pressed]
-//!   - slider "Speed" [value=0.5]
-//!   - text-input "Name" [focused] = "Alice"
-//! ```
-//!
-//! A line is a role (`panel`, `text` or a [`WidgetRole`] in kebab case), a
-//! quoted label and `[states]`, each optional; a trailing colon means lines
-//! below. A text input adds `= "Alice"`, which an expected line may omit to
-//! match any value.
-//!
-//! An expected tree is partial: a line matches an actual one with the same role,
-//! the same label (when given) and at least its states, and the lines below it
-//! match as an ordered subsequence. Roles come from the same components as
-//! [`Target::Role`](crate::Target), not from AccessKit.
+//! UI tree snapshots, and partial matching of an expected tree against one: a
+//! line matches with the same role, label (if given) and at least its states.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt::Write as _;
@@ -96,7 +79,6 @@ impl Kind {
     }
 }
 
-/// Ordered as a snapshot writes them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum State {
     Disabled,
@@ -211,8 +193,6 @@ impl Line {
                 .is_none_or(|value| actual.value.as_ref() == Some(value))
     }
 
-    /// Uncached on purpose: one match asks about each pair once, so a cache
-    /// would only slow the common case. [`Matcher`] is for the diff.
     fn matches(&self, actual: &Self) -> bool {
         if !self.head_matches(actual) {
             return false;
@@ -229,13 +209,8 @@ impl Line {
     }
 }
 
-/// Answers each pair once for [`render_diff`], which asks again at every
-/// level it descends (see `a_deep_mismatch_matches_each_pair_once`). Unused for
-/// the first pass: a map lookup costs more than comparing a head.
 #[derive(Debug, Default)]
 struct Matcher {
-    /// Keyed by the addresses of the two lines, which outlive the matcher
-    /// unmoved. Only looked up, never iterated.
     seen: BTreeMap<(usize, usize), bool>,
     #[cfg(test)]
     computed: usize,
@@ -315,8 +290,6 @@ fn root_line(world: &World, root: Entity) -> Line {
     })
 }
 
-/// An entity that is no UI node (a bare grouping entity) gives the lines of
-/// what is below it.
 fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) -> Vec<Line> {
     let Ok(this) = world.get_entity(entity) else {
         return Vec::new();
@@ -741,9 +714,7 @@ mod tests {
         }
     }
 
-    /// A spine `depth` deep. Every level holds `width` text decoys, of another
-    /// kind than the expected panels, and then the next level; the bottom is
-    /// the panel "a".
+    /// A spine `depth` deep, with `width` text decoys per level.
     fn spine(depth: usize, width: usize) -> Line {
         (0..depth).fold(node("a", Vec::new()), |below, _| {
             let mut children: Vec<Line> = (0..width)
@@ -832,8 +803,6 @@ mod tests {
             ..Matcher::default()
         };
         render_diff(&mut plain, &expected, &actual, 0, &mut String::new());
-        // One pair per level and decoy at most, where asking again at every
-        // level cost depth times more.
         assert!(
             cached.computed <= depth * (width + 2),
             "{} pairs worked out",

@@ -34,17 +34,14 @@ use crate::targets::Target;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Measure {
-    /// Entities having every one of these components.
-    Count { with: Vec<String> },
-    /// A field of a reflected resource, or all of it when `path` is the type
-    /// alone.
+    Count {
+        with: Vec<String>,
+    },
     Resource {
         path: String,
         #[serde(default, skip_serializing_if = "Unit::is_physical")]
         unit: Unit,
     },
-    /// A field of a reflected component on the target's node, else on the
-    /// nearest ancestor that has it.
     Component {
         target: Target,
         path: String,

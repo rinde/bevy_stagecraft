@@ -1,15 +1,5 @@
-//! Screenshot checks: the frame, or one node's rectangle of it, against a
-//! picture stored next to the scenario.
-//!
-//! The baseline is `<base_dir>/<slug of the scenario name>/<name>.png`. A
-//! missing baseline is written and fails. A mismatch writes
-//! `.diagnostics/<name>.actual.png` and `.diff.png` beside the baselines, and a
-//! match removes them; a name may not start with `.`, so no baseline can
-//! collide. Update mode (`RIN_UPDATE_SNAPSHOTS`) rewrites the baseline.
-//!
-//! Pixels need the renderer: without the recorder (feature `record`) the check
-//! is skipped, which does not fail the scenario. PNG encoding and decoding need
-//! that feature too; the rest is ungated and tested without a GPU.
+//! Screenshot checks: a frame, or one node's rectangle, against a baseline PNG.
+//! Without the recorder (feature `record`) the check is skipped, not failed.
 
 use alloc::{string::String, vec::Vec};
 use core::fmt;
@@ -45,7 +35,6 @@ const DIFF_SUFFIX: &str = "diff";
 #[serde(default, deny_unknown_fields)]
 pub struct Tolerance {
     pub colour: u8,
-    /// The largest share of pixels, from 0 to 1, that may differ.
     pub pixels: f64,
 }
 
@@ -120,7 +109,6 @@ pub(super) fn name_problem(name: &str) -> Option<String> {
     }
 }
 
-/// Everything but letters and digits becomes `-`.
 #[must_use]
 pub(crate) fn directory_name(scenario: &str) -> String {
     let slug: String = scenario
@@ -145,13 +133,10 @@ pub(crate) fn directory_name(scenario: &str) -> String {
     }
 }
 
-/// A name may not start with `.`, so it never clashes with a baseline.
 const OWNER_FILE: &str = ".scenario";
 
-/// `directory_name` is lossy (`A B` and `A-B` are both `a-b`), so the folder
-/// records its exact owner in [`OWNER_FILE`] and another name finds it taken. A
-/// folder with baselines and no record is adopted by the first scenario to use
-/// it; failing to write the record is not an error.
+/// `directory_name` is lossy (`A B` and `A-B` both give `a-b`), so the folder
+/// records its owner in [`OWNER_FILE`].
 fn claim_directory(folder: &Path, scenario: &str) -> Result<(), String> {
     let owner = folder.join(OWNER_FILE);
     let Ok(existing) = fs::read_to_string(&owner) else {
@@ -206,7 +191,6 @@ pub enum ScreenshotResult {
     },
 }
 
-/// Tightly packed 8-bit RGBA, top row first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Picture {
     pub(crate) width: u32,
@@ -297,7 +281,6 @@ enum Phase {
     Ready(Result<Picture, String>),
 }
 
-/// Present only where a renderer is, so a world without it skips the checks.
 #[derive(Resource, Debug, Default)]
 pub(crate) struct Pictures {
     phase: Phase,
@@ -473,10 +456,8 @@ pub(super) fn verdict(world: &World, check: &Check) -> Verdict {
 /// crop by a whole pixel.
 const EDGE_EPSILON: f32 = 1e-3;
 
-/// The upright bounding box of the node's box under its complete
-/// [`UiGlobalTransform`], widened to whole pixels: a quarter turn swaps width
-/// and height, and other turns include pixels outside the node. Clipped here
-/// on the left and top, the rest by [`Picture::crop`].
+/// The upright bounding box under the complete [`UiGlobalTransform`], widened
+/// to whole pixels. Clipped on the left and top here, the rest by [`Picture::crop`].
 fn node_rectangle(world: &World, node: Entity) -> Option<(UVec2, UVec2)> {
     let computed = world.get::<ComputedNode>(node)?;
     let transform = world.get::<UiGlobalTransform>(node)?.affine();
@@ -583,8 +564,6 @@ enum Compared {
     },
 }
 
-/// An error is a file that cannot be read or written, no verdict on the
-/// picture.
 fn compare(
     actual: &Picture,
     name: &str,
@@ -755,7 +734,6 @@ mod tests {
         let turned =
             Affine2::from_angle_translation(core::f32::consts::FRAC_PI_4, Vec2::new(50.0, 50.0));
         let (top_left, size) = bounds(turned, Vec2::new(20.0, 20.0));
-        // The diagonal is 28.28 long, so the box runs from 35.86 to 64.14.
         assert_eq!((top_left, size), (UVec2::new(35, 35), UVec2::new(30, 30)));
     }
 
@@ -831,8 +809,6 @@ mod tests {
 
     #[test]
     fn a_child_of_a_parent_turned_a_quarter_turn_is_cropped_with_width_and_height_swapped() {
-        // The parent turns about its middle (150, 100); the child's middle,
-        // (-60, -25) from there, lands at (25, -60) from it: (175, 40).
         let rectangle =
             laid_out_child_rectangle(UiTransform::from_rotation(Rot2::degrees(90.0)), 1.0);
         assert_eq!(rectangle, Some((UVec2::new(160, 20), UVec2::new(30, 40))));
@@ -840,15 +816,12 @@ mod tests {
 
     #[test]
     fn a_child_of_a_scaled_parent_is_cropped_to_the_scaled_box_clipped_to_the_picture() {
-        // Doubled about (150, 100) the child's middle moves to (30, 50) and
-        // the box to 80 by 60, whose first ten columns lie left of the picture.
         let rectangle = laid_out_child_rectangle(UiTransform::from_scale(Vec2::splat(2.0)), 1.0);
         assert_eq!(rectangle, Some((UVec2::new(0, 20), UVec2::new(70, 60))));
     }
 
     #[test]
     fn at_a_physical_scale_factor_of_two_the_crop_is_in_physical_pixels() {
-        // The same layout as the quarter turn above, twice as many pixels.
         let rectangle =
             laid_out_child_rectangle(UiTransform::from_rotation(Rot2::degrees(90.0)), 2.0);
         assert_eq!(rectangle, Some((UVec2::new(320, 40), UVec2::new(60, 80))));
@@ -1017,7 +990,6 @@ mod tests {
     }
 }
 
-/// A screenshot check against a renderer that answers at once; no GPU needed.
 #[cfg(all(test, feature = "record"))]
 mod flow {
     use bevy::{

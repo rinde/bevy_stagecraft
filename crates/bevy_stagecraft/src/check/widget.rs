@@ -23,11 +23,8 @@ pub(super) enum WidgetState {
     Checked,
     Selected,
     Pressed,
-    /// Has input focus, or something below it has.
     Focused,
-    /// Visible in the hierarchy and taking up room on screen.
     Visible,
-    /// Painted topmost at its middle, whatever covers it lets through.
     OnTop,
     Exists,
 }
@@ -55,7 +52,6 @@ pub(super) fn node(world: &World, target: &Target) -> Lookup {
     locate(world, target)
 }
 
-/// A label belongs to its button.
 pub(super) fn widget(world: &World, node: Entity) -> Entity {
     let mut current = node;
     loop {
@@ -69,8 +65,7 @@ pub(super) fn widget(world: &World, node: Entity) -> Entity {
     }
 }
 
-/// A text label stands for its widget; any other node is judged itself, so a
-/// popup root inside a widget is not mistaken for it.
+/// A text label stands for its widget; any other node is judged itself.
 pub(super) fn painted_subject(world: &World, node: Entity) -> Entity {
     if world.get::<Text>(node).is_some() {
         widget(world, node)
@@ -171,8 +166,7 @@ pub(super) fn text_of(world: &World, widget: Entity) -> String {
     blocks.join(" ")
 }
 
-/// Leaves out a text input's own value: it changes with every key and is what
-/// checks read.
+/// Leaves out a text input's own value, which checks read.
 pub(super) fn label_of(world: &World, widget: Entity) -> String {
     let mut blocks: Vec<String> = Vec::new();
     if world.get::<EditableText>(widget).is_some() {
