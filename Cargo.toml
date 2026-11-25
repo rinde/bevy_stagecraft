@@ -13,18 +13,14 @@ publish = false
 [workspace.dependencies]
 bevy = { version = "=0.20.1", default-features = false }
 
-# Bevy is slow unoptimised, so dependencies get full optimisation
-# even in dev builds, while our own code stays quick to compile.
+# Bevy is slow unoptimized, so dependencies get full optimization in dev builds.
 [profile.dev]
 opt-level = 1
-# Full debuginfo made each test binary over a gigabyte and filled disks;
-# line tables keep backtraces and panic locations readable.
-# The test profile inherits this.
+# Full debuginfo made each test binary over a gigabyte. The test profile inherits this.
 debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
-# Dependencies keep symbol names for backtraces but no line tables.
 debug = false
 
 [workspace.lints.rust]
@@ -37,8 +33,7 @@ unused_lifetimes = "warn"
 single_use_lifetimes = "warn"
 trivial_casts = "warn"
 trivial_numeric_casts = "warn"
-# Bevy system parameters (`Query<..>`, `Res<..>`) carry elided lifetimes in
-# their paths everywhere; spelling them out would be noise.
+# Bevy system parameters carry elided lifetimes in their paths everywhere.
 elided_lifetimes_in_paths = "allow"
 
 [workspace.lints.clippy]
@@ -46,7 +41,6 @@ all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
-# Restriction lints.
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
@@ -61,22 +55,16 @@ mem_forget = "deny"
 rest_pat_in_fully_bound_structs = "deny"
 str_to_string = "deny"
 verbose_file_reads = "deny"
-# Worth having in a library.
 allow_attributes_without_reason = "deny"
 allow_attributes = "deny"
 missing_assert_message = "deny"
 undocumented_unsafe_blocks = "deny"
-# Rule: public enums that may grow carry #[non_exhaustive] instead.
 std_instead_of_core = "deny"
 alloc_instead_of_core = "deny"
-# Allowances carried over from rails.
-# Bevy pulls in several versions of the same transitive crates; not ours to fix.
+# Bevy pulls in several versions of the same transitive crates.
 multiple_crate_versions = "allow"
-# Bevy systems take many parameters by design.
 too_many_arguments = "allow"
-# Bevy system parameters (Res, Query, Commands) are taken by value.
 needless_pass_by_value = "allow"
-# Bevy query types are complex by nature.
 type_complexity = "allow"
 # Names such as `ui::UiScenario` read better at call sites when re-exported.
 module_name_repetitions = "allow"

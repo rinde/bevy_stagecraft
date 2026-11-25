@@ -1,24 +1,3 @@
-//! Synthetic input: drive a Bevy UI like a mouse, a keyboard and fingers.
-//!
-//! [`SyntheticInput`] queues events; the plugin drains the queue in
-//! `PreUpdate` into Bevy's own input messages and into `PointerInput`, so
-//! the app sees what a person's devices would produce.
-//!
-//! Keyboard: [`SyntheticInput::type_character`] queues one character as a
-//! [`SyntheticEvent::Character`]: Shift down where the layout needs it, the
-//! logical key with its text, its release, Shift up, all in one frame.
-//! [`keystroke`] and [`Keystroke`] are the US-layout mapping from a character
-//! to a key and whether Shift is held. Modifier key events carry the logical
-//! keys (`Key::Shift` and so on), so `ButtonInput<Key>` sees them as text
-//! fields do.
-//!
-//! Touch: `touch_down`, `touch_move`, `touch_up` and `touch_cancel` (and
-//! [`SyntheticEvent::Touch`]) write `TouchInput` and `PointerInput` for
-//! `PointerId::Touch(id)` directly, because Bevy's touch picking reads window
-//! events that a headless app never has. The pointer is spawned on `Started`
-//! and despawned by a system in `Last` once the finger has ended. Touch never
-//! moves the mouse pointer or sets `Hovered`.
-
 use alloc::collections::{BTreeMap, VecDeque};
 
 use bevy::{
@@ -49,132 +28,87 @@ use bevy::{
     window::{CursorMoved, PrimaryWindow, Window, WindowRef},
 };
 
-/// System sets of the synthetic input plugin, all in `PreUpdate`.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SyntheticInputSystems {
-    /// Drains [`SyntheticInput`] into Bevy's input messages. Runs before
-    /// `InputSystems` and the picking input systems.
+    /// Runs before `InputSystems` and the picking input systems.
     Drain,
 }
 
-/// One thing a user could do with a mouse or keyboard.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum SyntheticEvent {
-    /// Move the cursor to a logical position in the window.
     MoveCursor(Vec2),
-    /// Press or release a mouse button at the current cursor position.
     Button(MouseButton, ButtonState),
-    /// Turn the mouse wheel at the current cursor position.
     Wheel {
-        /// Whether `x` and `y` are lines or pixels.
         unit: MouseScrollUnit,
-        /// Horizontal amount.
         x: f32,
-        /// Vertical amount.
         y: f32,
     },
-    /// Press or release a keyboard key.
     Key(KeyCode, ButtonState),
-    /// Press or release a key that types `character`: Bevy sees the logical
-    /// key (`Key::Character`, or `Key::Space`) and, on a press, the text it
-    /// produces, as it would from a real keyboard. Shift is a separate
-    /// [`SyntheticEvent::Key`] around it; see [`keystroke`].
+    /// Shift is a separate [`SyntheticEvent::Key`] around it; see [`keystroke`].
     Character {
-        /// The physical key.
         key: KeyCode,
-        /// The character it types.
         character: char,
-        /// Pressed or released.
         state: ButtonState,
     },
-    /// One phase of one finger at a logical position in the window. It
-    /// never moves the mouse.
+    /// Never moves the mouse.
     Touch {
-        /// The finger's id.
         finger: u64,
-        /// Started, moved, ended or cancelled.
         phase: TouchPhase,
-        /// Where the finger is.
         position: Vec2,
     },
 }
 
-/// A queue of synthetic input, drained once per frame in `PreUpdate`.
-///
-/// It writes what `bevy_winit` would: `Window::set_cursor_position`,
-/// `CursorMoved`, `MouseButtonInput`, `MouseWheel` and `KeyboardInput`
-/// messages, plus `PointerInput` for `PointerId::Mouse`, written directly.
-/// Touch writes `TouchInput` and `PointerInput` for `PointerId::Touch`, also
-/// directly: Bevy's own touch picking reads window events a headless app
-/// never has. The pointer of a finger is spawned when it starts and
-/// despawned in `Last` once it ended or was cancelled.
+/// Writes what `bevy_winit` would, so the app sees what real devices produce.
 #[derive(Resource, Debug, Default)]
 pub struct SyntheticInput {
-    /// Events waiting for the next drain, oldest first.
     queue: VecDeque<SyntheticEvent>,
-    /// The render target pointer locations refer to; the primary window when
-    /// `None`. An offscreen image when recording.
     target: Option<NormalizedRenderTarget>,
-    /// Where the last drained [`SyntheticEvent::MoveCursor`] put the cursor.
     cursor: Option<Vec2>,
 }
 
 impl SyntheticInput {
-    /// Queues an arbitrary event.
     pub fn push(&mut self, event: SyntheticEvent) {
         self.queue.push_back(event);
     }
 
-    /// Queues moving the cursor to `position` (logical pixels).
     pub fn move_cursor(&mut self, position: Vec2) {
         self.push(SyntheticEvent::MoveCursor(position));
     }
 
-    /// Queues pressing `button`.
     pub fn press_button(&mut self, button: MouseButton) {
         self.push(SyntheticEvent::Button(button, ButtonState::Pressed));
     }
 
-    /// Queues releasing `button`.
     pub fn release_button(&mut self, button: MouseButton) {
         self.push(SyntheticEvent::Button(button, ButtonState::Released));
     }
 
-    /// Queues a press and release of `button` in the same frame, which is
-    /// what Bevy needs to see a click.
+    /// Same frame, because Bevy needs that to see a click.
     pub fn click(&mut self, button: MouseButton) {
         self.press_button(button);
         self.release_button(button);
     }
 
-    /// Queues finger `finger` touching down at `position` (logical pixels).
     pub fn touch_down(&mut self, finger: u64, position: Vec2) {
         self.touch(finger, TouchPhase::Started, position);
     }
 
-    /// Queues finger `finger` moving to `position`.
     pub fn touch_move(&mut self, finger: u64, position: Vec2) {
         self.touch(finger, TouchPhase::Moved, position);
     }
 
-    /// Queues finger `finger` lifting at `position`.
     pub fn touch_up(&mut self, finger: u64, position: Vec2) {
         self.touch(finger, TouchPhase::Ended, position);
     }
 
-    /// Queues the system cancelling finger `finger` at `position`.
-    ///
-    /// On Bevy 0.20 a cancelled touch reaches widgets as `Pointer<Out>` and
-    /// never as `Pointer<Cancel>` (`generate_hovermap` drops the cancelled
-    /// pointer's hits), on a device as here, and this does not send one of its
-    /// own so that a scenario fails where a device would. An app that must act
-    /// on a cancel reads `Touches` (`just_canceled`, `any_just_canceled`).
+    /// Does not send `Pointer<Cancel>`: on Bevy 0.20 a device's canceled touch
+    /// reaches widgets as `Pointer<Out>` only, and a scenario must fail where a
+    /// device would.
     pub fn touch_cancel(&mut self, finger: u64, position: Vec2) {
         self.touch(finger, TouchPhase::Canceled, position);
     }
 
-    /// Queues one phase of a finger.
     fn touch(&mut self, finger: u64, phase: TouchPhase, position: Vec2) {
         self.push(SyntheticEvent::Touch {
             finger,
@@ -183,63 +117,50 @@ impl SyntheticInput {
         });
     }
 
-    /// Queues a turn of the mouse wheel.
     pub fn scroll(&mut self, unit: MouseScrollUnit, x: f32, y: f32) {
         self.push(SyntheticEvent::Wheel { unit, x, y });
     }
 
-    /// Queues pressing `key`.
     pub fn press_key(&mut self, key: KeyCode) {
         self.push(SyntheticEvent::Key(key, ButtonState::Pressed));
     }
 
-    /// Queues releasing `key`.
     pub fn release_key(&mut self, key: KeyCode) {
         self.push(SyntheticEvent::Key(key, ButtonState::Released));
     }
 
-    /// Queues a press and release of `key` in the same frame. Bevy then sees
-    /// it as just pressed and just released at once; to observe the key held,
-    /// use [`Self::press_key`] and [`Self::release_key`] in different frames.
+    /// Bevy sees it as just pressed and just released at once; to observe the key
+    /// held, press and release in different frames.
     pub fn tap_key(&mut self, key: KeyCode) {
         self.press_key(key);
         self.release_key(key);
     }
 
-    /// Queues typing `character`: its key pressed and released in the same
-    /// frame, with Shift held around it where the character needs it.
     pub fn type_character(&mut self, character: char) {
         for event in character_events(character) {
             self.push(event);
         }
     }
 
-    /// Sets the render target pointer locations refer to. `None` means the
-    /// primary window.
     pub fn set_target(&mut self, target: Option<NormalizedRenderTarget>) {
         self.target = target;
     }
 
-    /// Where the script last moved the cursor, or `None` if it has not since
-    /// the start or the last [`Self::forget_cursor`].
     #[must_use]
     pub const fn cursor(&self) -> Option<Vec2> {
         self.cursor
     }
 
-    /// Forgets where the cursor was, as a fresh scenario starts without one.
     pub const fn forget_cursor(&mut self) {
         self.cursor = None;
     }
 
-    /// Whether nothing is waiting to be drained.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
 }
 
-/// Registers [`SyntheticInput`] and the system that drains it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SyntheticInputPlugin;
 
@@ -257,17 +178,13 @@ impl Plugin for SyntheticInputPlugin {
     }
 }
 
-/// The key that types a character, and whether Shift must be held for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Keystroke {
-    /// The physical key; [`KeyCode::Unidentified`] for a character no key of
-    /// the US layout types.
+    /// [`KeyCode::Unidentified`] for a character no key of the US layout types.
     pub key: KeyCode,
-    /// Whether Shift is held to type it.
     pub shift: bool,
 }
 
-/// The letter keys, in alphabetical order.
 const LETTER_KEYS: [KeyCode; 26] = [
     KeyCode::KeyA,
     KeyCode::KeyB,
@@ -297,7 +214,6 @@ const LETTER_KEYS: [KeyCode; 26] = [
     KeyCode::KeyZ,
 ];
 
-/// The digit keys, `0` to `9`.
 const DIGIT_KEYS: [KeyCode; 10] = [
     KeyCode::Digit0,
     KeyCode::Digit1,
@@ -311,15 +227,9 @@ const DIGIT_KEYS: [KeyCode; 10] = [
     KeyCode::Digit9,
 ];
 
-/// What the digit keys type with Shift held, `0` to `9`, on the US layout.
 const SHIFTED_DIGITS: [char; 10] = [')', '!', '@', '#', '$', '%', '^', '&', '*', '('];
 
-/// The key that types `character` on the US layout.
-///
-/// A scenario assumes one layout whatever the machine it runs on, as it has
-/// to play the same everywhere. A character no key types (an accented letter,
-/// an emoji) comes from [`KeyCode::Unidentified`] without Shift; the text is
-/// what widgets read.
+/// Assumes the US layout on every machine so scenarios play the same everywhere.
 #[must_use]
 pub fn keystroke(character: char) -> Keystroke {
     let plain = |key| Keystroke { key, shift: false };
@@ -384,8 +294,6 @@ pub fn keystroke(character: char) -> Keystroke {
     plain(KeyCode::Unidentified(NativeKeyCode::Unidentified))
 }
 
-/// The events that type `character` in one frame: Shift down where needed,
-/// the key down and up, Shift up.
 pub(crate) fn character_events(character: char) -> Vec<SyntheticEvent> {
     let Keystroke { key, shift } = keystroke(character);
     let character_event = |state| SyntheticEvent::Character {
@@ -411,9 +319,8 @@ pub(crate) fn character_events(character: char) -> Vec<SyntheticEvent> {
     events
 }
 
-/// The logical key of a modifier's physical key, which `bevy_winit` reports
-/// and the text widgets read to tell Shift from a plain press; `None` for any
-/// other key, whose logical key depends on a layout.
+/// Text widgets read it to tell Shift from a plain press; `None` for other keys,
+/// whose logical key depends on a layout.
 const fn modifier_logical_key(key: KeyCode) -> Option<Key> {
     match key {
         KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(Key::Shift),
@@ -424,7 +331,6 @@ const fn modifier_logical_key(key: KeyCode) -> Option<Key> {
     }
 }
 
-/// Maps a mouse button to its picking counterpart, if it has one.
 const fn pointer_button(button: MouseButton) -> Option<PointerButton> {
     match button {
         MouseButton::Left => Some(PointerButton::Primary),
@@ -434,7 +340,6 @@ const fn pointer_button(button: MouseButton) -> Option<PointerButton> {
     }
 }
 
-/// The pointer action a button press or release stands for.
 const fn button_action(button: PointerButton, state: ButtonState) -> PointerAction {
     match state {
         ButtonState::Pressed => PointerAction::Press(button),
@@ -442,7 +347,6 @@ const fn button_action(button: PointerButton, state: ButtonState) -> PointerActi
     }
 }
 
-/// The Bevy touch message for one phase of a finger.
 const fn touch_input(finger: u64, phase: TouchPhase, position: Vec2, window: Entity) -> TouchInput {
     TouchInput {
         phase,
@@ -453,7 +357,6 @@ const fn touch_input(finger: u64, phase: TouchPhase, position: Vec2, window: Ent
     }
 }
 
-/// The keyboard message for a key that produces no text.
 fn modifier_input(key_code: KeyCode, state: ButtonState, window: Entity) -> KeyboardInput {
     KeyboardInput {
         key_code,
@@ -466,9 +369,8 @@ fn modifier_input(key_code: KeyCode, state: ButtonState, window: Entity) -> Keyb
     }
 }
 
-/// The pointer message a touch phase stands for. A finger's pointer is spawned
-/// on `Started`, since Bevy's own touch picking reads window events a headless
-/// app never has.
+/// Spawn a finger's pointer on `Started`: Bevy's touch picking reads window
+/// events a headless app never has.
 fn touch_pointer_input(
     commands: &mut Commands,
     positions: &mut BTreeMap<u64, Vec2>,
@@ -500,7 +402,6 @@ fn touch_pointer_input(
     PointerInput::new(pointer, at, action)
 }
 
-/// Moves queued synthetic events into Bevy's input messages.
 fn drain_synthetic_input(
     mut input: ResMut<SyntheticInput>,
     mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
@@ -616,8 +517,7 @@ fn drain_synthetic_input(
     }
 }
 
-/// The keyboard message for a character key: the logical key and, on a
-/// press only, the text, as a real keyboard reports them.
+/// Text goes with a press only, as a real keyboard reports it.
 fn character_input(
     key_code: KeyCode,
     character: char,
@@ -640,8 +540,7 @@ fn character_input(
     }
 }
 
-/// Despawns the pointer of every finger that ended or was cancelled, after the
-/// picking systems have seen its last message.
+/// Run after the picking systems have seen the pointer's last message.
 fn despawn_ended_touch_pointers(
     mut touches: MessageReader<TouchInput>,
     pointers: Query<(Entity, &PointerId)>,

@@ -1,20 +1,13 @@
-# cargo-deny configuration, run by `just deny` (and so by `just ci`).
-# Other projects depend on this crate, so what it pulls in is checked here.
-
 [graph]
 all-features = true
 
 [advisories]
 version = 2
-# Vulnerabilities are always denied; unmaintained crates are denied in every
-# workspace and transitive dependency.
 yanked = "deny"
 unmaintained = "all"
 # Every ignore needs the advisory ID, the reason and a date to revisit.
 ignore = [
     # Revisit by 2027-01-01 (or on the next Bevy upgrade, whichever is first).
-    # ttf-parser is unmaintained; reached only via bevy_winit -> winit ->
-    # sctk-adwaita (window decorations). Not ours to fix.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained, only via bevy_winit -> winit -> sctk-adwaita; revisit 2027-01-01" },
 ]
 
@@ -34,7 +27,7 @@ allow = [
     "Zlib",
 ]
 
-# Our own crate is `publish = false` and has no licence field yet.
+# Our own crate is `publish = false` and has no license field yet.
 [licenses.private]
 ignore = true
 

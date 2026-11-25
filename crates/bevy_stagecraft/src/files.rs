@@ -1,17 +1,4 @@
-//! Turning a directory of `.ron` scenarios into tests.
-//!
-//! Add a test target with `harness = false` and call [`run_ron_tests`] from
-//! its `main`; every `.ron` file in the directory becomes one test, named
-//! after the file. With [`run_ron_tests_with_variants`] every file is played
-//! once per [`Variant`] (window size, scale factor, theme), as one test named
-//! `file [variant]`.
-//!
-//! `*.scene.ron` files are saved worlds, not scenarios, and [`ron_files`]
-//! skips them; each scenario's `base_dir` is its file's directory. A file
-//! that names the variants it runs in is [`FileOutcome::Skipped`] in the
-//! others, reported as `skipped` apart from `failed` and counted as passed. A
-//! file whose app panics fails (the player catches the panic as a failed
-//! step) and the runner goes on with the next file.
+//! Call [`run_ron_tests`] from the `main` of a `harness = false` test target:
 //!
 //! ```toml
 //! [[test]]
@@ -45,43 +32,25 @@ use crate::{
     variant::Variant,
 };
 
-/// How one file and variant ended.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FileOutcome {
-    /// The file loaded (or not) and the scenario ran. `Err` is why it did not
-    /// load, or why the variant refused it.
+    /// `Err` is why it did not load, or why the variant refused it.
     Ran(Result<ScenarioReport, LoadError>),
-    /// The scenario names the variants it runs in ([`Scenario::variant_names`])
-    /// and this is not one, so it was skipped, not failed. See
-    /// [`Variant::skips`].
     Skipped,
-    /// The scenario is skipped (`skip`) or set aside (`fixme`), whatever the
-    /// variant: it was not run, and a runner lists it as ignored.
     Disabled(Disabled),
 }
 
-/// One `.ron` file played.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileResult {
-    /// The test's name: the file name without its extension, and the
-    /// variant's name in brackets after it unless the variant is the default
-    /// one (`wrap [narrow]`, see [`Variant::label`]).
     pub name: String,
-    /// The name of the variant the file was played in; empty for the default
-    /// one.
     pub variant: String,
-    /// The file.
     pub path: PathBuf,
-    /// The report, why the file did not load, or that it was skipped.
     pub outcome: FileOutcome,
-    /// Why the scenario is expected to fail (`should_fail`), if it is: it
-    /// then passes only by failing.
     pub should_fail: Option<String>,
 }
 
 impl FileResult {
-    /// Whether the file loaded and its scenario passed. A skipped file counts
-    /// as passed: it was not run, so it is nothing to fail over.
+    /// A skipped file counts as passed.
     #[must_use]
     pub fn passed(&self) -> bool {
         match &self.outcome {
@@ -91,21 +60,16 @@ impl FileResult {
         }
     }
 
-    /// Whether the scenario does not run in this variant and was skipped
-    /// rather than played.
     #[must_use]
     pub const fn skipped(&self) -> bool {
         matches!(self.outcome, FileOutcome::Skipped)
     }
 
-    /// Whether the scenario is `skip`ped or `fixme`d and was not run, as an
-    /// ignored test. See [`FileResult::disabled`].
     #[must_use]
     pub const fn ignored(&self) -> bool {
         matches!(self.outcome, FileOutcome::Disabled(_))
     }
 
-    /// Why the scenario was not run, when it is skipped or fixme.
     #[must_use]
     pub const fn disabled(&self) -> Option<&Disabled> {
         match &self.outcome {
@@ -114,16 +78,12 @@ impl FileResult {
         }
     }
 
-    /// Whether the scenario failed as `should_fail` says it would. That is a
-    /// pass, [`FileResult::passed`].
     #[must_use]
     pub fn failed_as_expected(&self) -> bool {
         self.should_fail.is_some()
             && matches!(&self.outcome, FileOutcome::Ran(Ok(report)) if !report.passed())
     }
 
-    /// Why the test failed, one line per reason; empty when it passed or was
-    /// skipped.
     #[must_use]
     pub fn failures(&self) -> Vec<String> {
         match &self.outcome {
@@ -146,9 +106,7 @@ impl FileResult {
     }
 }
 
-/// The `.ron` files directly in `dir`, sorted by name, except the saved
-/// worlds (`*.scene.ron`, see [`crate::save`]), which are setups and not
-/// scenarios.
+/// Skips `*.scene.ron`: saved worlds are setups, not scenarios.
 ///
 /// # Errors
 ///
@@ -173,8 +131,7 @@ pub fn ron_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, LoadError> {
     Ok(files)
 }
 
-/// Loads one file as a scenario. A setup in it that names a file (a saved
-/// world, `Scene("..")`) looks for it next to this one.
+/// A setup that names a file looks for it next to this one.
 ///
 /// # Errors
 ///
@@ -192,9 +149,7 @@ pub fn load_ron_file(path: impl AsRef<Path>, registry: &Registry) -> Result<Scen
     })
 }
 
-/// Loads and plays every `.ron` file in `dir` whose name contains `filter`
-/// (all of them when it is empty), with `run`, as written: the default
-/// variant only. See [`run_ron_variants`].
+/// Plays the default variant only.
 ///
 /// # Errors
 ///
@@ -209,19 +164,8 @@ pub fn run_ron_files(
     run_ron_variants(dir, registry, filter, &[Variant::default()], run)
 }
 
-/// Loads every `.ron` file in `dir` and plays it once per variant in
-/// `variants`, with `run`, named `file [variant]`.
-///
-/// `run` gets the scenario as that variant runs it (see [`Variant::apply`]).
-/// A file and variant are played when that name contains `filter` (all of
-/// them when it is empty).
-///
-/// Only the variants listed are played: include [`Variant::default`] to play
-/// the file as written too. A variant a file cannot run in (for example a
-/// step aimed at a screen position, in a variant with another window size) is
-/// a failed [`FileResult`] that says so. A file that names the variants it
-/// runs in ([`Scenario::variant_names`]) is skipped ([`FileResult::skipped`])
-/// in every other variant, not failed.
+/// Include [`Variant::default`] to play the file as written too. A file that
+/// names the variants it runs in is skipped in the others.
 ///
 /// # Errors
 ///
@@ -237,12 +181,7 @@ pub fn run_ron_variants(
     run_ron_tagged(dir, registry, filter, &TagFilter::default(), variants, run)
 }
 
-/// As [`run_ron_variants`], playing only the scenarios `tags` lets through (a
-/// file that does not load is always kept, so its error shows).
-///
-/// A scenario with `skip` or `fixme` is not run, in any variant
-/// ([`FileOutcome::Disabled`]); one with `should_fail` passes only if it
-/// fails.
+/// A file that does not load is always kept, so its error shows.
 ///
 /// # Errors
 ///
@@ -268,8 +207,7 @@ pub fn run_ron_tagged(
             .map(|variant| (variant, variant.label(&stem)))
             .filter(|(_, name)| name.contains(filter))
             .collect();
-        // A file the filter leaves nothing of is not even read: it may be
-        // broken, and parsing it costs time for nothing.
+        // A file the filter leaves nothing of may be broken; do not read it.
         if wanted.is_empty() {
             continue;
         }
@@ -307,13 +245,7 @@ pub fn run_ron_tagged(
     Ok(results)
 }
 
-/// The `main` of a `harness = false` test target.
-///
-/// Plays every `.ron` file in `dir`, prints one line per file in the style of
-/// the standard harness, and succeeds only if all of them passed. Command-line
-/// words that do not start with `-` filter by file name, as with
-/// `cargo test <filter>`. See [`run_ron_tests_with_variants`] to play every
-/// file in several windows and themes.
+/// Command-line words that do not start with `-` filter by file name.
 pub fn run_ron_tests(
     dir: impl AsRef<Path>,
     registry: &Registry,
@@ -322,13 +254,8 @@ pub fn run_ron_tests(
     run_ron_tests_with_variants(dir, registry, &[Variant::default()], run)
 }
 
-/// The `main` of a `harness = false` test target that plays every `.ron` file
-/// once per variant, as [`run_ron_variants`] does.
-///
-/// Prints one line per file and variant, named `file [variant]` (just `file`
-/// in the default variant), and succeeds only if all of them passed. A filter
-/// word on the command line matches those names, so `cargo test narrow` plays
-/// the narrow variant of every file.
+/// A filter word matches `file [variant]`, so `cargo test narrow` plays the
+/// narrow variant of every file.
 pub fn run_ron_tests_with_variants(
     dir: impl AsRef<Path>,
     registry: &Registry,
@@ -356,11 +283,6 @@ pub fn run_ron_tests_with_variants(
     }
 }
 
-/// Plays the files as [`run_ron_variants`] does, prints the standard harness's
-/// lines to `out` (a directory that cannot be read goes to `err`) and returns
-/// whether every test passed. It is the body of
-/// [`run_ron_tests_with_variants`], split out so the lines and the verdict can
-/// be tested.
 fn run_and_print(
     dir: &Path,
     registry: &Registry,
@@ -381,7 +303,6 @@ fn run_and_print(
     }
 }
 
-/// The word after `...` on a result's line.
 fn verdict(result: &FileResult) -> String {
     match result.disabled() {
         Some(disabled) => format!("ignored, {}", disabled.describe()),
@@ -392,8 +313,6 @@ fn verdict(result: &FileResult) -> String {
     }
 }
 
-/// Writes one line per result in the style of the standard harness, then the
-/// failures and the summary. Whether all of them passed.
 fn print_results(out: &mut impl Write, results: &[FileResult]) -> bool {
     // A closed pipe is not worth failing over.
     let mut say = |line: String| writeln!(out, "{line}").ok();
@@ -444,7 +363,6 @@ mod tests {
     use super::*;
     use crate::{scenario::Step, targets::Target};
 
-    /// A fresh directory for one test, under the system's temporary one.
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "bevy_stagecraft_files_{}_{name}",
@@ -455,7 +373,6 @@ mod tests {
         dir
     }
 
-    /// Writes `scenario` to `dir/name.ron`.
     fn write_scenario(dir: &Path, name: &str, scenario: &Scenario) {
         fs::write(
             dir.join(format!("{name}.ron")),
@@ -464,12 +381,10 @@ mod tests {
         .expect("writes");
     }
 
-    /// What `run_and_print` printed and decided.
     fn print_for(dir: &Path, filter: &str, variants: &[Variant]) -> (bool, String, String) {
         print_tagged(dir, filter, &TagFilter::default(), variants)
     }
 
-    /// As `print_for`, with a tag filter.
     fn print_tagged(
         dir: &Path,
         filter: &str,
@@ -494,8 +409,7 @@ mod tests {
         )
     }
 
-    /// A file that waits one frame, and one that also aims at a screen
-    /// position, which no variant but the default may do.
+    /// One step aims at a screen position, which only the default variant may run.
     fn write_pair(dir: &Path) {
         write_scenario(dir, "fine", &Scenario::new("fine").step(Step::wait(1)));
         write_scenario(
@@ -686,7 +600,6 @@ mod tests {
         );
     }
 
-    /// A scenario that always fails: it expects text nobody shows.
     fn failing(name: &str) -> Scenario {
         Scenario::new(name)
             .step(Step::wait(1))

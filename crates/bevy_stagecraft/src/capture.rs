@@ -1,9 +1,4 @@
-//! Frames as pixels, and the files made from them: PNG, GIF and filmstrips.
-//!
-//! Nothing here touches the GPU, so it is tested without one. The filmstrip
-//! draws its own marks and numbers from shapes, because a CPU rasteriser with
-//! a font would be a heavy dependency for a tick and a cross; the words of a
-//! caption are already in the frames, drawn by the cursor overlay.
+//! Draw filmstrip marks and digits from shapes; do not add a font rasterizer.
 
 use alloc::vec::Vec;
 use core::fmt;
@@ -21,43 +16,25 @@ use image::{
     },
 };
 
-/// Bytes in one RGBA pixel.
 const CHANNELS: usize = 4;
-/// The cell background of a filmstrip, behind and between thumbnails.
 const STRIP_BACKGROUND: [u8; 4] = [24, 24, 28, 255];
-/// The band under a thumbnail whose scenario had no failure so far.
 const PASS_BAND: [u8; 4] = [36, 92, 52, 255];
-/// The band under a thumbnail whose scenario had failed by then.
 const FAIL_BAND: [u8; 4] = [128, 36, 36, 255];
-/// The band under a thumbnail with nothing to say.
 const NEUTRAL_BAND: [u8; 4] = [52, 52, 60, 255];
-/// The colour of marks and numbers on a band.
 const INK: [u8; 4] = [245, 245, 245, 255];
-/// Height of the band under each thumbnail, in pixels.
 const BAND_HEIGHT: u32 = 28;
-/// Gap between cells of a filmstrip, in pixels.
 const GAP: u32 = 6;
-/// Side of the box a mark is drawn in, in pixels.
 const MARK_SIZE: u32 = 18;
-/// Padding inside a band, in pixels.
 const BAND_PADDING: u32 = 5;
-/// Size of one pixel of the digit font, in pixels.
 const DIGIT_SCALE: u32 = 3;
-/// Width of a digit in the digit font, in font pixels.
 const DIGIT_WIDTH: u32 = 3;
-/// Height of a digit in the digit font, in font pixels.
 const DIGIT_HEIGHT: u32 = 5;
-/// Thickness of the strokes of a mark, in pixels.
 const STROKE: i32 = 2;
 
-/// Why a frame could not be read or written.
 #[derive(Debug)]
 pub enum CaptureError {
-    /// The image has no pixel data, or in a format this module cannot read.
     UnsupportedImage(String),
-    /// The pixel data does not match the size.
     BadSize,
-    /// Encoding failed.
     Encode(String),
 }
 
@@ -73,30 +50,24 @@ impl fmt::Display for CaptureError {
 
 impl core::error::Error for CaptureError {}
 
-/// One picture: tightly packed 8-bit RGBA, top row first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
-    /// Width in pixels.
     width: u32,
-    /// Height in pixels.
     height: u32,
-    /// `width * height * 4` bytes.
     rgba: Vec<u8>,
 }
 
-/// The index of a pixel's first byte.
 const fn offset(x: u32, y: u32, width: u32) -> usize {
     (y as usize * width as usize + x as usize) * CHANNELS
 }
 
-/// `value * numerator / denominator`, without overflowing `u32` on the way.
+/// Does not overflow `u32`.
 fn scale(value: u32, numerator: u32, denominator: u32) -> u32 {
     let scaled = u64::from(value) * u64::from(numerator) / u64::from(denominator.max(1));
     u32::try_from(scaled).unwrap_or(u32::MAX)
 }
 
 impl Frame {
-    /// A frame from RGBA bytes, or `None` if the length does not fit the size.
     #[must_use]
     pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Option<Self> {
         let expected = (width as usize)
@@ -109,7 +80,6 @@ impl Frame {
         })
     }
 
-    /// A frame of one colour.
     #[must_use]
     pub fn filled(width: u32, height: u32, colour: [u8; 4]) -> Self {
         let rgba = colour
@@ -125,11 +95,11 @@ impl Frame {
         }
     }
 
-    /// Reads a rendered or loaded Bevy image (8-bit RGBA or BGRA).
+    /// Reads 8-bit RGBA or BGRA.
     ///
     /// # Errors
     ///
-    /// Fails if the image has no data on the CPU, or another pixel format.
+    /// Fails on other pixel formats or an image with no CPU data.
     pub fn from_image(image: &Image) -> Result<Self, CaptureError> {
         let size = image.texture_descriptor.size;
         let data = image
@@ -153,7 +123,7 @@ impl Frame {
                 pixel.swap(0, 2);
             }
         }
-        // The alpha of a screenshot is not meaningful; a recording is opaque.
+        // Force opaque: a screenshot's alpha is not meaningful.
         for pixel in rgba.as_chunks_mut::<CHANNELS>().0 {
             if let Some(alpha) = pixel.get_mut(3) {
                 *alpha = u8::MAX;
@@ -162,25 +132,21 @@ impl Frame {
         Self::new(size.width, size.height, rgba).ok_or(CaptureError::BadSize)
     }
 
-    /// Width in pixels.
     #[must_use]
     pub const fn width(&self) -> u32 {
         self.width
     }
 
-    /// Height in pixels.
     #[must_use]
     pub const fn height(&self) -> u32 {
         self.height
     }
 
-    /// The pixels, `width * height * 4` bytes, top row first.
     #[must_use]
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
     }
 
-    /// The colour at `(x, y)`, or `None` outside the frame.
     #[must_use]
     pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
         if x >= self.width || y >= self.height {
@@ -191,7 +157,6 @@ impl Frame {
         <[u8; 4]>::try_from(bytes).ok()
     }
 
-    /// Sets the pixel at `(x, y)`; outside the frame it does nothing.
     fn put(&mut self, x: i32, y: i32, colour: [u8; 4]) {
         let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else {
             return;
@@ -205,7 +170,6 @@ impl Frame {
         }
     }
 
-    /// Fills a rectangle, clipped to the frame.
     fn fill_rect(&mut self, left: u32, top: u32, width: u32, height: u32, colour: [u8; 4]) {
         for y in top..top.saturating_add(height).min(self.height) {
             for x in left..left.saturating_add(width).min(self.width) {
@@ -217,7 +181,6 @@ impl Frame {
         }
     }
 
-    /// Copies `source` onto this frame with its top-left corner at `(left, top)`.
     fn blit(&mut self, source: &Self, left: u32, top: u32) {
         for y in 0..source.height {
             let target_y = top + y;
@@ -237,9 +200,7 @@ impl Frame {
         }
     }
 
-    /// This frame scaled down to `width` pixels across, keeping the aspect
-    /// ratio, by averaging the pixels that fall in each new one. A frame that
-    /// is not wider than `width` is returned as it is.
+    /// Returns the frame unchanged if it is not wider than `width`.
     #[must_use]
     pub fn scaled_to_width(&self, width: u32) -> Self {
         if width == 0 || self.width <= width || self.height == 0 {
@@ -278,8 +239,6 @@ impl Frame {
         }
     }
 
-    /// The frame as a PNG file.
-    ///
     /// # Errors
     ///
     /// Fails if the encoder does.
@@ -292,8 +251,7 @@ impl Frame {
     }
 }
 
-/// An animated GIF of `frames`, each shown for its delay in milliseconds.
-/// Every frame must be the same size. The GIF loops forever.
+/// Every frame must be the same size.
 ///
 /// # Errors
 ///
@@ -321,34 +279,24 @@ pub fn encode_gif(frames: &[(Frame, u32)]) -> Result<Vec<u8>, CaptureError> {
     Ok(bytes)
 }
 
-/// The GIF encoder's colour quantiser speed, `1` (best) to `30` (fastest).
+/// `1` (best) to `30` (fastest).
 const GIF_SPEED: i32 = 20;
 
-/// What a filmstrip says about the moment a frame was taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
-    /// Nothing had failed yet: a tick.
     Pass,
-    /// A step or check had failed: a cross.
     Fail,
-    /// No statement: a dot.
     Neutral,
 }
 
-/// One cell of a filmstrip.
 #[derive(Debug, Clone)]
 pub struct FilmstripCell {
-    /// The picture, already scaled.
     pub frame: Frame,
-    /// The mark under it.
     pub mark: Mark,
-    /// The frame number written next to the mark.
     pub number: u32,
 }
 
-/// Lays `cells` out in rows of up to `columns` under each other, each
-/// picture with a band carrying its mark and its frame number. All pictures
-/// should be the same size. `None` when there are no cells.
+/// All pictures must be the same size.
 #[must_use]
 pub fn filmstrip(cells: &[FilmstripCell], columns: usize) -> Option<Frame> {
     let first = cells.first()?;
@@ -384,7 +332,6 @@ pub fn filmstrip(cells: &[FilmstripCell], columns: usize) -> Option<Frame> {
     Some(strip)
 }
 
-/// Draws a thick line from `(x0, y0)` to `(x1, y1)`.
 fn draw_line(frame: &mut Frame, from: (i32, i32), to: (i32, i32), colour: [u8; 4]) {
     let steps = (to.0 - from.0).abs().max((to.1 - from.1).abs()).max(1);
     for step in 0..=steps {
@@ -398,7 +345,6 @@ fn draw_line(frame: &mut Frame, from: (i32, i32), to: (i32, i32), colour: [u8; 4
     }
 }
 
-/// Draws a tick, a cross or a dot in the box at `(left, top)`.
 fn draw_mark(frame: &mut Frame, mark: Mark, left: u32, top: u32) {
     let (Ok(left), Ok(top), Ok(size)) = (
         i32::try_from(left),
@@ -428,8 +374,7 @@ fn draw_mark(frame: &mut Frame, mark: Mark, left: u32, top: u32) {
     }
 }
 
-/// The digits 0 to 9, three columns by five rows, one row per entry, the
-/// leftmost column in the highest of the three bits.
+/// Three columns by five rows; the leftmost column is the highest of the three bits.
 const DIGITS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b101, 0b101, 0b111],
     [0b010, 0b110, 0b010, 0b010, 0b111],
@@ -443,7 +388,6 @@ const DIGITS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b111, 0b001, 0b111],
 ];
 
-/// Draws `number` in decimal with its top-left corner at `(left, top)`.
 fn draw_number(frame: &mut Frame, number: u32, left: u32, top: u32) {
     let text = number.to_string();
     let mut pen = left;
@@ -470,7 +414,6 @@ mod tests {
 
     use super::*;
 
-    /// A frame whose pixels are `colour`.
     fn flat(width: u32, height: u32, colour: [u8; 4]) -> Frame {
         Frame::filled(width, height, colour)
     }
