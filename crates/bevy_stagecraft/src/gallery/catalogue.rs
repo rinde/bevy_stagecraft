@@ -1,19 +1,9 @@
 //! The scenarios a gallery offers, grouped.
 //!
-//! A [`Gallery`] is a list of groups of [`GalleryEntry`]s. Scenarios are added
-//! one by one or as a directory of `.ron` files ([`Gallery::directory`]), which
-//! is then watched: [`Gallery::prepare_files`] is what is done to every
-//! scenario read from a file, on a reload as on the first load. An entry keeps
-//! its `source`, its `error` (why the file does not load now, with the last
-//! good version kept in place) and whether it was never loaded at all
-//! ([`GalleryEntry::is_unloaded`]): such a placeholder is refused when
-//! selected and counts as a failure in a run of everything.
-//!
-//! Watching is polling, with no file-watcher dependency: the gallery compares
-//! each file's modification time and length every [`WATCH_INTERVAL`] updates
-//! (see [`crate::gallery`]'s `watch` module) and reports what it found as a
-//! `Reload::Changed` or `Reload::Added`. [`Gallery::variants`] lists the
-//! variants the whole catalogue can be played in.
+//! A directory of `.ron` files ([`Gallery::directory`]) is watched by polling
+//! modification time and length every [`WATCH_INTERVAL`] updates. An entry that
+//! never loaded ([`GalleryEntry::is_unloaded`]) is refused when selected and
+//! counts as a failure in a run of everything.
 
 use alloc::sync::Arc;
 use std::{
@@ -32,21 +22,16 @@ use crate::{
     variant::Variant,
 };
 
-/// How many updates pass between looks at the watched files.
+/// Updates between looks at the watched files.
 pub const WATCH_INTERVAL: u32 = 30;
 
-/// What a file looked like when last read: when it was written and how long
-/// it was, which together tell an edit from no edit without reading it.
 type FileStamp = (Option<SystemTime>, u64);
 
-/// The stamp of the file at `path`, or `None` if it cannot be looked at.
 fn stamp_of(path: &Path) -> Option<FileStamp> {
     let meta = fs::metadata(path).ok()?;
     Some((meta.modified().ok(), meta.len()))
 }
 
-/// What the gallery does to a scenario it has read from a file, such as
-/// sizing its window, so a reload gives the same result as the first load.
 #[derive(Clone)]
 struct Prepare(Arc<dyn Fn(Scenario) -> Scenario + Send + Sync>);
 
@@ -56,41 +41,30 @@ impl core::fmt::Debug for Prepare {
     }
 }
 
-/// A directory whose `.ron` files make up one group of the catalogue.
 #[derive(Debug, Clone)]
 struct WatchedDir {
-    /// Where the group is among the groups.
     group: usize,
-    /// The directory.
     dir: PathBuf,
 }
 
-/// One scenario in the catalogue, with the sentence shown beside it.
+/// One scenario in the catalog, with the sentence shown beside it.
 #[derive(Debug, Clone)]
 pub struct GalleryEntry {
     /// The scenario.
     pub scenario: Scenario,
     /// What it shows, in a sentence.
     pub description: String,
-    /// The file it was read from, which the gallery reads again when it
-    /// changes (see [`Gallery::directory`]).
     source: Option<PathBuf>,
-    /// Why the file does not load, where it does not. The scenario is then
-    /// the last version that did, if there was one.
     error: Option<String>,
-    /// Whether no version of the file has loaded yet, so the scenario is only
-    /// a placeholder that cannot be played.
+    /// A placeholder that cannot be played: no version of the file has loaded.
     unloaded: bool,
-    /// How the file looked when it was last read.
     stamp: Option<FileStamp>,
-    /// Whether `error` comes from the directory scan (the file is gone, or the
-    /// directory could not be read) and not from loading the file, so the next
-    /// scan that finds the file reads it again whatever its stamp.
+    /// `error` comes from the directory scan, not from loading the file, so the
+    /// next scan that finds the file reads it again whatever its stamp.
     scan_error: bool,
 }
 
 impl GalleryEntry {
-    /// An entry with no description.
     #[must_use]
     pub const fn new(scenario: Scenario) -> Self {
         Self {
@@ -104,8 +78,6 @@ impl GalleryEntry {
         }
     }
 
-    /// An entry read from `path`. A file that does not load still makes an
-    /// entry, which shows [`GalleryEntry::error`] and cannot be played.
     fn from_file(path: &Path, registry: &Registry, prepare: Option<&Prepare>) -> Self {
         let name = path
             .file_stem()
@@ -117,8 +89,7 @@ impl GalleryEntry {
         entry
     }
 
-    /// Reads the file again. A scenario that loads replaces the one held; a
-    /// file that does not leaves it as it was and keeps the reason.
+    /// A file that fails to load keeps the last good scenario.
     fn reload(&mut self, registry: &Registry, prepare: Option<&Prepare>) {
         let Some(path) = self.source.clone() else {
             return;
@@ -138,26 +109,22 @@ impl GalleryEntry {
         }
     }
 
-    /// The file this entry was read from, if it was.
     #[must_use]
     pub fn source(&self) -> Option<&Path> {
         self.source.as_deref()
     }
 
-    /// Why the entry's file does not load now, if it does not. The scenario
-    /// is then the last version that did.
+    /// Why the file does not load; the scenario is then the last version that did.
     #[must_use]
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
 
-    /// Whether the file has never loaded, so there is nothing to play yet.
     #[must_use]
     pub const fn is_unloaded(&self) -> bool {
         self.unloaded
     }
 
-    /// Sets the description.
     #[must_use]
     pub fn described(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
@@ -176,32 +143,25 @@ impl From<Scenario> for GalleryEntry {
 pub struct GalleryGroup {
     /// The group's heading.
     pub name: String,
-    /// Its entries, in the order shown.
+    /// The entries, in the order shown.
     pub entries: Vec<GalleryEntry>,
 }
 
-/// The catalogue: groups of scenarios. An entry is addressed by its index
-/// counted across all groups in order, which is how [`crate::GalleryAction`]
-/// names one.
+/// The catalog: groups of scenarios. [`crate::GalleryAction`] addresses an
+/// entry by its index counted across all groups.
 #[derive(Resource, Debug, Clone, Default)]
 pub struct Gallery {
-    /// The groups in the order shown.
     groups: Vec<GalleryGroup>,
-    /// The environments an entry can be played in, one chosen at a time. Empty
-    /// means only as written.
+    /// Empty means entries are played as written.
     variants: Vec<Variant>,
-    /// The directories whose files are read again when they change.
     watched: Vec<WatchedDir>,
-    /// The registry files are read against.
     registry: Option<Registry>,
-    /// What is done to a scenario read from a file.
     prepare: Option<Prepare>,
-    /// Counts changes to the catalogue itself, so what shows it is rebuilt.
+    /// Bumped on each change to the catalog so the UI is rebuilt.
     revision: u32,
 }
 
 impl Gallery {
-    /// An empty catalogue.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -214,21 +174,10 @@ impl Gallery {
         }
     }
 
-    /// Adds a group of the `.ron` scenarios in `dir` (not the `*.scene.ron`
-    /// worlds), read against `registry`, and **watches** the directory: while
-    /// the gallery runs, a file that is saved is read again and replaces its
-    /// entry, a new file is added to the group, and the selected scenario
-    /// restarts if its file changed. A file that does not load shows its
-    /// error in the catalogue and leaves the last version that loaded in
-    /// place (one that never loaded cannot be played). An unreadable
-    /// directory gives an empty group at first; once the gallery runs, a
-    /// failed scan keeps every entry, marked with the error, and the next
-    /// good scan reads them again. A file that is deleted keeps its entry,
-    /// marked.
-    ///
-    /// Files are looked at every [`WATCH_INTERVAL`] updates, so this needs no
-    /// file-watching dependency. Call [`Gallery::prepare_files`] first if the
-    /// scenarios need anything done to them.
+    /// Adds a group of the `.ron` scenarios in `dir` (not `*.scene.ron`) and
+    /// watches it: saved files replace their entries, new files are added, and
+    /// a deleted file or failed scan keeps its entries, marked with the error.
+    /// Call [`Gallery::prepare_files`] first.
     #[must_use]
     pub fn directory(
         mut self,
@@ -254,10 +203,8 @@ impl Gallery {
         self
     }
 
-    /// Sets what is done to a scenario read from a file by
-    /// [`Gallery::directory`], such as giving it a window size, on every
-    /// reload as on the first load. Set it before the directories it applies
-    /// to.
+    /// Applies to every scenario [`Gallery::directory`] reads, on reload too.
+    /// Set it before the directories.
     #[must_use]
     pub fn prepare_files(
         mut self,
@@ -267,19 +214,16 @@ impl Gallery {
         self
     }
 
-    /// Whether any directory is watched.
     #[must_use]
     pub(crate) const fn is_watching(&self) -> bool {
         !self.watched.is_empty()
     }
 
-    /// Counts changes to the catalogue itself.
     #[must_use]
     pub(crate) const fn revision(&self) -> u32 {
         self.revision
     }
 
-    /// Looks at the watched directories and reads again what changed.
     pub(crate) fn poll_files(&mut self) -> Vec<Reload> {
         let mut reloads = Vec::new();
         let Some(registry) = self.registry.clone() else {
@@ -300,8 +244,7 @@ impl Gallery {
             let files = match scan {
                 Ok(files) => files,
                 Err(error) => {
-                    // A failed scan says nothing about the files: keep every
-                    // entry as it is and only note why it cannot be refreshed.
+                    // A failed scan says nothing about the files.
                     let message = format!("The directory could not be read: {error}");
                     for (at, entry) in group.entries.iter_mut().enumerate() {
                         if entry.source.is_some() && entry.error.as_ref() != Some(&message) {
@@ -349,7 +292,6 @@ impl Gallery {
         reloads
     }
 
-    /// Adds a group.
     #[must_use]
     pub fn group<E: Into<GalleryEntry>>(
         mut self,
@@ -363,41 +305,31 @@ impl Gallery {
         self
     }
 
-    /// Offers every entry in these environments (window size, scale factor,
-    /// theme), with a picker to choose one; a run of the whole catalogue plays
-    /// every entry in each. The first is chosen to begin with. List
-    /// [`Variant::default`] to keep the entries as written among them.
-    ///
-    /// Name the variants differently ([`Variant::new`]): two with one name
-    /// give rows that cannot be told apart.
+    /// The first is chosen to begin with. List [`Variant::default`] to keep
+    /// the entries as written. Name variants differently ([`Variant::new`]):
+    /// equal names give indistinguishable rows.
     #[must_use]
     pub fn variants(mut self, variants: impl IntoIterator<Item = Variant>) -> Self {
         self.variants = variants.into_iter().collect();
         self
     }
 
-    /// The variant at `index`, if the catalogue lists variants and has one
-    /// there. Without any, entries are played as written.
     #[must_use]
     pub fn variant(&self, index: usize) -> Option<&Variant> {
         self.variants.get(index)
     }
 
-    /// The variants offered, in order.
     #[must_use]
     pub fn variant_list(&self) -> &[Variant] {
         &self.variants
     }
 
-    /// How many ways there are to play an entry: the variants listed, or one
-    /// (as written) when there are none.
+    /// One when there are no variants.
     #[must_use]
     pub fn variant_count(&self) -> usize {
         self.variants.len().max(1)
     }
 
-    /// Every tag the entries' scenarios carry, sorted and without repeats:
-    /// what the gallery's tag row offers.
     #[must_use]
     pub fn tags(&self) -> Vec<String> {
         let mut tags: Vec<String> = self
@@ -409,13 +341,12 @@ impl Gallery {
         tags
     }
 
-    /// The groups, in order.
     #[must_use]
     pub fn groups(&self) -> &[GalleryGroup] {
         &self.groups
     }
 
-    /// Every entry across all groups, in order, with its index.
+    /// Pairs each entry with its index counted across all groups.
     pub fn entries(&self) -> impl Iterator<Item = (usize, &GalleryEntry)> {
         self.groups
             .iter()
@@ -423,14 +354,12 @@ impl Gallery {
             .enumerate()
     }
 
-    /// The entry at `index`, counted across all groups.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&GalleryEntry> {
         self.entries()
             .find_map(|(at, entry)| (at == index).then_some(entry))
     }
 
-    /// The entry at `index`, counted across all groups, to change.
     pub(crate) fn get_mut(&mut self, index: usize) -> Option<&mut GalleryEntry> {
         self.groups
             .iter_mut()
@@ -438,13 +367,11 @@ impl Gallery {
             .nth(index)
     }
 
-    /// How many entries there are.
     #[must_use]
     pub fn len(&self) -> usize {
         self.groups.iter().map(|group| group.entries.len()).sum()
     }
 
-    /// Whether there are no entries.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0

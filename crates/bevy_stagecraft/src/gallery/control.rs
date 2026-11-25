@@ -1,22 +1,10 @@
-//! Carrying out requests and pacing the script.
+//! Carries out requests and paces the script.
 //!
-//! The systems here take the requests queued on
-//! [`super::GalleryState`] and drive the player through
-//! `advance_world`. When the script is handed back, taken over, selected,
-//! cleared or a recording starts, `release_held` releases the buttons and keys
-//! the script holds and cancels every finger it still holds (a `touch_cancel`
-//! for each finger in Bevy's `Touches`), so the overlay marks it and the app
-//! sees a cancel. A picked check goes to [`crate::session::add_check`] while
-//! recording, and otherwise to the selected scenario's expect and the running
-//! player.
+//! `release_held` cancels every finger the script holds (`touch_cancel`) so the
+//! overlay marks it and the app sees a cancel.
 //!
-//! **New** is [`GalleryAction::NewEmpty`] (the reset hook, nothing selected,
-//! then record) or [`GalleryAction::NewFromCurrent`] (the app as it is, then
-//! record).
-//!
-//! A jump ([`GalleryAction::JumpTo`]) restarts, calls `pause_before(Some(k))`
-//! on the player and plays one script frame per update until the step is due
-//! (`GalleryState::jumping_to`), then pauses. It is refused while recording.
+//! A jump ([`GalleryAction::JumpTo`]) plays one script frame per update until
+//! the step is due, then pauses. It is refused while recording.
 
 use std::fs;
 
@@ -53,17 +41,12 @@ use crate::{
     variant::Variant,
 };
 
-/// What a scenario recorded in the gallery is called until the person renames
-/// the file.
 const RECORDING_NAME: &str = "Recording";
 
-/// Updates between the app being set up and the script starting, so layout
-/// and picking have seen the new UI. The headless runner settles for the same
-/// number.
+/// Updates before the script starts, so layout and picking have seen the new
+/// UI. Matches the headless runner.
 const SETTLE_UPDATES: u8 = 2;
 
-/// Releases whatever the script is holding down, so a reset or a hand-over
-/// never leaves a button or key stuck.
 fn release_held(world: &mut World) {
     let buttons: Vec<MouseButton> = world
         .get_resource::<ButtonInput<MouseButton>>()
@@ -90,8 +73,6 @@ fn release_held(world: &mut World) {
     }
 }
 
-/// The variant the gallery plays in now; the default one (as written) when
-/// the catalogue lists none.
 fn chosen_variant(world: &World, state: &GalleryState) -> Variant {
     world
         .get_resource::<Gallery>()
@@ -100,9 +81,8 @@ fn chosen_variant(world: &World, state: &GalleryState) -> Variant {
         .unwrap_or_default()
 }
 
-/// Puts the primary window at the size and scale factor the scenario runs in,
-/// and the root font size at its rem size, and back to what the app had where
-/// it sets none. The first call remembers what the app had.
+/// Restores what the app had where the scenario sets none; the first call
+/// remembers it.
 fn fit_window(world: &mut World, state: &mut GalleryState, scenario: &Scenario) {
     let original_rem = *state
         .original_rem
@@ -141,7 +121,6 @@ fn fit_window(world: &mut World, state: &mut GalleryState, scenario: &Scenario) 
     }
 }
 
-/// Whether the tag the catalogue is filtered by leaves `scenario` out.
 fn hidden_by_tag(gallery: &Gallery, state: &GalleryState, scenario: &Scenario) -> bool {
     state
         .tag
@@ -149,7 +128,6 @@ fn hidden_by_tag(gallery: &Gallery, state: &GalleryState, scenario: &Scenario) -
         .is_some_and(|tag| !scenario.tag_names().contains(&tag))
 }
 
-/// Resets the app, sets the entry up and arranges for it to play.
 fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     let Some(entry) = world
         .get_resource::<Gallery>()
@@ -170,8 +148,6 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     release_held(world);
     if let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>() {
         player.stop();
-        // What the run before kept belongs to a run that is over: the next
-        // one starts its own, and until then nothing should show this one.
         drop(player.take_trace());
     }
     if let Some(reset) = world.get_resource::<GalleryReset>().cloned() {
@@ -181,9 +157,7 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         input.forget_cursor();
     }
     fit_window(world, state, &scenario);
-    // A scenario that does not name this variant runs nowhere near it (see
-    // `Scenario::variants`): it is skipped, not failed, and the player never
-    // starts.
+    // A scenario that does not name this variant is skipped, not failed.
     let disabled = entry.scenario.disabled();
     if variant.skips(&entry.scenario) || disabled.is_some() {
         world.insert_resource(ScenarioReport {
@@ -207,8 +181,7 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         );
         return;
     }
-    // A variant the scenario cannot run in is a failed setup, as in the
-    // recorder: the run is over at once and says why.
+    // A variant the scenario cannot run in fails setup, as in the recorder.
     let setup = refused.map_or_else(
         || scenario.run_setup(world),
         |problem| Err(problem.to_string()),
@@ -236,9 +209,6 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
     state.setup = setup;
 }
 
-/// Chooses the variant entries are played in and, with an entry selected,
-/// plays it again in that one. An index the catalogue has no variant at
-/// changes nothing.
 fn select_variant(world: &mut World, state: &mut GalleryState, variant: usize) {
     let count = world
         .get_resource::<Gallery>()
@@ -253,8 +223,6 @@ fn select_variant(world: &mut World, state: &mut GalleryState, variant: usize) {
     }
 }
 
-/// Restarts the selected entry and plays it up to the start of step `step`,
-/// where it pauses (see [`GalleryAction::JumpTo`]).
 fn jump_to(world: &mut World, state: &mut GalleryState, step: usize) {
     let Some(index) = state.selected else {
         "Select a scenario to jump in".clone_into(&mut state.status);
@@ -268,8 +236,6 @@ fn jump_to(world: &mut World, state: &mut GalleryState, step: usize) {
     state.status = format!("Playing up to step {}", step + 1);
 }
 
-/// Gives up a jump on its way, for a request that wants the player to go its
-/// own way: the player carries on from wherever it has got to.
 fn cancel_jump(world: &mut World, state: &mut GalleryState) {
     if state.jump.take().is_some()
         && let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>()
@@ -278,13 +244,11 @@ fn cancel_jump(world: &mut World, state: &mut GalleryState) {
     }
 }
 
-/// A window dimension as the `f32` Bevy's window resolution takes. Sizes above
-/// 65535 are not real windows.
+/// Sizes above 65535 are not real windows.
 fn pixels(size: u32) -> f32 {
     f32::from(u16::try_from(size).unwrap_or(u16::MAX))
 }
 
-/// A file-name-safe version of a scenario's name.
 fn file_stem(name: &str) -> String {
     let stem: String = name
         .chars()
@@ -303,7 +267,6 @@ fn file_stem(name: &str) -> String {
     }
 }
 
-/// Writes the selected entry as RON and says where.
 fn export(world: &World, state: &mut GalleryState) {
     let Some(entry) = state
         .selected
@@ -329,11 +292,7 @@ fn export(world: &World, state: &mut GalleryState) {
     };
 }
 
-/// Saves the world as it is as a setup for other scenarios, next to the
-/// exported ones, and says where (see [`crate::save`]). Works while a
-/// recording is on, a script is paused, taken over or finished, and changes
-/// nothing in the world; while a script plays it does nothing but say so, as
-/// the world is a different one every frame.
+/// Does nothing but say so while a script plays: the world differs every frame.
 fn save_as_setup(world: &mut World, state: &mut GalleryState) {
     if !state.can_save_as_setup() {
         "Pause the script to save it as a setup".clone_into(&mut state.status);
@@ -365,11 +324,9 @@ fn save_as_setup(world: &mut World, state: &mut GalleryState) {
     };
 }
 
-/// Starts recording a session from what is on screen now.
 fn record(world: &mut World, state: &mut GalleryState) {
     let (taken_over, playing) = (state.taken_over, state.playing);
-    // The script lets go of the window first, so the real input reaches the
-    // app, and so the state captured is the one the person sees.
+    // Release the window first so the captured state is the one on screen.
     if state.selected.is_some() {
         state.taken_over = true;
         state.playing = false;
@@ -393,14 +350,10 @@ fn record(world: &mut World, state: &mut GalleryState) {
     }
 }
 
-/// Drops the selected entry and puts the app's state back, so what follows
-/// starts from an empty world with nothing selected.
 fn clear(world: &mut World, state: &mut GalleryState) {
     release_held(world);
     if let Some(mut player) = world.get_resource_mut::<ScenarioPlayer>() {
         player.stop();
-        // The run before is over, so its trace should not show on the new
-        // recording.
         drop(player.take_trace());
     }
     if let Some(reset) = world.get_resource::<GalleryReset>().cloned() {
@@ -422,8 +375,6 @@ fn clear(world: &mut World, state: &mut GalleryState) {
     state.setup = Ok(false);
 }
 
-/// Starts recording a new scenario, from an empty world or from the app as it
-/// is.
 fn new_recording(world: &mut World, state: &mut GalleryState, empty: bool) {
     if empty {
         clear(world, state);
@@ -431,8 +382,6 @@ fn new_recording(world: &mut World, state: &mut GalleryState, empty: bool) {
     record(world, state);
 }
 
-/// Stops recording, says where the file went and offers the checks it
-/// suggests.
 fn stop_recording(world: &mut World, state: &mut GalleryState) {
     match session::stop(world) {
         Ok(saved) => {
@@ -449,7 +398,6 @@ fn stop_recording(world: &mut World, state: &mut GalleryState) {
     }
 }
 
-/// How many of the suggested checks the file holds, in words.
 fn suggested(ticked: usize, all: usize) -> String {
     match all {
         0 => "no checks suggested".to_owned(),
@@ -458,8 +406,6 @@ fn suggested(ticked: usize, all: usize) -> String {
     }
 }
 
-/// Ticks or unticks a suggested check, of the checkpoint given or else of
-/// the end, and says what the file now holds.
 fn toggle_suggestion(state: &mut GalleryState, checkpoint: Option<usize>, index: usize) {
     let Some(suggestions) = state.suggestions.as_mut() else {
         return;
@@ -481,9 +427,8 @@ fn toggle_suggestion(state: &mut GalleryState, checkpoint: Option<usize>, index:
     };
 }
 
-/// Starts or stops pick mode. Without a recording it needs a selected
-/// scenario, which it pauses: a check picked then is about the state on
-/// screen.
+/// Needs a selected scenario without a recording; pauses it so a picked check
+/// is about the state on screen.
 fn toggle_pick(state: &mut GalleryState, recording: bool) {
     if state.is_picking() {
         state.picking = Picking::Off;
@@ -505,9 +450,6 @@ fn toggle_pick(state: &mut GalleryState, recording: bool) {
         .clone_into(&mut state.status);
 }
 
-/// Puts a picked check where it belongs: a `Check` step at this point of the
-/// recording, or else an expectation of the selected scenario, in the
-/// catalogue and in the run being played.
 fn place_check(world: &mut World, state: &mut GalleryState, check: Check, recording: bool) {
     let written = spelled(&check);
     if recording {
@@ -540,7 +482,6 @@ fn place_check(world: &mut World, state: &mut GalleryState, check: Check, record
     }
 }
 
-/// Carries out a request about the picked node.
 fn apply_pick(world: &mut World, state: &mut GalleryState, action: GalleryAction, recording: bool) {
     let chosen = match action {
         GalleryAction::PickTarget(index) => {
@@ -571,12 +512,8 @@ fn apply_pick(world: &mut World, state: &mut GalleryState, action: GalleryAction
     }
 }
 
-/// Lets go of what `action` makes stale: the checklist belongs to the
-/// recording it came from, and what is picked to the state on screen, which
-/// playing on, resetting or starting and stopping a recording moves on from.
 fn forget_for(state: &mut GalleryState, action: GalleryAction) {
-    // A jump replays the same run, so the trace stays; a new selection or a
-    // restart starts over.
+    // A jump replays the same run, so the trace stays.
     if matches!(
         action,
         GalleryAction::Select(_) | GalleryAction::SelectVariant(_) | GalleryAction::Restart
@@ -617,8 +554,6 @@ fn forget_for(state: &mut GalleryState, action: GalleryAction) {
     }
 }
 
-/// Whether the request takes the primary window back from the person or resets
-/// the app, which would spoil what is being recorded.
 const fn spoils_a_recording(action: GalleryAction) -> bool {
     matches!(
         action,
@@ -637,7 +572,6 @@ const fn spoils_a_recording(action: GalleryAction) -> bool {
     )
 }
 
-/// Shows a panel of the Scenarios window.
 fn show_tab(state: &mut GalleryState, tab: GalleryTab) {
     state.tab = tab;
     if state.is_picking() {
@@ -645,7 +579,6 @@ fn show_tab(state: &mut GalleryState, tab: GalleryTab) {
     }
 }
 
-/// Pins the Trace tab to the step it shows now, or lets it follow again.
 fn toggle_trace_follow(world: &World, state: &mut GalleryState) {
     state.trace_step = if state.trace_step.is_some() {
         None
@@ -656,7 +589,6 @@ fn toggle_trace_follow(world: &World, state: &mut GalleryState) {
     };
 }
 
-/// Carries out one request.
 fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
     if state.is_running_all() {
         "Running every scenario: the controls are off until it is done"
@@ -685,7 +617,6 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
         GalleryAction::NewEmpty => new_recording(world, state, true),
         GalleryAction::NewFromCurrent => new_recording(world, state, false),
         GalleryAction::StopRecording => {
-            // The checklist is on the Scenario tab.
             state.tab = GalleryTab::Scenario;
             stop_recording(world, state);
         }
@@ -761,7 +692,6 @@ fn apply(world: &mut World, state: &mut GalleryState, action: GalleryAction) {
     }
 }
 
-/// Carries out the requests made since the last update.
 pub(super) fn apply_requests(world: &mut World) {
     let Some(mut state) = world.remove_resource::<GalleryState>() else {
         return;
@@ -770,8 +700,7 @@ pub(super) fn apply_requests(world: &mut World) {
         apply(world, &mut state, action);
     }
     // Bevy's mouse picking may read this update's input before the gallery
-    // sorts it, so it is switched off as soon as the script or pick mode
-    // takes the app window, not an update later.
+    // sorts it: switch it off as soon as the script or pick mode takes over.
     let owned = state.input_is_scripted() || state.is_picking();
     if let Some(mut settings) = world.get_resource_mut::<PointerInputSettings>()
         && settings.is_mouse_enabled == owned
@@ -790,7 +719,6 @@ pub(super) fn apply_requests(world: &mut World) {
     world.insert_resource(state);
 }
 
-/// Advances the script by as many frames as the mode and speed allow.
 pub(super) fn drive(world: &mut World) {
     let Some(mut state) = world.remove_resource::<GalleryState>() else {
         return;
@@ -799,7 +727,6 @@ pub(super) fn drive(world: &mut World) {
     world.insert_resource(state);
 }
 
-/// The body of [`drive`], with the state taken out of the world.
 fn drive_state(world: &mut World, state: &mut GalleryState) {
     if state.taken_over {
         return;
@@ -824,11 +751,8 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
                 (scenario, world.get_resource_mut::<ScenarioPlayer>())
             {
                 player.pause_before(state.jump);
-                // Not for a run of everything, which keeps nothing but its
-                // outcomes.
                 if !state.is_running_all() {
-                    // Everything is taken; the Trace tab filters what it
-                    // draws, so its filter can change without a new run.
+                    // Take everything; the Trace tab filters when it draws.
                     player.enable_trace(NoiseFilter::nothing());
                 }
                 player.start_after_setup(scenario, state.setup.clone());
@@ -851,12 +775,9 @@ fn drive_state(world: &mut World, state: &mut GalleryState) {
     }
 }
 
-/// Runs this update's frames of script and notices when it ends.
 fn run_frames(world: &mut World, state: &mut GalleryState) {
     state.tick = state.tick.wrapping_add(1);
-    // A jump plays one script frame per update at any speed, as the headless
-    // runner does, so it lands on the very frame that playing up to the step
-    // would have.
+    // A jump plays one frame per update at any speed, as the headless runner does.
     let frames = if state.step.is_some() || state.jump.is_some() {
         1
     } else if state.playing {
@@ -929,8 +850,6 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
     }
 }
 
-/// The player has halted before the step a jump was after: pause there, with
-/// the live app as it is.
 fn arrive(world: &mut World, state: &mut GalleryState) {
     let Some(step) = state.jump.take() else {
         return;
@@ -940,14 +859,11 @@ fn arrive(world: &mut World, state: &mut GalleryState) {
     }
     state.playing = false;
     state.step = None;
-    // The step it stopped before is what the person came for; the world as
-    // it found it is the one on screen.
     state.trace_step = Some(step);
     state.trace_world = TraceWorld::Before;
     state.status = format!("Paused before step {}", step + 1);
 }
 
-/// Adds the scenario that just finished to the run of the whole catalogue.
 fn record_outcome(world: &World, state: &mut GalleryState) {
     let Some(report) = world.get_resource::<ScenarioReport>() else {
         return;
@@ -956,8 +872,7 @@ fn record_outcome(world: &World, state: &mut GalleryState) {
     if failures.is_empty() && !report.passed() {
         failures.push("the scenario did not finish".into());
     }
-    // A scenario that is expected to fail passes by failing, and fails by
-    // passing, which says the bug is fixed.
+    // A scenario expected to fail passes by failing.
     let should_fail = state
         .selected
         .and_then(|index| world.get_resource::<Gallery>()?.get(index))
@@ -980,14 +895,11 @@ fn record_outcome(world: &World, state: &mut GalleryState) {
     }
 }
 
-/// Plays the entry after the last one that finished in a run of the whole
-/// catalogue, or ends the run when there is none.
 fn run_next(world: &mut World, state: &mut GalleryState) {
     loop {
         let Some(next) = state.run_all.as_ref().map(|run| run.outcomes.len()) else {
             return;
         };
-        // Every entry in every variant, entry by entry.
         let variants = world
             .get_resource::<Gallery>()
             .map_or(1, Gallery::variant_count);
@@ -1005,7 +917,7 @@ fn run_next(world: &mut World, state: &mut GalleryState) {
         else {
             break;
         };
-        // A file that never loaded has nothing to play: it fails the run.
+        // A file that never loaded fails the run.
         if let Some(error) = broken {
             let name = variant.label(scenario.name());
             if let Some(run) = state.run_all.as_mut() {
@@ -1017,8 +929,7 @@ fn run_next(world: &mut World, state: &mut GalleryState) {
             }
             continue;
         }
-        // A scenario that does not name this variant is skipped, not failed:
-        // the run records it and moves on without playing it.
+        // A scenario that does not name this variant is skipped, not failed.
         let hidden = world
             .get_resource::<Gallery>()
             .is_some_and(|gallery| hidden_by_tag(gallery, state, &scenario));

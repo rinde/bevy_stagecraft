@@ -1,26 +1,10 @@
-//! The Scenarios window: its camera, the catalogue, the controls and the live
-//! list of checks.
+//! The Scenarios window: its camera, catalog, controls and details panel.
 //!
-//! The window sits directly to the left of the app window, the pair centred at
-//! the top of the primary monitor. Its height is shared between the catalogue
-//! and the details panel ([`share_room`]): half each, unless one needs less
-//! than half, when the other gets the rest, and neither gets under a fifth.
-//! `split_panels` sets it each frame from the previous layout. The details
-//! panel has the scenario's step list (lines and checks show a step's group
-//! path, numbered flat; a click is a jump, see [`GalleryAction::JumpTo`]), the
-//! **Trace** tab, the suggestion checklists and, in pick mode, the pick panel:
-//! the targets, the checks that hold and the app's check forms (see
-//! [`crate::check::pick`]).
-//!
-//! The Trace tab redraws on a cheap `TraceKey`, not every frame, and when the
-//! gallery's `revision` changes; picking and the suggestion checklists take
-//! precedence over it. The gallery traces with
+//! The Trace tab redraws on a cheap `TraceKey` and the gallery's `revision`,
+//! not every frame. The gallery traces with
 //! [`NoiseFilter::nothing`](crate::NoiseFilter::nothing) and the tab filters
-//! the changes it lists when drawing (see
-//! [`StepView::new`](crate::StepView::new)), which is why the filter can change
-//! without playing again. Hiding a type rewrites `noise_types` when the tab is
-//! drawn; the tab ends with the filter as code
-//! ([`NoiseFilter::to_code`](crate::NoiseFilter::to_code)).
+//! when drawing ([`StepView::new`](crate::StepView::new)), so the filter can
+//! change without playing again.
 
 use bevy::{
     camera::{Camera2d, RenderTarget},
@@ -66,15 +50,11 @@ use crate::{
     trace::{ScenarioTrace, StepView, TargetTrace, TraceCaptured, TraceCheck, step_title},
 };
 
-/// Default size of the Scenarios window, in logical pixels.
 pub const SCENARIOS_WINDOW_SIZE: (u32, u32) = (460, 800);
-/// Font size of the Scenarios window's text, in logical pixels.
 const FONT_SIZE: f32 = 15.0;
-/// Padding inside buttons and around panels, in logical pixels.
 const PADDING: f32 = 6.0;
-/// Gap between neighbouring controls, in logical pixels.
 const GAP: f32 = 6.0;
-/// The least share of the room the catalogue and the details panel each keep,
+/// The least share of the room the catalog and the details panel each keep,
 /// however much the other has to show.
 const MIN_PANEL_SHARE: f32 = 0.2;
 /// How far a panel's height may be off its target before it is set again, in
@@ -83,98 +63,58 @@ const HEIGHT_TOLERANCE: f32 = 0.5;
 /// Indent of a UI tree line per level of depth.
 const TREE_INDENT: &str = "  ";
 
-/// Background of the window.
 const BACKGROUND: Color = Color::srgb(0.1, 0.11, 0.14);
-/// A button at rest.
 const BUTTON: Color = Color::srgb(0.2, 0.22, 0.28);
-/// A button whose state is on: the speed in use, looping, the selected entry.
 const BUTTON_ON: Color = Color::srgb(0.2, 0.4, 0.65);
-/// A button that cannot be used now.
 const BUTTON_OFF: Color = Color::srgb(0.14, 0.15, 0.19);
-/// Ordinary text.
 const TEXT: Color = Color::srgb(0.9, 0.9, 0.92);
-/// Why a file does not load.
 const ERROR: Color = Color::srgb(1.0, 0.4, 0.4);
-/// Secondary text.
 const DIM: Color = Color::srgb(0.6, 0.62, 0.68);
 
-/// The second OS window, titled "Scenarios".
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ScenariosWindow;
 
-/// The UI camera of the Scenarios window. It renders to that window only, so
-/// it is never the default UI camera the app and the overlay use.
+/// Renders to the Scenarios window only, so it is never the default UI camera.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ScenariosCamera;
 
-/// The row of control buttons, for apps that add one of their own.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct GalleryToolbar;
 
-/// What a button or label in the window stands for.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Control {
-    /// Play or pause.
     Play,
-    /// One frame.
     StepFrame,
-    /// One step.
     StepStep,
-    /// Restart.
     Restart,
-    /// A speed.
     Speed(Speed),
-    /// Looping.
     Loop,
-    /// Take over, or resume.
     TakeOver,
-    /// Export.
     Export,
-    /// Save the world as a setup.
     SaveAsSetup,
-    /// Start or stop recording a session.
     Record,
-    /// Start recording a new scenario from an empty world.
     NewEmpty,
-    /// Start recording a new scenario from the app as it is.
     NewFromCurrent,
-    /// A catalogue entry.
     Entry(usize),
-    /// A variant to play the entries in.
     Variant(usize),
-    /// A tag to show only the entries of, or all of them.
     Tag(Option<usize>),
-    /// A step of the selected entry, to jump to the start of.
     JumpTo(usize),
-    /// A check the last recording suggested at its end, in the checklist.
     Suggestion(usize),
-    /// A check the last recording suggested at a checkpoint: the checkpoint
-    /// and the check's index in its list.
+    /// The checkpoint and the check's index in its list.
     CheckpointSuggestion(usize, usize),
-    /// Start or stop pick mode.
     Pick,
-    /// One of the picked node's targets.
     PickTarget(usize),
-    /// One of the checks that hold for the picked node.
     PickCheck(usize),
-    /// The check an app check form makes.
     FormCheck(usize),
-    /// Steps a form's field: the form, the field, and up rather than down.
+    /// The form, the field, and up rather than down.
     FormField(usize, usize, bool),
-    /// A tab of the panel under the catalogue.
     Tab(GalleryTab),
-    /// Whether the Trace tab follows the script.
     TraceFollow,
-    /// Which world around the step the Trace tab shows.
     TraceWorld(TraceWorld),
-    /// A step to show in the Trace tab.
     InspectStep(usize),
-    /// Hides or shows the type of a change line in the Trace tab: the line's
-    /// index among those listed.
+    /// The line's index among those listed.
     NoiseType(usize),
-    /// A filter the Trace tab's changes can be switched to.
     NoisePreset(NoisePreset),
-    /// Opens or closes the list of changes the Trace tab's filter hides.
     HiddenChanges,
 }
 
@@ -183,37 +123,27 @@ pub(super) enum Control {
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct StaticShade;
 
-/// Text that shows a control's current wording.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct ControlLabel(Control);
 
-/// The result beside a catalogue entry.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct EntryResult(usize);
 
-/// The one-line status under the controls.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct StatusLine;
 
-/// The scrolling list of entries.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct Catalogue;
 
-/// The panel that describes the selected entry and lists its checks.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct Details;
 
-/// What holds the catalogue, the tab row and the details panel, and shares its
-/// height between the catalogue and the details.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct Panels;
 
-/// The row of tab buttons between the catalogue and the details panel, whose
-/// height is not shared.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct TabRow;
 
-/// The text style of the window.
 fn font() -> TextFont {
     TextFont {
         font_size: FontSize::Px(FONT_SIZE),
@@ -221,14 +151,12 @@ fn font() -> TextFont {
     }
 }
 
-/// A line of text.
 fn label(parent: &mut ChildSpawnerCommands<'_>, text: impl Into<String>, colour: Color) -> Entity {
     parent
         .spawn((Text::new(text), font(), TextColor(colour), NotUnderTest))
         .id()
 }
 
-/// The words on a control, which change with the gallery's state.
 fn control_text(control: Control, state: &GalleryState) -> String {
     match control {
         Control::Play => if state.is_playing() { "Pause" } else { "Play" }.into(),
@@ -291,7 +219,6 @@ fn control_text(control: Control, state: &GalleryState) -> String {
     }
 }
 
-/// The action a control asks for, given the state it is clicked in.
 const fn control_action(control: Control, state: &GalleryState) -> GalleryAction {
     match control {
         Control::Play => GalleryAction::TogglePlay,
@@ -341,13 +268,11 @@ const fn control_action(control: Control, state: &GalleryState) -> GalleryAction
     }
 }
 
-/// Spawns a button for `control`, worded by [`control_text`].
 fn button(parent: &mut ChildSpawnerCommands<'_>, control: Control, state: &GalleryState) {
     button_with(parent, control, control_text(control, state), true);
 }
 
-/// Spawns a button for `control` with these words; they are kept up to date by
-/// [`update_labels`] only when `live`.
+/// Kept up to date by [`update_labels`] only when `live`.
 fn button_with(parent: &mut ChildSpawnerCommands<'_>, control: Control, text: String, live: bool) {
     parent
         .spawn((
@@ -379,12 +304,10 @@ fn button_with(parent: &mut ChildSpawnerCommands<'_>, control: Control, text: St
         });
 }
 
-/// A row of controls.
 fn row(parent: &mut ChildSpawnerCommands<'_>, fill: impl FnOnce(&mut ChildSpawnerCommands<'_>)) {
     row_with(parent, (), fill);
 }
 
-/// [`row`] with more components on the row itself, such as a marker.
 fn row_with(
     parent: &mut ChildSpawnerCommands<'_>,
     extra: impl Bundle,
@@ -404,16 +327,8 @@ fn row_with(
         .with_children(fill);
 }
 
-/// Puts the Scenarios window directly to the left of the app window, the pair
-/// centred horizontally at the top of the primary monitor, once.
-///
-/// The top rather than the middle: the menu bar and the Dock are not part of
-/// what Bevy knows of a monitor, and macOS pushes a window that overlaps them.
-/// At the top both windows are pushed below the menu bar alike and stay
-/// aligned. Bevy reports a window's position only after it has been moved, so the
-/// positions are worked out from the monitor rather than from the app window.
-/// It waits until the monitors are known; on Wayland, which does not let
-/// clients place windows, the window manager decides.
+/// Places it at the top, not the middle: macOS pushes windows that overlap the
+/// menu bar or Dock. Waits for the monitors; Wayland places windows itself.
 pub(super) fn place_scenarios_window(
     mut done: Local<bool>,
     monitors: Query<&Monitor, With<PrimaryMonitor>>,
@@ -446,7 +361,6 @@ pub(super) fn place_scenarios_window(
     *done = true;
 }
 
-/// The play, speed and tool buttons at the top of the window.
 fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState, gallery: &Gallery) {
     if gallery.variant_count() > 1 {
         row(root, |row| {
@@ -499,7 +413,6 @@ fn spawn_controls(root: &mut ChildSpawnerCommands<'_>, state: &GalleryState, gal
     });
 }
 
-/// Spawns the Scenarios window, its camera and everything in it.
 pub(super) fn spawn_window(
     mut commands: Commands,
     gallery: Res<Gallery>,
@@ -531,10 +444,9 @@ pub(super) fn spawn_window(
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                // Bevy places a root node in an implicit grid, whose auto row
-                // would otherwise grow to the root's content (taffy follows
-                // CSS here since Bevy 0.20), so a long catalogue would stretch
-                // the root past the window instead of the lists scrolling.
+                // Bevy puts a root node in an implicit grid whose auto row grows
+                // to its content (taffy follows CSS since 0.20): fix it or a long
+                // catalog stretches the root instead of scrolling.
                 min_height: px(0),
                 flex_direction: FlexDirection::Column,
                 row_gap: px(GAP),
@@ -572,8 +484,6 @@ pub(super) fn spawn_window(
                         ScrollPosition::default(),
                         Node {
                             flex_direction: FlexDirection::Column,
-                            // `split_panels` sets the height from the first
-                            // layout on.
                             height: Val::Percent(50.0),
                             flex_shrink: 0.0,
                             row_gap: px(GAP),
@@ -606,8 +516,6 @@ pub(super) fn spawn_window(
         });
 }
 
-/// Spawns the catalogue again when the gallery's entries changed, such as a
-/// scenario file that was saved.
 pub(super) fn rebuild_catalogue(
     gallery: Res<Gallery>,
     catalogues: Query<Entity, With<Catalogue>>,
@@ -626,10 +534,8 @@ pub(super) fn rebuild_catalogue(
     }
 }
 
-/// How many lines of why a file does not load the catalogue shows.
 const MAX_ERROR_LINES: usize = 3;
 
-/// Spawns the groups and their entries.
 fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
     let mut index = 0;
     for group in gallery.groups() {
@@ -667,7 +573,6 @@ fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
                 .with_children(|head| {
                     let result = label(head, "-", DIM);
                     head.commands().entity(result).insert(EntryResult(at));
-                    // Not run: skipped or fixme, shown dimmed with the reason.
                     let disabled = entry.scenario.disabled();
                     let name_colour = if disabled.is_some() { DIM } else { TEXT };
                     label(head, entry.scenario.name(), name_colour);
@@ -707,13 +612,11 @@ fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
     }
 }
 
-/// Whether the control cannot be used in this state. A click on it still asks
-/// for its action, which is refused with a line in the status.
+/// A click on it still asks for its action, which is refused in the status line.
 const fn is_disabled(control: Control, state: &GalleryState) -> bool {
     matches!(control, Control::SaveAsSetup) && !state.can_save_as_setup()
 }
 
-/// Shades the buttons whose state is on, and dims the ones that cannot be used.
 pub(super) fn style_controls(
     state: Res<GalleryState>,
     mut buttons: Query<(&Control, &mut BackgroundColor), Without<StaticShade>>,
@@ -781,7 +684,6 @@ pub(super) fn style_controls(
     }
 }
 
-/// Hides the catalogue entries the tag filter leaves out.
 pub(super) fn filter_entries(
     state: Res<GalleryState>,
     gallery: Res<Gallery>,
@@ -809,7 +711,6 @@ pub(super) fn filter_entries(
     }
 }
 
-/// Rewrites the words that change: control labels, results and the status.
 pub(super) fn update_labels(
     state: Res<GalleryState>,
     report: Res<ScenarioReport>,
@@ -865,7 +766,6 @@ pub(super) fn update_labels(
     }
 }
 
-/// What the gallery is doing, in a line.
 fn status_text(state: &GalleryState, report: &ScenarioReport, gallery: &Gallery) -> String {
     if !state.status().is_empty() {
         return state.status().to_owned();
@@ -896,13 +796,8 @@ fn status_text(state: &GalleryState, report: &ScenarioReport, gallery: &Gallery)
     format!("{name}: {mode} (step {reached}/{})", report.steps.len())
 }
 
-/// How the room for the catalogue and the details panel is shared, as their
-/// heights in the same unit as the arguments.
-///
-/// `catalogue` and `details` are what each would like to show in full and
-/// `room` is what there is to share. Both get half, unless one needs more than
-/// that and the other less: the other keeps what it needs and the first gets
-/// the rest. Neither gets less than [`MIN_PANEL_SHARE`] of the room.
+/// Both get half unless one needs less; the other gets the rest. Neither gets
+/// less than [`MIN_PANEL_SHARE`] of the room.
 pub(super) fn share_room(catalogue: f32, details: f32, room: f32) -> (f32, f32) {
     let room = room.max(0.0);
     let half = room / 2.0;
@@ -918,12 +813,7 @@ pub(super) fn share_room(catalogue: f32, details: f32, room: f32) -> (f32, f32) 
     }
 }
 
-/// Gives the catalogue and the details panel the room of the window between
-/// them, as [`share_room`] splits it.
-///
-/// Works from the layout of the frame before, so a change shows one frame
-/// late. A panel's content size does not depend on its own height, so this
-/// settles instead of chasing itself.
+/// Works from the previous frame's layout, so a change shows a frame late.
 pub(super) fn split_panels(
     panels: Query<&ComputedNode, With<Panels>>,
     tabs: Query<&ComputedNode, With<TabRow>>,
@@ -939,13 +829,12 @@ pub(super) fn split_panels(
         return;
     };
     let logical = |physical: f32, node: &ComputedNode| physical * node.inverse_scale_factor();
-    // Less the gaps between the three children of the container.
     let room = logical(panels.size().y, panels) - logical(tabs.size().y, tabs) - GAP - GAP;
     if room <= 0.0 {
         return;
     }
-    // Taffy's content size already includes the top padding but leaves out the
-    // padding below the last child, so only the bottom one is added.
+    // Taffy's content size includes the top padding but not the one below the
+    // last child.
     let wanted =
         |node: &ComputedNode| logical(node.content_size().y + node.padding().max_inset.y, node);
     let (list_height, panel_height) = share_room(wanted(list), wanted(panel), room);
@@ -960,9 +849,6 @@ pub(super) fn split_panels(
     }
 }
 
-/// Applies the wheel to the catalogue, or to the details panel while a
-/// pointer of the Scenarios window is over it: a recording's checklists can
-/// be longer than the panel.
 pub(super) fn scroll_catalogue(
     mut scroll: ResMut<ScenariosScroll>,
     hovers: Option<Res<HoverMap>>,
@@ -993,50 +879,29 @@ pub(super) fn scroll_catalogue(
     scroll.0 = 0.0;
 }
 
-/// What the details panel shows: the selection, its report, the checklist
-/// of a recording, pick mode and what it picked, the scenarios' revision, the
-/// tab, and on the Trace tab what it shows.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct DetailsKey {
-    /// The selected entry.
     selected: Option<usize>,
-    /// The report, where the panel shows it. Not on the Trace tab, which
-    /// would be redrawn every frame by the frame count alone.
+    /// Not on the Trace tab, which the frame count alone would redraw every frame.
     report: Option<ScenarioReport>,
-    /// The checklist of the last recording.
     suggestions: Option<Suggestions>,
-    /// Whether pick mode is on.
     picking: bool,
-    /// What it picked.
     picked: Option<Picked>,
-    /// Changes to the scenarios themselves.
     revision: u32,
-    /// The tab.
     tab: GalleryTab,
-    /// What the Trace tab shows, while it is the panel on screen.
     trace: Option<TraceKey>,
 }
 
-/// What the Trace tab shows, cheap enough to compare every frame.
 #[derive(Debug, Clone, PartialEq)]
 struct TraceKey {
-    /// The step shown.
     step: Option<usize>,
-    /// Whether it follows the script.
     follow: bool,
-    /// The world shown around the step.
     world: TraceWorld,
-    /// How each step went, for the list.
     outcomes: Vec<Outcome>,
-    /// How many points the trace has taken, which grows while it is live.
     points: usize,
-    /// What the shown step looked up and checked, which a waiting step keeps
-    /// changing.
     found: (Vec<TargetTrace>, Vec<TraceCheck>, Vec<TraceCaptured>),
 }
 
-/// The step the script is at while it plays, else once it is over the first
-/// that failed, or the last.
 pub(super) fn followed_step(report: &ScenarioReport, player: Option<&ScenarioPlayer>) -> usize {
     let last = report.steps.len().saturating_sub(1);
     player.filter(|player| player.is_active()).map_or_else(
@@ -1051,8 +916,6 @@ pub(super) fn followed_step(report: &ScenarioReport, player: Option<&ScenarioPla
     )
 }
 
-/// The step the Trace tab shows: the one it was pinned to, else the one it
-/// follows.
 fn shown_step(
     state: &GalleryState,
     report: &ScenarioReport,
@@ -1066,7 +929,6 @@ fn shown_step(
     )
 }
 
-/// Empties every details panel and fills it again.
 fn redraw(
     commands: &mut Commands,
     details: &Query<Entity, With<Details>>,
@@ -1080,7 +942,6 @@ fn redraw(
     }
 }
 
-/// What the Trace tab redraws on, for the step it shows.
 fn trace_key(
     state: &GalleryState,
     report: &ScenarioReport,
@@ -1109,7 +970,6 @@ fn trace_key(
     }
 }
 
-/// Every step's title and how it ended, for the Trace tab's list.
 fn step_titles(
     report: &ScenarioReport,
     descriptions: &TargetDescriptions,
@@ -1122,11 +982,6 @@ fn step_titles(
         .collect()
 }
 
-/// Rewrites the selected entry's description and its checks, with a mark for
-/// each: the checks the scenario names, in the order they run, with those not
-/// reached yet shown as such. After a recording it shows the checks the
-/// recording suggests instead, as a checklist. On the Trace tab it shows the
-/// trace of the run instead.
 pub(super) fn update_details(
     mut commands: Commands,
     mut state: ResMut<GalleryState>,
@@ -1140,8 +995,6 @@ pub(super) fn update_details(
 ) {
     let tracing_tab =
         state.tab() == GalleryTab::Trace && !state.is_picking() && state.suggestions().is_none();
-    // A finished run's trace is the whole one; until there is one, the
-    // player's own, which grows as the script plays.
     let trace = state
         .trace()
         .or_else(|| player.as_deref().and_then(ScenarioPlayer::trace));
@@ -1230,8 +1083,6 @@ pub(super) fn update_details(
     }
 }
 
-/// The mark and the colour a step or check that ended as `outcome` is shown
-/// in.
 fn outcome_mark(outcome: &Outcome, theme: &OverlayTheme) -> (String, Color) {
     match outcome {
         Outcome::Pass => (theme.pass_mark.clone(), theme.pass_text),
@@ -1240,17 +1091,11 @@ fn outcome_mark(outcome: &Outcome, theme: &OverlayTheme) -> (String, Color) {
     }
 }
 
-/// How many snapshot changes the Trace tab lists before it says how many more
-/// there are.
 const MAX_CHANGES: usize = 30;
 
-/// How many UI tree lines the Trace tab lists before it says how many more
-/// there are: a real app's tree has hundreds, and each is an entity.
+/// A real app's tree has hundreds of lines, each an entity.
 const MAX_TREE_LINES: usize = 150;
 
-/// The Trace tab: the step shown with how it went, what it looked up and
-/// checked, what it changed, the list of steps to choose from, and the UI
-/// around it.
 fn spawn_trace_panel(
     panel: &mut ChildSpawnerCommands<'_>,
     titles: &[(String, Outcome)],
@@ -1336,9 +1181,7 @@ fn spawn_trace_panel(
     spawn_trace_tree(panel, view, state.trace_world());
 }
 
-/// The type paths of the change lines the Trace tab lists with a hide or show
-/// button, in order: the visible ones, then the hidden ones where that list is
-/// open. A button's [`Control::NoiseType`] index is its place in this list.
+/// A button's [`Control::NoiseType`] index is its place in this list.
 fn noise_types(view: Option<&StepView<'_>>, show_hidden: bool) -> Vec<String> {
     let Some(view) = view else {
         return Vec::new();
@@ -1356,9 +1199,6 @@ fn noise_types(view: Option<&StepView<'_>>, show_hidden: bool) -> Vec<String> {
         .collect()
 }
 
-/// What the step changed in the world's state, under the filter the Trace tab
-/// has: the filter itself, each change with a button to hide its type, and the
-/// list of what the filter hides, with a button to show each type again.
 fn spawn_trace_changes(
     panel: &mut ChildSpawnerCommands<'_>,
     view: &StepView<'_>,
@@ -1431,8 +1271,7 @@ fn spawn_trace_changes(
     label(panel, format!("As code: {}", state.noise().to_code()), DIM);
 }
 
-/// One change line, with a button before it that hides or shows its type
-/// where it has one. `next` counts those buttons, as [`noise_types`] does.
+/// `next` counts the hide and show buttons, as [`noise_types`] does.
 fn spawn_change(
     panel: &mut ChildSpawnerCommands<'_>,
     change: &SnapshotChange,
@@ -1452,7 +1291,6 @@ fn spawn_change(
     });
 }
 
-/// The UI tree before or after the step, one indented line per node.
 fn spawn_trace_tree(panel: &mut ChildSpawnerCommands<'_>, view: &StepView<'_>, world: TraceWorld) {
     let (point, words) = match world {
         TraceWorld::Before => (view.before, "UI before the step"),
@@ -1477,7 +1315,6 @@ fn spawn_trace_tree(panel: &mut ChildSpawnerCommands<'_>, view: &StepView<'_>, w
     }
 }
 
-/// One change to the world's state in a line: what it was and what it became.
 fn change_text(change: &SnapshotChange) -> String {
     let words = |value: &Option<String>| value.clone().unwrap_or_else(|| "(none)".into());
     format!(
@@ -1488,8 +1325,6 @@ fn change_text(change: &SnapshotChange) -> String {
     )
 }
 
-/// Each check of `scenario`, with its mark and failure message once it has
-/// run, and the colour to show it in.
 fn check_lines(
     scenario: &Scenario,
     report: &ScenarioReport,
@@ -1535,7 +1370,6 @@ fn check_lines(
     lines
 }
 
-/// Each step of `scenario` as a mark for how it went and its number and words.
 fn step_lines(
     scenario: &Scenario,
     report: &ScenarioReport,
@@ -1562,16 +1396,11 @@ fn step_lines(
         .collect()
 }
 
-/// What a ticked candidate starts with. ASCII, as the bundled font has no
-/// tick.
+/// ASCII: the bundled font has no tick.
 const TICKED: &str = "[x]";
 
-/// What an unticked candidate starts with.
 const UNTICKED: &str = "[ ]";
 
-/// The checklists of the checks a recording suggests: one per checkpoint,
-/// then the end's, with one row per candidate, which a click ticks or
-/// unticks.
 fn spawn_checklist(panel: &mut ChildSpawnerCommands<'_>, suggestions: &Suggestions) {
     if suggestions.checkpoints() == 0 {
         if suggestions.is_empty() {
@@ -1602,7 +1431,6 @@ fn spawn_checklist(panel: &mut ChildSpawnerCommands<'_>, suggestions: &Suggestio
     }
 }
 
-/// One checklist row per entry, each clicking as `control` of its index.
 fn spawn_rows<'a>(
     panel: &mut ChildSpawnerCommands<'_>,
     entries: impl Iterator<Item = (&'a Check, bool)>,
@@ -1636,15 +1464,11 @@ fn spawn_rows<'a>(
     }
 }
 
-/// What a check row starts with before it is taken. ASCII, as the bundled
-/// font has no other marks.
+/// ASCII: the bundled font has no other marks.
 const TO_ADD: &str = "[+]";
 
-/// What a check row starts with once it is taken.
 const ADDED: &str = "[added]";
 
-/// A button in the details panel that asks for `control`'s action, with
-/// `text` on it. Returns the button.
 fn panel_button(
     parent: &mut ChildSpawnerCommands<'_>,
     control: Control,
@@ -1676,8 +1500,6 @@ fn panel_button(
         .id()
 }
 
-/// The pick panel: how to pick, or the picked node's targets, the checks that
-/// hold for it and the app's check forms, each a button that takes it.
 fn spawn_pick_panel(
     panel: &mut ChildSpawnerCommands<'_>,
     picked: Option<&Picked>,
