@@ -1,12 +1,4 @@
 //! Working out what a click landed on while recording.
-//!
-//! A click is named by the first of
-//! [`crate::check::pick::target_alternatives`] for the
-//! widget under it, the one ranking pick mode uses too, but only where that
-//! widget has a role that is not positional (a slider is, since where on it
-//! the click lands matters) or the click is on a text. Anything else, such as
-//! a slider's track or a bare panel, keeps its position, which the app's
-//! [`AppTarget::at`](crate::AppTarget::at) may name.
 
 use bevy::{
     ecs::{entity::Entity, world::World},
@@ -22,11 +14,6 @@ use crate::{
     targets::{Target, WidgetRole},
 };
 
-/// What a click at `position` should be called in the script: the first of
-/// [`target_alternatives`] for the widget under it, the one ranking pick
-/// mode uses too (a test id, then role and label, then text, then name),
-/// else the app's own target there
-/// ([`AppTarget::at`](crate::AppTarget::at)), else the position.
 pub(super) fn classify(world: &World, position: Vec2) -> Target {
     let subject = node_at(world, position).and_then(|hit| clicked(world, hit));
     target_alternatives(world, subject, Some(position))
@@ -35,11 +22,7 @@ pub(super) fn classify(world: &World, position: Vec2) -> Target {
         .unwrap_or_else(|| Target::screen(position))
 }
 
-/// What a click on the node `hit` is for, when that can be named rather
-/// than placed: the widget it belongs to when that has a role (see
-/// [`WidgetRole`]) and where on it the click lands does not matter, else
-/// `hit` itself when it is a text. A click anywhere else (on a slider's
-/// track, on a bare panel) keeps its position.
+/// Positional roles (a slider) and non-text nodes return `None` so the click keeps its position.
 fn clicked(world: &World, hit: Entity) -> Option<Entity> {
     let owner = widget_of(world, hit);
     let role = world

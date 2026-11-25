@@ -1,9 +1,4 @@
 //! Turning a log of real input into readable steps.
-//!
-//! The log is a list of [`RecordedEvent`]s stamped with a frame number at the
-//! fixed 1/60 s, which is why playback does not depend on the frame rate the
-//! session ran at. [`steps_from_events`] is a pure function of that log, so it
-//! is tested without a window.
 
 use bevy::{
     input::{ButtonState, keyboard::KeyCode, mouse::MouseButton, touch::TouchPhase},
@@ -16,98 +11,56 @@ use crate::{
     targets::Target,
 };
 
-/// What one piece of real input was.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordedKind {
-    /// The cursor ended an update here.
     Moved(Vec2),
-    /// A mouse button changed state.
     Button {
-        /// The button.
         button: MouseButton,
-        /// Pressed or released.
         state: ButtonState,
-        /// Where the cursor was, in logical pixels.
         position: Vec2,
-        /// What `position` was worked out to while the session ran: a UI
-        /// label, whatever the app's hook made of it, or the position itself.
         target: Target,
     },
-    /// The wheel turned, in pixels.
     Wheel {
-        /// Horizontal amount.
         x: f32,
-        /// Vertical amount.
         y: f32,
-        /// Where the cursor was.
         position: Vec2,
     },
-    /// A key changed state.
     Key {
-        /// The key.
         key: KeyCode,
-        /// Pressed or released.
         state: ButtonState,
-        /// The text the press produced, as the operating system reports it
-        /// (`None` for a release, and for a key that types nothing). It is
-        /// what lets keys typed one after the other read as one `Type` step
-        /// whatever the keyboard layout.
+        /// Lets keys typed one after another read as one `Type` step whatever the keyboard layout.
         text: Option<String>,
     },
-    /// A finger changed state. The touch does not move the mouse cursor.
     Touch {
-        /// Which finger, numbered from 0 in the order they came down (the
-        /// lowest number not in use), not the system's own touch id.
+        /// Numbered from 0 by the lowest free number, not the system's touch id.
         finger: u8,
-        /// Started, moved, ended or cancelled.
         phase: TouchPhase,
-        /// Where the finger was, in logical pixels.
         position: Vec2,
-        /// What `position` was worked out to while the session ran, as for
-        /// [`RecordedKind::Button`].
         target: Target,
     },
-    /// The person took a checkpoint: the checks it suggests go here, before
-    /// anything else that happened in the same frame.
+    /// The checks it suggests go here, before anything else in the same frame.
     Checkpoint,
-    /// The person chose a check here, such as one picked in the gallery: it
-    /// becomes a `Check` step at this point.
     Check(Check),
 }
 
-/// One piece of real input and the frame it happened in.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedEvent {
-    /// Frames of 1/60 s since the session began.
     pub frame: u32,
-    /// What happened.
     pub kind: RecordedKind,
 }
 
-/// The thresholds that decide how a log reads as steps.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StepOptions {
-    /// How far, in logical pixels, a path may stray from a straight line
-    /// before it needs a vertex of its own (Ramer-Douglas-Peucker).
+    /// Ramer-Douglas-Peucker tolerance, in logical pixels.
     pub path_tolerance: f32,
-    /// How far the pointer may move between a press and a release for the
-    /// two to count as a click rather than a drag, in logical pixels.
     pub drag_distance: f32,
-    /// How many frames a press may last and still be a `Click` or `Tap`.
     pub hold_frames: u32,
-    /// Idle time longer than this many frames is shortened.
     pub idle_frames: u32,
-    /// What idle time is shortened to, in frames.
     pub idle_wait: u16,
-    /// Idle time longer than this many frames is shortened when the pointer
-    /// then goes to a widget (a target such as `Text(..)`), since playback
-    /// waits for that widget to be actionable by itself.
+    /// Playback waits for a widget to be actionable by itself, so idle time before one is cut more.
     pub widget_idle_frames: u32,
-    /// What idle time before the pointer goes to a widget is shortened to,
-    /// in frames.
     pub widget_idle_wait: u16,
-    /// At least this many frames are left at the end, so the last input has
-    /// taken effect before the checks look.
+    /// Left at the end so the last input has taken effect before the checks look.
     pub settle_frames: u32,
 }
 
@@ -126,52 +79,23 @@ impl Default for StepOptions {
     }
 }
 
-/// Positions closer than this are the same place.
 const SAME_PLACE: f32 = 0.5;
 
-/// A log read as steps, with where each checkpoint falls among them.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LoggedSteps {
-    /// The steps, without any checks.
     pub steps: Vec<Step>,
-    /// For each [`RecordedKind::Checkpoint`] in the log, in order, how many
-    /// of `steps` come before it: its checks go between `steps[at - 1]` and
-    /// `steps[at]`.
+    /// How many of `steps` come before each checkpoint: its checks go between `steps[at - 1]` and `steps[at]`.
     pub checkpoints: Vec<usize>,
 }
 
-/// Turns a log into steps. `end` is the frame the session stopped in.
-///
-/// Checkpoints in the log are left out; [`read_log`] says where they fall.
-/// A [`RecordedKind::Check`] becomes a `Check` step where it was chosen.
-///
-/// * runs of moves become `Glide`s, one per vertex of the simplified path;
-/// * a press and release in place is a `Click`; a straight press, move and
-///   release of the left button is a `Drag`; anything else is spelt out as
-///   `Press`, glides and `Release`;
-/// * a finger that goes down and up in place is a `TouchTap`; finger 0 going
-///   straight is a `TouchDrag`; anything else is spelt out as `TouchDown`,
-///   a `TouchMove` per vertex of the simplified path (with waits between, as a
-///   `TouchMove` takes one frame) and `TouchUp` or `TouchCancel`;
-/// * a key pressed and released on its own is a `Tap`, and a modifier held
-///   around one folds into it;
-/// * idle time beyond [`StepOptions::idle_frames`] becomes a short `Wait`;
-///   before the pointer goes to a widget, idle time beyond the lower
-///   [`StepOptions::widget_idle_frames`] does, as playback waits for the
-///   widget to be actionable anyway.
+/// `end` is the frame the session stopped in. Checkpoints are left out; [`read_log`] says where they fall.
 #[must_use]
 pub fn steps_from_events(events: &[RecordedEvent], end: u32, options: &StepOptions) -> Vec<Step> {
     read_log(events, end, options).steps
 }
 
-/// Turns a log into steps as [`steps_from_events`] does, and says where
-/// among them each checkpoint falls.
-///
-/// A checkpoint ends the run of moves before it, so the pointer is where the
-/// person had it when the checkpoint was taken, and the script's clock is
-/// brought up to the checkpoint's frame. A checkpoint taken while a button or
-/// key is held keeps the press and the release apart, so its checks see what
-/// the person saw.
+/// A checkpoint ends the run of moves and brings the script's clock up to its frame, so its
+/// checks see what the person saw.
 #[must_use]
 pub fn read_log(events: &[RecordedEvent], end: u32, options: &StepOptions) -> LoggedSteps {
     let mut out = Emitter::new(*options);
@@ -228,31 +152,20 @@ pub fn read_log(events: &[RecordedEvent], end: u32, options: &StepOptions) -> Lo
     LoggedSteps { steps, checkpoints }
 }
 
-/// Builds the steps while keeping track of the script's own clock.
 struct Emitter {
-    /// The thresholds.
     options: StepOptions,
-    /// The steps so far.
     steps: Vec<Step>,
-    /// Where the script's clock stands, in frames.
     clock: u32,
-    /// How many frames of idle time were cut, so recorded frames map to the
-    /// script's.
+    /// Frames of idle time cut, so recorded frames map to the script's.
     cut: u32,
-    /// Where the script's pointer is, once something has put it somewhere.
     pointer: Option<Vec2>,
-    /// Moves not yet turned into glides.
     run: Vec<(u32, Vec2)>,
-    /// How many steps came before each checkpoint so far.
     checkpoints: Vec<usize>,
-    /// The modifier keys held down, as far as the log has said. Each physical
-    /// key is kept, so releasing one Control while the other is down leaves
-    /// Control held.
+    /// Each physical key is kept, so releasing one Control while the other is down leaves Control held.
     held: Vec<KeyCode>,
 }
 
 impl Emitter {
-    /// An emitter at the start of a script.
     const fn new(options: StepOptions) -> Self {
         Self {
             options,
@@ -266,38 +179,28 @@ impl Emitter {
         }
     }
 
-    /// A checkpoint was taken in recorded frame `frame`.
     fn checkpoint(&mut self, frame: u32) {
         self.flush(None);
         self.wait_until(frame);
         self.checkpoints.push(self.steps.len());
     }
 
-    /// The person chose `check` in recorded frame `frame`. Like a checkpoint
-    /// it ends the run of moves before it and brings the clock up to its
-    /// frame, so it sees what the person saw.
     fn check(&mut self, frame: u32, check: &Check) {
         self.flush(None);
         self.wait_until(frame);
         self.emit(Step::Check(check.clone()), 0);
     }
 
-    /// Adds a step that takes `cost` frames.
     fn emit(&mut self, step: Step, cost: u32) {
         self.steps.push(step);
         self.clock = self.clock.saturating_add(cost);
     }
 
-    /// Waits until the script's clock reaches recorded frame `recorded`,
-    /// shortening a long idle stretch.
     fn wait_until(&mut self, recorded: u32) {
         self.wait_before(recorded, false);
     }
 
-    /// [`Emitter::wait_until`] before a step that sends the pointer to a
-    /// widget when `toward_widget` says so: playback waits for the widget to
-    /// be actionable, so a shorter stretch of idle time is shortened, and
-    /// further.
+    /// Cuts more when `toward_widget`, since playback waits for the widget to be actionable.
     fn wait_before(&mut self, recorded: u32, toward_widget: bool) {
         let wanted = recorded.saturating_sub(self.cut);
         let gap = wanted.saturating_sub(self.clock);
@@ -324,9 +227,7 @@ impl Emitter {
         self.emit_wait(gap);
     }
 
-    /// Adds `Wait` steps totalling `frames`: a `Wait` holds at most
-    /// `u16::MAX` frames, so a longer pause is several, and the script's
-    /// clock stays the one the steps really play.
+    /// A `Wait` holds at most `u16::MAX` frames, so a longer pause is several.
     fn emit_wait(&mut self, frames: u32) {
         let mut left = frames;
         while left > 0 {
@@ -336,9 +237,7 @@ impl Emitter {
         }
     }
 
-    /// Adds a straight drag of `frames`. A `Drag` holds at most `u16::MAX`
-    /// frames; a longer one is spelt out as a move, a press, `Glide`s and a
-    /// release, so it can be as long as needed.
+    /// A `Drag` holds at most `u16::MAX` frames; a longer one is spelled out as a move, press, glides and release.
     fn emit_drag(
         &mut self,
         button: MouseButton,
@@ -364,11 +263,8 @@ impl Emitter {
         }
     }
 
-    /// Adds `Glide`s to `target` (at `to`) totalling `frames`: a `Glide` takes
-    /// at most `u16::MAX` frames, so a longer one is cut into legs through
-    /// points on the straight line from where the pointer is, which plays the
-    /// same path at the same speed. Without a known start the legs all aim at
-    /// `target`.
+    /// A `Glide` longer than `u16::MAX` frames is cut into legs on the straight line; without a
+    /// known start all legs aim at `target`.
     fn emit_glide(&mut self, target: Target, to: Vec2, frames: u32) {
         let from = self.pointer;
         let mut done = 0_u32;
@@ -397,7 +293,6 @@ impl Emitter {
         }
     }
 
-    /// Notes that the cursor was at `position` in `frame`.
     fn moved(&mut self, frame: u32, position: Vec2) {
         let paused = self
             .run
@@ -409,25 +304,20 @@ impl Emitter {
         self.run.push((frame, position));
     }
 
-    /// Turns the moves so far into glides along the simplified path. The last
-    /// one ends at `end` when that is given, so a path that ends on a button
-    /// ends on the button's label rather than a pixel.
+    /// The last glide ends at `end` when given, so a path ending on a button ends on its label.
     fn flush(&mut self, end: Option<Target>) {
         let run = core::mem::take(&mut self.run);
         let Some(&(first_frame, first_position)) = run.first() else {
             return;
         };
-        // The path starts where the script's pointer is, a frame before the
-        // first sample; with no pointer yet the first sample is a jump.
+        // The path starts a frame before the first sample; with no pointer yet the first sample is a jump.
         let mut path: Vec<(u32, Vec2)> = Vec::with_capacity(run.len() + 1);
-        // A run that ends on a widget is the pointer going to it.
         let toward_widget = end.as_ref().is_some_and(names_widget);
         let rest = if let Some(pointer) = self.pointer {
             path.push((first_frame.saturating_sub(1), pointer));
             run.as_slice()
         } else {
             self.wait_before(first_frame.saturating_sub(1), toward_widget);
-            // A jump to a place the run never leaves is the whole move.
             let stays = run
                 .last()
                 .is_some_and(|(_, last)| last.distance(first_position) < SAME_PLACE);
@@ -466,7 +356,6 @@ impl Emitter {
         }
     }
 
-    /// Makes sure the script's pointer is where the real one was.
     fn ensure_pointer(&mut self, frame: u32, position: Vec2, target: &Target) {
         let there = self
             .pointer
@@ -478,7 +367,6 @@ impl Emitter {
         }
     }
 
-    /// A button went down at `at`. Returns the index to carry on from.
     fn press(&mut self, events: &[RecordedEvent], at: usize, button: MouseButton) -> usize {
         let Some(RecordedEvent {
             frame,
@@ -526,8 +414,7 @@ impl Emitter {
             })
             .collect();
         if moves.len() != between.len() {
-            // Something else happened while the button was down: keep the
-            // press and let the rest play out in order.
+            // Something else happened while the button was down: keep the press and play the rest in order.
             self.wait_until(frame);
             self.emit(Step::Press(button), 1);
             return at + 1;
@@ -579,7 +466,6 @@ impl Emitter {
         release_at + 1
     }
 
-    /// A button went up with no press the log could pair it with.
     fn release(&mut self, frame: u32, button: MouseButton, position: Vec2, target: &Target) {
         let lands_here = self
             .run
@@ -590,7 +476,6 @@ impl Emitter {
         self.emit(Step::Release(button), 1);
     }
 
-    /// The wheel turned by `x` and `y` pixels at `position`.
     fn wheel(&mut self, frame: u32, position: Vec2, x: f32, y: f32) {
         self.flush(None);
         self.ensure_pointer(frame, position, &Target::screen(position));
@@ -598,8 +483,7 @@ impl Emitter {
         self.emit(Step::Wheel { x, y }, 1);
     }
 
-    /// A finger changed state at event `at`. Returns the index to carry on
-    /// from. Touch never moves the script's mouse pointer.
+    /// Touch never moves the script's mouse pointer.
     fn touch(&mut self, events: &[RecordedEvent], at: usize) -> usize {
         let Some(RecordedEvent {
             frame,
@@ -637,11 +521,7 @@ impl Emitter {
         at + 1
     }
 
-    /// Finger `finger` went down at `position` in event `at`. When nothing
-    /// but its own moves happens before it ends, the whole gesture is read at
-    /// once: a tap, a straight drag, or a spelt out one with a simplified
-    /// path. Otherwise only the touch down is emitted and the rest follows
-    /// event by event.
+    /// When nothing but its own moves happens before it ends, the whole gesture is read at once.
     fn finger_down(
         &mut self,
         events: &[RecordedEvent],
@@ -741,9 +621,6 @@ impl Emitter {
         gesture.end_at + 1
     }
 
-    /// The rest of a spelt out touch gesture: a `TouchMove` for each vertex of
-    /// the simplified `path` (which starts at the touch down in frame `start`
-    /// and ends where the finger left), then the lift or cancel.
     fn touch_path(&mut self, finger: u8, gesture: &Gesture<'_>, path: &[Vec2], start: u32) {
         let mut frames = vec![start];
         frames.extend(gesture.moves.iter().map(|(frame, _)| *frame));
@@ -773,7 +650,6 @@ impl Emitter {
         self.emit(end.with_finger(finger), 1);
     }
 
-    /// A key changed state. Returns the index to carry on from.
     fn key(
         &mut self,
         events: &[RecordedEvent],
@@ -788,8 +664,8 @@ impl Emitter {
         if let Some(typing) = self.typing_at(events, at) {
             self.wait_until(event.frame);
             self.emit(Step::type_text(typing.text), typing.frames);
-            // Playback types a character a frame, however slowly the person
-            // did; the rest of the log is measured from where they stopped.
+            // Playback types a character a frame, however slowly the person did; the rest of the log is
+            // measured from where they stopped.
             let wanted = typing.end_frame.saturating_sub(self.cut);
             self.cut = self.cut.saturating_add(wanted.saturating_sub(self.clock));
             return typing.next;
@@ -841,15 +717,7 @@ impl Emitter {
         at + 1
     }
 
-    /// The longest stretch of typing that starts at the key event `at`: keys
-    /// that produced text, each released within [`StepOptions::hold_frames`]
-    /// of its press, with Shift pressed and released around them, and no
-    /// pause longer than [`StepOptions::idle_frames`]. Ends where every key
-    /// and Shift is up again, and is `None` unless it typed something.
-    ///
-    /// A control character (Enter, Tab, Backspace) is not typing, nor is text
-    /// typed with Control, Alt or Super held: those stay `Tap`s, which say
-    /// what the person pressed.
+    /// Control characters and text typed with Control, Alt or Super held are not typing; those stay `Tap`s.
     fn typing_at(&self, events: &[RecordedEvent], at: usize) -> Option<Typing> {
         let held_back = self.held.iter().any(|key| {
             [Modifiers::CTRL, Modifiers::ALT, Modifiers::SUPER]
@@ -860,9 +728,7 @@ impl Emitter {
         let mut typed = 0_u32;
         let mut pending: Vec<(KeyCode, u32)> = Vec::new();
         let mut shifts = 0_u32;
-        // The last complete boundary: text length, characters, next index and
-        // frame. Kept as numbers so the text is copied once, not at every
-        // boundary (that was quadratic in the length of the typing).
+        // Kept as numbers so the text is copied once, not at every boundary (quadratic otherwise).
         let mut found: Option<(usize, u32, usize, u32)> = None;
         for (index, event) in events.iter().enumerate().skip(at) {
             if event.frame.saturating_sub(last_frame) > self.options.idle_frames {
@@ -916,7 +782,6 @@ impl Emitter {
             }
         }
         let (length, frames, next, end_frame) = found?;
-        // Text after the boundary belongs to an incomplete suffix.
         text.truncate(length);
         Some(Typing {
             text,
@@ -927,48 +792,30 @@ impl Emitter {
     }
 }
 
-/// Frames a `TouchDrag` plays beyond its own `frames` (the touch down and the
-/// lift). A gesture held no longer than this cannot be one without playing
-/// longer than recorded, so it is spelt out instead.
+/// A gesture held no longer than this would play longer as a `TouchDrag` than recorded, so it is spelled out.
 const TOUCH_DRAG_OVERHEAD: u32 = 2;
 
-/// One finger's gesture, from its touch down to its end, with nothing else
-/// logged in between.
 struct Gesture<'a> {
-    /// The index of the event that ended it.
     end_at: usize,
-    /// The recorded frame it ended in.
     end_frame: u32,
-    /// Ended or cancelled.
     phase: TouchPhase,
-    /// Where it ended.
     end_position: Vec2,
-    /// What that was worked out to.
     end_target: &'a Target,
-    /// The moves in between, with their frames.
     moves: Vec<(u32, Vec2)>,
 }
 
-/// A run of keys read as one `Type` step.
 struct Typing {
-    /// What was typed.
     text: String,
-    /// How many frames playback takes to type it: one per character.
     frames: u32,
-    /// The index of the first event after the run.
     next: usize,
-    /// The recorded frame of the run's last event.
     end_frame: u32,
 }
 
-/// Whether the text a key press produced is something typed into a field:
-/// not empty and no control character.
 fn is_typed(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|character| !character.is_control())
 }
 
-/// Whether `target` names a widget that playback waits for: a locator, not
-/// a position nor one of the app's own targets, which may be either.
+/// A locator, not a position nor one of the app's own targets.
 const fn names_widget(target: &Target) -> bool {
     matches!(
         target,
@@ -981,7 +828,6 @@ const fn names_widget(target: &Target) -> bool {
     )
 }
 
-/// The modifier a key is one of.
 const fn modifier_of(key: KeyCode) -> Option<Modifiers> {
     match key {
         KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(Modifiers::SHIFT),
@@ -992,16 +838,11 @@ const fn modifier_of(key: KeyCode) -> Option<Modifiers> {
     }
 }
 
-/// How many frames of waiting may sit inside a chord and still let it fold.
 const CHORD_WAIT_FRAMES: u32 = 6;
 
-/// Folds `Key(Ctrl)`, `Tap(S)`, `KeyUp(Ctrl)` into `Tap(S, [Ctrl])`, ignoring
-/// the odd frame of waiting between them. `checkpoints` count the steps
-/// before each checkpoint and are counted again in the folded steps; one
-/// that fell inside a chord moves to after it.
+/// A checkpoint that fell inside a chord moves to after it.
 fn fold_chords(steps: Vec<Step>, checkpoints: &[usize]) -> (Vec<Step>, Vec<usize>) {
     let mut out: Vec<Step> = Vec::with_capacity(steps.len());
-    // How many folded steps stand for the first `n` original ones, by `n`.
     let mut folded_before = vec![0; steps.len() + 1];
     let mut at = 0;
     while let Some(step) = steps.get(at) {
@@ -1024,8 +865,6 @@ fn fold_chords(steps: Vec<Step>, checkpoints: &[usize]) -> (Vec<Step>, Vec<usize
     (out, checkpoints)
 }
 
-/// The chord starting at `at`, as the tap it folds into and how many steps it
-/// used.
 fn chord_at(steps: &[Step], at: usize) -> Option<(Step, usize)> {
     let Some(Step::Key {
         key,
@@ -1068,15 +907,11 @@ fn chord_at(steps: &[Step], at: usize) -> Option<(Step, usize)> {
     None
 }
 
-/// A frame count as the `u16` steps take, at most `u16::MAX`: callers split
-/// longer durations into several steps rather than lose frames.
+/// Callers split longer durations into several steps rather than lose frames.
 fn frames_u16(frames: u32) -> u16 {
     u16::try_from(frames).unwrap_or(u16::MAX)
 }
 
-/// The indices of `points` that stay when the path is simplified with
-/// Ramer-Douglas-Peucker: the first and last always, and any point that
-/// strays more than `tolerance` from the line between its neighbours.
 fn simplify(points: &[Vec2], tolerance: f32) -> Vec<usize> {
     let indexed: Vec<(usize, Vec2)> = points.iter().copied().enumerate().collect();
     let mut kept = Vec::new();
@@ -1087,8 +922,6 @@ fn simplify(points: &[Vec2], tolerance: f32) -> Vec<usize> {
     kept
 }
 
-/// Adds the indices to keep after the first of `points`, up to and including
-/// the last.
 fn simplify_from(points: &[(usize, Vec2)], tolerance: f32, kept: &mut Vec<usize>) {
     let (Some(&(_, start)), Some(&(last_index, end))) = (points.first(), points.last()) else {
         return;
@@ -1112,7 +945,6 @@ fn simplify_from(points: &[(usize, Vec2)], tolerance: f32, kept: &mut Vec<usize>
     }
 }
 
-/// How far `point` is from the segment `start`-`end`.
 fn distance_to_segment(point: Vec2, start: Vec2, end: Vec2) -> f32 {
     let along = end - start;
     let length_squared = along.length_squared();

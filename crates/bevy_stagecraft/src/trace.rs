@@ -1,20 +1,6 @@
-//! What the world looked like around each step of a run, for finding out why
-//! a scenario failed.
+//! What the world looked like around each step of a run.
 //!
-//! A [`ScenarioTrace`] is switched on with [`ScenarioPlayer::enable_trace`]
-//! (the recorder does so for every scenario). It holds a [`TracePoint`] each
-//! time the player is between steps: a [`WorldSnapshot`] (the same one
-//! suggestions are made from), the UI tree, and the frame it was taken on. The
-//! point is taken in `Last`, after the frame has been played, which is also
-//! when the recorder asks for its picture: a point and the picture of its
-//! frame show the same moment.
-//!
-//! Steps that take no frame (checks, captions) share a point with the step
-//! before them, so the world before and after such a step is the same one.
-//! [`ScenarioTrace::before`] and [`ScenarioTrace::after`] find the points
-//! around a step.
-//!
-//! [`ScenarioPlayer::enable_trace`]: crate::ScenarioPlayer::enable_trace
+//! Points are taken in `Last`, when the recorder takes its picture; steps that take no frame share a point.
 
 use alloc::collections::BTreeMap;
 use core::fmt::Write as _;
@@ -38,26 +24,18 @@ use crate::{
     targets::{is_tooling, is_ui_node},
 };
 
-/// How many levels of the UI tree a trace point writes down; deeper nodes are
-/// left out, so a runaway hierarchy cannot make a trace huge.
+/// Deeper nodes are dropped so a runaway hierarchy cannot make a trace huge.
 const MAX_TREE_DEPTH: usize = 24;
 
-/// One node of the UI tree, in document order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiLine {
-    /// How far below a root the node is.
     pub depth: usize,
-    /// The node's `Name`, or `Node` where it has none.
     pub label: String,
-    /// The text the node shows itself, if any.
     pub text: Option<String>,
-    /// The widget states it is in (`Disabled`, `Checked`, `Selected`,
-    /// `Pressed`, `Focused`, `Visible`); empty for a node that is no widget.
     pub states: Vec<String>,
 }
 
 impl UiLine {
-    /// The line as text: the label, the text in quotes, and the states.
     #[must_use]
     pub fn describe(&self) -> String {
         let mut out = self.label.clone();
@@ -71,25 +49,18 @@ impl UiLine {
     }
 }
 
-/// The world between two steps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TracePoint {
-    /// The player frame it was taken after: the same number the recorder
-    /// names the picture of that frame by.
+    /// The player frame it was taken after, which names the recorder's picture of it.
     pub frame: u32,
-    /// How many steps had begun, so the next to run is the step with this
-    /// index.
+    /// Steps begun, so the next to run has this index.
     pub started: usize,
-    /// Whether the scenario, with its expectations, was over.
     pub finished: bool,
-    /// The reflected state: resources, counts, texts, widgets, facts.
     pub snapshot: WorldSnapshot,
-    /// The app's UI, as a tree, tooling left out.
     pub ui: Vec<UiLine>,
 }
 
 impl TracePoint {
-    /// Reads `world` now.
     #[must_use]
     pub fn take(
         world: &World,
@@ -108,40 +79,27 @@ impl TracePoint {
     }
 }
 
-/// What one target of a step turned out to be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetTrace {
-    /// The target as the script wrote it.
     pub target: String,
-    /// Where it was found (the last time the player looked), or why not.
     pub found: Result<String, String>,
 }
 
-/// A check that ran for a step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceCheck {
-    /// The check, in words.
     pub name: String,
-    /// How it ended.
     pub outcome: Outcome,
 }
 
-/// A value a `Capture` step took.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceCaptured {
-    /// The name it was kept under.
     pub name: String,
-    /// What was measured, in words.
     pub measured: String,
-    /// The value, as RON.
     pub value: String,
-    /// The short path of its type.
     pub type_name: String,
 }
 
 impl TraceCaptured {
-    /// The capture as one line, such as
-    /// ``"views" = 596 (usize), count of `ItemView` ``.
     #[must_use]
     pub fn describe(&self) -> String {
         format!(
@@ -151,30 +109,21 @@ impl TraceCaptured {
     }
 }
 
-/// What the player recorded about one step apart from the world around it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StepTrace {
-    /// The targets the step looked up, in the order it looked.
     pub targets: Vec<TargetTrace>,
-    /// The checks the step ran.
     pub checks: Vec<TraceCheck>,
-    /// The values the step captured.
     pub captured: Vec<TraceCaptured>,
 }
 
-/// The trace of one run: see the [module documentation](self).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScenarioTrace {
-    /// Which reflected types the snapshots leave out.
     filter: NoiseFilter,
-    /// The points, in the order they were taken.
     points: Vec<TracePoint>,
-    /// What was recorded per step, by index.
     steps: BTreeMap<usize, StepTrace>,
 }
 
 impl ScenarioTrace {
-    /// An empty trace whose snapshots leave out what `filter` ignores.
     #[must_use]
     pub const fn new(filter: NoiseFilter) -> Self {
         Self {
@@ -184,37 +133,30 @@ impl ScenarioTrace {
         }
     }
 
-    /// The filter snapshots are taken with.
     #[must_use]
     pub const fn filter(&self) -> &NoiseFilter {
         &self.filter
     }
 
-    /// The points, in the order they were taken.
     #[must_use]
     pub fn points(&self) -> &[TracePoint] {
         &self.points
     }
 
-    /// The last point taken.
     #[must_use]
     pub fn last(&self) -> Option<&TracePoint> {
         self.points.last()
     }
 
-    /// Adds a point.
     pub(crate) fn push(&mut self, point: TracePoint) {
         self.points.push(point);
     }
 
-    /// What was recorded for step `index`, if it began.
     #[must_use]
     pub fn step(&self, index: usize) -> Option<&StepTrace> {
         self.steps.get(&index)
     }
 
-    /// The world as step `index` found it: the last point taken before the
-    /// step began.
     #[must_use]
     pub fn before(&self, index: usize) -> Option<&TracePoint> {
         self.points
@@ -223,8 +165,7 @@ impl ScenarioTrace {
             .find(|point| point.started <= index)
     }
 
-    /// The world once step `index` was done: the first point at which a later
-    /// step was due, or the end. `None` while the step is still going.
+    /// The first point at which a later step was due, or the end; `None` while the step runs.
     #[must_use]
     pub fn after(&self, index: usize) -> Option<&TracePoint> {
         self.points
@@ -232,8 +173,7 @@ impl ScenarioTrace {
             .find(|point| point.started > index || point.finished)
     }
 
-    /// Remembers what step `index` found for `target`, replacing what it found
-    /// the last time it looked, so a step that waits keeps its latest answer.
+    /// Replaces any earlier answer, so a step that waits keeps its latest.
     pub(crate) fn add_target(&mut self, index: usize, trace: TargetTrace) {
         let step = self.steps.entry(index).or_default();
         match step
@@ -246,21 +186,16 @@ impl ScenarioTrace {
         }
     }
 
-    /// Remembers a check step `index` ran.
     pub(crate) fn add_check(&mut self, index: usize, check: TraceCheck) {
         self.steps.entry(index).or_default().checks.push(check);
     }
 
-    /// Remembers a value step `index` captured.
     pub(crate) fn add_captured(&mut self, index: usize, captured: TraceCaptured) {
         self.steps.entry(index).or_default().captured.push(captured);
     }
 }
 
-/// What a step is called in a list: its number (from 1) and its words.
-///
-/// The one wording of a step, for the trace page of the recorder and the
-/// gallery's Trace tab alike. An `index` past the end gives no title.
+/// The one wording of a step for the recorder's trace page and the gallery's Trace tab.
 #[must_use]
 pub fn step_title(
     index: usize,
@@ -283,46 +218,24 @@ pub fn step_title(
     ))
 }
 
-/// Everything the trace knows about one step, in one place.
-///
-/// That is what it is called, how it ended, what it found, the checks it ran
-/// and the world around it. Renderers (`trace.html`, the gallery's Trace tab)
-/// show this and add only their own marks and markup.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepView<'a> {
-    /// The step's index, counting from 0.
     pub index: usize,
-    /// Its number and words, see [`step_title`].
     pub title: String,
-    /// How it ended; [`Outcome::Skipped`] for a step that never ran.
     pub outcome: Outcome,
-    /// What it looked up.
     pub targets: &'a [TargetTrace],
-    /// The checks it ran.
     pub checks: &'a [TraceCheck],
-    /// The values it captured.
     pub captured: &'a [TraceCaptured],
-    /// The world as the step found it, if the trace has it.
     pub before: Option<&'a TracePoint>,
-    /// The world once the step was done; `None` while it is still going.
     pub after: Option<&'a TracePoint>,
-    /// What the step changed in the snapshot, less what the filter given to
-    /// [`StepView::new`] leaves out; empty where either world is missing.
+    /// Changes the filter given to [`StepView::new`] does not ignore.
     pub changes: Vec<SnapshotChange>,
-    /// The changes that filter left out, in the same order: the ones about a
-    /// type it ignores.
+    /// Changes that filter ignores.
     pub hidden: Vec<SnapshotChange>,
 }
 
 impl<'a> StepView<'a> {
-    /// The view of step `index` of `steps` in `trace`; `None` if the report
-    /// has no such step.
-    ///
-    /// `filter` decides which of the step's changes are listed: a change
-    /// about a type it ignores goes to [`Self::hidden`] instead. A trace
-    /// already filtered by the same filter (the recorder's) loses nothing
-    /// more; the gallery's holds everything and filters here, so that its
-    /// filter can change without playing the scenario again.
+    /// A trace already filtered by `filter` loses nothing more; the gallery's holds everything and filters here.
     #[must_use]
     pub fn new(
         index: usize,
@@ -358,13 +271,11 @@ impl<'a> StepView<'a> {
         })
     }
 
-    /// Whether the step ran at all, which a step after a failure did not.
     #[must_use]
     pub const fn ran(&self) -> bool {
         !matches!(self.outcome, Outcome::Skipped)
     }
 
-    /// Why the step failed, if it did.
     #[must_use]
     pub fn failure(&self) -> Option<&str> {
         match &self.outcome {
@@ -375,13 +286,11 @@ impl<'a> StepView<'a> {
 }
 
 impl TargetTrace {
-    /// Whether the player found the target.
     #[must_use]
     pub const fn is_found(&self) -> bool {
         self.found.is_ok()
     }
 
-    /// Where it was found, or why it was not.
     #[must_use]
     pub fn answer(&self) -> &str {
         match &self.found {
@@ -391,7 +300,6 @@ impl TargetTrace {
 }
 
 impl TraceCheck {
-    /// Why the check failed, or the empty string for one that did not.
     #[must_use]
     pub fn failure(&self) -> &str {
         match &self.outcome {
@@ -401,7 +309,6 @@ impl TraceCheck {
     }
 }
 
-/// The app's UI nodes as a flat list in document order, tooling left out.
 fn ui_tree(world: &World) -> Vec<UiLine> {
     let Some(mut roots) = world
         .try_query_filtered::<Entity, (With<Node>, Without<ChildOf>)>()
@@ -417,7 +324,6 @@ fn ui_tree(world: &World) -> Vec<UiLine> {
     lines
 }
 
-/// Adds `entity` and, below it, its UI children to `lines`.
 fn walk(world: &World, entity: Entity, depth: usize, lines: &mut Vec<UiLine>) {
     if depth > MAX_TREE_DEPTH || is_tooling(world, entity) || !is_ui_node(world, entity) {
         return;
@@ -443,7 +349,6 @@ mod tests {
 
     use super::*;
 
-    /// A point at `frame` with `started` steps begun.
     fn point(frame: u32, started: usize, finished: bool) -> TracePoint {
         TracePoint {
             frame,
@@ -454,7 +359,6 @@ mod tests {
         }
     }
 
-    /// Points for a three-step script whose middle step takes no frame.
     fn trace() -> ScenarioTrace {
         let mut trace = ScenarioTrace::new(NoiseFilter::default());
         trace.push(point(0, 0, false));
@@ -508,7 +412,6 @@ mod tests {
         assert_eq!(step, Some(vec![target(Ok("at (10, 20)".into()))]));
     }
 
-    /// Three records: a pass, a failure and a step that never ran.
     fn records() -> Vec<StepRecord> {
         let record = |step: Step, outcome: Outcome| StepRecord {
             step,
@@ -589,7 +492,6 @@ mod tests {
         assert!(step_view(3, &steps, &trace).is_none());
     }
 
-    /// A trace point whose snapshot holds `score` and `time` resources.
     fn point_with(started: usize, finished: bool, score: &str, time: &str) -> TracePoint {
         let mut snapshot = WorldSnapshot::default();
         snapshot.set_resource("Score", "game::Score", "Score.0", score);
@@ -638,7 +540,6 @@ mod tests {
         assert_eq!(everything.hidden.len(), 0);
     }
 
-    /// The view of step `index` as the recorder's default filter lists it.
     fn step_view<'a>(
         index: usize,
         steps: &[StepRecord],
