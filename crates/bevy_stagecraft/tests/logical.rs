@@ -1,5 +1,3 @@
-//! Reading physical reflected values as logical, for scale-factor variants.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -16,15 +14,12 @@ use bevy_stagecraft::{
     Step, Target, Unit, Value, Variant,
 };
 
-/// A label with text, so a logical check can name a non-number field.
 #[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Tag {
-    /// The text.
     text: String,
 }
 
-/// A headless app with a 100 by 50 panel at logical (20, 10), named "panel".
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default())
@@ -34,12 +29,10 @@ fn app() -> App {
     app
 }
 
-/// A registry that knows every type the app registered.
 fn registry() -> Registry {
     Registry::default().with_types_of(app().world())
 }
 
-/// Spawns the panel the checks read.
 fn spawn(world: &mut World) {
     world.spawn(Camera2d);
     world.spawn((
@@ -58,7 +51,6 @@ fn spawn(world: &mut World) {
     ));
 }
 
-/// The panel's logical size and position, in logical pixels.
 fn logical_scenario() -> Scenario {
     let panel = || Target::name("panel");
     Scenario::new("logical")
@@ -94,7 +86,6 @@ fn logical_scenario() -> Scenario {
         ])
 }
 
-/// The default variant and the same window at scale factor 2.
 fn at_both_scales() -> [Variant; 2] {
     [
         Variant::default(),
@@ -104,7 +95,6 @@ fn at_both_scales() -> [Variant; 2] {
     ]
 }
 
-/// Plays `scenario` in `variant`.
 fn play(scenario: &Scenario, variant: &Variant) -> ScenarioReport {
     variant
         .apply(scenario)
@@ -206,7 +196,6 @@ fn a_logical_check_on_a_non_number_is_a_load_error() {
 
 #[test]
 fn a_logical_check_on_a_count_measure_does_nothing() {
-    // A count has no unit; `logical()` leaves the measure as it is.
     let measure = Measure::count::<Tag>();
     assert_eq!(measure.clone().logical(), measure);
 }

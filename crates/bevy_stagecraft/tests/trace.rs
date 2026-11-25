@@ -1,5 +1,3 @@
-//! The per-step trace of a run, and stopping a run before a step.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -16,11 +14,8 @@ use bevy_stagecraft::{
 };
 use common::{Activations, spawn_ui};
 
-/// Frames the app runs before the scenario begins, as the player's own runs do.
 const SETTLE_FRAMES: usize = 2;
 
-/// Clicks "Pause" once, waits, and checks it was activated; the check at the
-/// end wants it twice, so the scenario fails there.
 fn click_pause(wanted: u32) -> Scenario {
     Scenario::new("click pause")
         .window_size(320, 240)
@@ -105,8 +100,6 @@ fn a_run_not_traced_leaves_no_trace_behind() {
     assert!(trace.is_none());
 }
 
-/// Runs `scenario` in a headless app until the player halts before step
-/// `index`, and returns the app.
 fn halted_before(scenario: &Scenario, index: usize) -> App {
     let mut app = scenario.headless_app();
     Plugin::build(&ScenarioPlayerPlugin, &mut app);

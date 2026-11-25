@@ -1,10 +1,3 @@
-//! The gallery over a plain Bevy UI, with two headless windows.
-//!
-//! Real input is imitated by writing the messages `bevy_winit` would: the
-//! typed ones (`CursorMoved`, `MouseButtonInput`, `KeyboardInput`) and the
-//! `WindowEvent` wrapper Bevy's own mouse picking reads. Nothing here opens a
-//! real window; see the example for that.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -45,29 +38,22 @@ use bevy_stagecraft::{
     script::Setup,
 };
 
-/// How often the "Add" button was activated.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Count(u32);
 
-/// How often the reset hook ran.
 #[derive(Resource, Default)]
 struct Resets(u32);
 
-/// Marks what the app under test spawned, so its reset hook can remove it.
 #[derive(Component)]
 struct AppRoot;
 
-/// How many real mouse button messages the app's own systems have read.
 #[derive(Resource, Default)]
 struct SeenPresses(u32);
 
-/// The cursor position the app saw during `Update`.
 #[derive(Resource, Default)]
 struct SeenCursor(Option<Vec2>);
 
-/// Spawns the app: a camera, an "Add" button and a button named like one of
-/// the gallery's own.
 fn spawn_app(world: &mut World) {
     for (label, left) in [("Add", 100), ("Restart", 300)] {
         world
@@ -89,7 +75,6 @@ fn spawn_app(world: &mut World) {
     }
 }
 
-/// Puts the app's state back.
 fn reset_app(world: &mut World) {
     let roots: Vec<Entity> = world
         .query_filtered::<Entity, With<AppRoot>>()
@@ -102,7 +87,6 @@ fn reset_app(world: &mut World) {
     world.resource_mut::<Resets>().0 += 1;
 }
 
-/// Clicks "Add" the given number of times.
 fn adds(times: u32) -> Scenario {
     let mut steps = vec![Step::glide(Target::text("Add"), 10)];
     for _ in 0..times {
@@ -117,7 +101,6 @@ fn adds(times: u32) -> Scenario {
         .expect_check(Check::resource::<Count>(".0").eq(times))
 }
 
-/// Spawns the app with a disabled "Save" button besides.
 fn spawn_form(world: &mut World) {
     spawn_app(world);
     world.spawn((
@@ -137,28 +120,16 @@ fn spawn_form(world: &mut World) {
     ));
 }
 
-/// Where a recording of this app starts from, found by Bevy with no
-/// registration call.
 #[derive(Reflect, Debug, Clone, PartialEq)]
 #[reflect(AppSetup)]
 enum GallerySetup {
-    /// The app with the count at `count`, and the form if `form`.
-    Counted {
-        /// The count.
-        count: u32,
-        /// Whether the disabled "Save" button is there too.
-        form: bool,
-    },
-    /// A save that is gone, so the setup fails.
+    Counted { count: u32, form: bool },
     Lost,
 }
 
-/// Present when this app cannot capture its state.
 #[derive(Resource)]
 struct CaptureFails;
 
-/// Makes the app's setup capture nothing, so the gallery saves a world in the
-/// crate's own format.
 #[derive(Resource)]
 struct CaptureNothing;
 
@@ -195,7 +166,6 @@ impl AppSetup for GallerySetup {
     }
 }
 
-/// Shows the form and waits.
 fn form() -> Scenario {
     Scenario::new("form")
         .setup(spawn_form)
@@ -203,7 +173,6 @@ fn form() -> Scenario {
         .steps([Step::wait(5)])
 }
 
-/// Clicks the app's button named "Restart", which the gallery also has one of.
 fn restart_the_app_button() -> Scenario {
     Scenario::new("restart button")
         .setup(spawn_app)
@@ -211,7 +180,6 @@ fn restart_the_app_button() -> Scenario {
         .expect_check(Check::resource::<Count>(".0").eq(1_u32))
 }
 
-/// A catalogue of three scenarios.
 fn gallery() -> Gallery {
     Gallery::new()
         .group(
@@ -225,19 +193,16 @@ fn gallery() -> Gallery {
         .group("Forms", [form()])
 }
 
-/// The index of the form in [`gallery`].
 const FORM: usize = 3;
 
-/// A finished app with the gallery on top of headless windows.
 fn app_with(plugin: GalleryPlugin) -> App {
     let mut app = App::new();
     app.add_plugins((HeadlessPlugins::default(), plugin))
         .init_resource::<Count>()
         .init_resource::<Resets>()
         .init_resource::<SeenCursor>()
-        // The app's camera lives as long as the app: headless apps have no
-        // render world to sync a despawned camera to, so the reset hook must
-        // not despawn cameras (a real renderer copes).
+        // Headless apps have no render world to sync a despawned camera to:
+        // the reset hook must not despawn cameras.
         .add_systems(Startup, |mut commands: Commands| {
             commands.spawn(Camera2d);
         })
@@ -253,7 +218,6 @@ fn app_with(plugin: GalleryPlugin) -> App {
     app
 }
 
-/// The usual app: loops with a pause of two updates.
 fn gallery_app() -> App {
     app_with(
         GalleryPlugin::new(gallery())
@@ -262,7 +226,6 @@ fn gallery_app() -> App {
     )
 }
 
-/// Asks the gallery for something and lets one update carry it out.
 fn ask(app: &mut App, action: GalleryAction) {
     app.world_mut()
         .resource_mut::<GalleryState>()
@@ -270,7 +233,6 @@ fn ask(app: &mut App, action: GalleryAction) {
     app.update();
 }
 
-/// Updates until `done`, failing after `limit`.
 fn run_until(app: &mut App, limit: usize, done: impl Fn(&World) -> bool) {
     for _ in 0..limit {
         if done(app.world()) {
@@ -307,7 +269,6 @@ fn scenarios_window(app: &mut App) -> Entity {
         .expect("a Scenarios window")
 }
 
-/// What `bevy_winit` does for a moved real mouse.
 fn real_move(app: &mut App, window: Entity, position: Vec2) {
     if let Some(mut window) = app.world_mut().get_mut::<Window>(window) {
         window.set_cursor_position(Some(position));
@@ -322,7 +283,6 @@ fn real_move(app: &mut App, window: Entity, position: Vec2) {
     app.world_mut().write_message(moved);
 }
 
-/// What `bevy_winit` does for a real click: a press and a release.
 fn real_click(app: &mut App, window: Entity) {
     for state in [ButtonState::Pressed, ButtonState::Released] {
         let input = MouseButtonInput {
@@ -350,8 +310,6 @@ fn real_key(app: &mut App, window: Entity, key_code: KeyCode) {
     app.world_mut().write_message(input);
 }
 
-/// The middle of the button showing `text` (logical pixels), found by hand
-/// because the gallery's own nodes are hidden from target lookups.
 fn centre_of_button_with(app: &mut App, text: &str) -> Vec2 {
     let world = app.world_mut();
     let label = world
@@ -383,8 +341,6 @@ fn picking_a_scenario_resets_the_app_and_plays_it_to_a_passing_result() {
 fn a_failing_scenario_records_a_failing_result() {
     let mut app = gallery_app();
     ask(&mut app, GalleryAction::Select(1));
-    // `adds(3)` clicks three times; pause is irrelevant, it passes. Break it
-    // by taking a click away from the app between steps.
     run_until(&mut app, 400, |world| frames(world) > 12);
     app.world_mut().insert_resource(Count(100));
     run_until(&mut app, 400, finished);
@@ -436,8 +392,6 @@ fn step_to_next_step_runs_to_a_step_boundary_and_pauses() {
     for _ in 0..30 {
         app.update();
     }
-    // The first step is a ten-frame glide, so the stop is at the end of it,
-    // before the click.
     assert_eq!(frames(app.world()), 10, "the glide is over");
     assert_eq!(count(app.world()), 0, "the click has not happened");
     ask(&mut app, GalleryAction::StepStep);
@@ -459,7 +413,6 @@ fn slower_speeds_play_fewer_frames_per_update_and_faster_ones_more_without_stale
         ask(&mut app, GalleryAction::ToggleLoop);
         ask(&mut app, GalleryAction::SetSpeed(speed));
         ask(&mut app, GalleryAction::Select(0));
-        // Past the settling updates, then a fixed number of playing ones.
         for _ in 0..(updates + 3) {
             app.update();
         }
@@ -532,7 +485,6 @@ fn restart_resets_the_app_and_starts_over() {
 fn moving_and_clicking_the_real_mouse_over_the_app_changes_nothing_during_playback() {
     let mut app = gallery_app();
     ask(&mut app, GalleryAction::Select(0));
-    // Play to just before the glide ends, so the script cursor is moving.
     run_until(&mut app, 100, |world| frames(world) >= 4);
     assert!(
         !app.world()
@@ -546,7 +498,6 @@ fn moving_and_clicking_the_real_mouse_over_the_app_changes_nothing_during_playba
         .get::<Window>(window)
         .and_then(Window::cursor_position);
     let _ = script_cursor;
-    // The real mouse goes to "Add" and clicks.
     let add = centre_of_button_with(&mut app, "Add");
     real_move(&mut app, window, add);
     real_click(&mut app, window);
@@ -567,13 +518,11 @@ fn moving_and_clicking_the_real_mouse_over_the_app_changes_nothing_during_playba
             .resource::<ButtonInput<MouseButton>>()
             .pressed(MouseButton::Left),
     );
-    // What the app saw in Update is the script's cursor, not the real one.
     let seen = app.world().resource::<SeenCursor>().0.expect("a cursor");
     assert!(
         seen.distance(add) > 1.0 || frames(app.world()) > 10,
         "the script's, not the mouse's: {seen} vs {add}"
     );
-    // And the script still passes.
     run_until(&mut app, 400, finished);
     assert!(
         app.world().resource::<ScenarioReport>().passed(),
@@ -591,8 +540,8 @@ fn the_real_cursor_position_is_put_back_after_the_script_cursor_was_shown() {
     let window = primary(&mut app);
     real_move(&mut app, window, Vec2::new(500.0, 400.0));
     app.update();
-    // After the whole update the window holds the real position again, which
-    // is what keeps `bevy_winit` from moving the operating system's pointer.
+    // The window holds the real position again after the update, so
+    // `bevy_winit` never moves the operating system's pointer.
     let after = app
         .world()
         .get::<Window>(window)
@@ -620,7 +569,6 @@ fn take_over_pauses_the_script_and_gives_the_app_back_to_the_real_mouse() {
         app.update();
     }
     assert_eq!(frames(app.world()), held, "the script is paused");
-    // Let layout settle, then use the real mouse on the real button.
     let window = primary(&mut app);
     let add = centre_of_button_with(&mut app, "Add");
     real_move(&mut app, window, add);
@@ -777,7 +725,6 @@ fn real_clicks_on_the_scenarios_windows_buttons_work_during_playback() {
     );
 }
 
-/// The catalogue's scroll offset down the list, in logical pixels.
 fn catalogue_scroll(app: &mut App) -> f32 {
     app.world_mut()
         .query::<&ScrollPosition>()
@@ -786,7 +733,6 @@ fn catalogue_scroll(app: &mut App) -> f32 {
         .fold(0.0, f32::max)
 }
 
-/// What `bevy_winit` does for a real wheel turned one line down.
 fn real_wheel_down(app: &mut App, window: Entity) {
     let turn = MouseWheel {
         unit: MouseScrollUnit::Line,
@@ -871,7 +817,6 @@ fn space_and_arrow_keys_in_the_scenarios_window_drive_the_gallery_but_never_reac
         "Space plays"
     );
 
-    // The same key in the primary window goes nowhere while the script plays.
     let first = primary(&mut app);
     real_key(&mut app, first, KeyCode::Space);
     app.update();
@@ -912,7 +857,6 @@ fn export_writes_the_selected_scenario_as_ron_that_loads_again() {
     );
 }
 
-/// Counts the real mouse button messages the app reads, press and release.
 fn count_presses(mut reader: MessageReader<MouseButtonInput>, mut seen: ResMut<SeenPresses>) {
     seen.0 += u32::try_from(reader.read().count()).unwrap_or(u32::MAX);
 }
@@ -941,8 +885,6 @@ fn a_real_click_reaches_the_app_once_and_is_not_replayed_every_update() {
     );
 }
 
-/// The gallery, recording into `dir`; the app's setup is captured as a
-/// [`GallerySetup`].
 fn recording_app(dir: &std::path::Path) -> App {
     app_with(
         GalleryPlugin::new(gallery())
@@ -951,7 +893,6 @@ fn recording_app(dir: &std::path::Path) -> App {
     )
 }
 
-/// A fresh directory for one test.
 fn fresh_dir(name: &str) -> std::path::PathBuf {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     drop(std::fs::remove_dir_all(&dir));
@@ -973,7 +914,6 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
     app.update();
     app.update();
 
-    // Use the app by hand: three clicks on "Add".
     let window = primary(&mut app);
     let add = centre_of_button_with(&mut app, "Add");
     for step in 1..=8_u8 {
@@ -989,7 +929,6 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
     }
     assert_eq!(count(app.world()), 3, "the real clicks reached the app");
 
-    // Using the gallery's own window meanwhile is not part of the session.
     let second = scenarios_window(&mut app);
     let restart = centre_of_button_with(&mut app, "Step frame");
     real_move(&mut app, second, restart);
@@ -1048,8 +987,6 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
         "{text}"
     );
 
-    // The file runs like any other: load it and play it; its setup is the
-    // app's own value.
     let registry = Registry::default();
     let scenario = Scenario::from_script(script, &registry).expect("the file loads");
     let mut played = scenario.headless_app();
@@ -1059,7 +996,6 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
     assert_eq!(played.world().resource::<Count>().0, 3);
 }
 
-/// The index of the suggested check on `Count.0`, if there is one.
 fn count_suggestion(state: &GalleryState) -> Option<usize> {
     state
         .suggestions()?
@@ -1103,7 +1039,6 @@ fn stopping_a_recording_lists_the_suggested_checks_and_a_click_unticks_one_in_th
     };
     assert_eq!(read(&path).expect.len(), suggestions.len());
 
-    // Untick it with the real mouse, in the Scenarios window.
     let second = scenarios_window(&mut app);
     let at = centre_of_button_with(&mut app, &row);
     real_move(&mut app, second, at);
@@ -1210,7 +1145,6 @@ fn a_checkpoint_while_recording_in_the_gallery_gets_its_own_checklist_and_a_clic
     let check_step = Step::check(at_checkpoint.clone());
     assert!(read(&path).steps.contains(&check_step));
 
-    // Untick it with the real mouse, in the Scenarios window.
     let second = scenarios_window(&mut app);
     let row = centre_of_button_with(&mut app, &format!("[x] {at_checkpoint}"));
     real_move(&mut app, second, row);
@@ -1291,7 +1225,6 @@ fn the_wheel_scrolls_long_checklists_while_the_pointer_is_over_them() {
     assert!(others <= 0.0, "the catalogue stayed put");
 }
 
-/// How many checks the gallery's checklist has.
 fn suggestions_len(app: &App) -> usize {
     app.world()
         .resource::<GalleryState>()
@@ -1306,8 +1239,6 @@ fn the_gallerys_buttons_are_never_named_as_targets_in_a_recording() {
     ask(&mut app, GalleryAction::Record);
     app.update();
     app.update();
-    // The app has no UI yet; click where the gallery's button would be if its
-    // window were the primary one.
     let window = primary(&mut app);
     real_move(&mut app, window, Vec2::new(30.0, 30.0));
     app.update();
@@ -1449,11 +1380,9 @@ fn new_is_refused_while_recording_and_its_buttons_ask_for_it() {
     assert!(app.world().resource::<GalleryState>().is_recording());
 }
 
-/// How many times the pointer went over a node of the app.
 #[derive(Resource, Default)]
 struct SeenOvers(u32);
 
-/// Counts the pointer going over the app's buttons or their labels.
 fn count_overs(
     over: On<PointerOver>,
     roots: Query<(), With<AppRoot>>,
@@ -1464,7 +1393,6 @@ fn count_overs(
     }
 }
 
-/// The entity of the button labelled `text`.
 fn button_entity(app: &mut App, text: &str) -> Entity {
     let world = app.world_mut();
     let label = world
@@ -1476,8 +1404,6 @@ fn button_entity(app: &mut App, text: &str) -> Entity {
     world.get::<ChildOf>(label).expect("a button").parent()
 }
 
-/// Turns pick mode on, points the real mouse at the button labelled `text`
-/// in the app window and clicks it.
 fn pick_button(app: &mut App, text: &str) {
     ask(app, GalleryAction::TogglePick);
     assert!(
@@ -1520,7 +1446,6 @@ fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_p
         assert_eq!(picked.target(), Some(&save_target));
         assert!(picked.checks().contains(&wanted), "{:?}", picked.checks());
     }
-    // The outline is the overlay's, so it is never hit.
     let outlines = {
         let world = app.world_mut();
         world
@@ -1536,7 +1461,6 @@ fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_p
             .all(|pickable| *pickable == Pickable::IGNORE)
     );
 
-    // Choose it with the real mouse, in the Scenarios window.
     let second = scenarios_window(&mut app);
     let spelled = ron::to_string(&wanted).expect("the check is written as RON");
     let row = centre_of_button_with(&mut app, &format!("[+] {spelled}"));
@@ -1559,7 +1483,6 @@ fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_p
         !script.steps.iter().any(|step| *step == Step::click()),
         "the pick click is not part of the recording: {text}"
     );
-    // The app's setup brings the form back.
     let scenario = Scenario::from_script(script, &Registry::default()).expect("the file loads");
     let mut played = scenario.headless_app();
     played.insert_resource(Resets::default());
@@ -1604,7 +1527,6 @@ fn picking_does_not_change_the_apps_state() {
     let after = bevy_stagecraft::WorldSnapshot::take(app.world(), &NoiseFilter::default());
     assert_eq!(before, after);
 
-    // Escape in the app window ends pick mode, and the app gets its mouse back.
     let window = primary(&mut app);
     real_key(&mut app, window, KeyCode::Escape);
     app.update();
@@ -1720,7 +1642,6 @@ fn a_scenario_whose_setup_fails_says_so_and_plays_no_step() {
     assert!(report.checks.is_empty(), "no step played: {report:?}");
 }
 
-/// A scenario that does nothing and fails its expectation.
 fn never_satisfied() -> Scenario {
     Scenario::new("never satisfied")
         .setup(spawn_app)
@@ -1728,7 +1649,6 @@ fn never_satisfied() -> Scenario {
         .expect_check(Check::resource::<Count>(".0").eq(99_u32))
 }
 
-/// The exit the app asked for during the last update, if any.
 fn exit_asked(app: &App) -> Option<AppExit> {
     app.world()
         .resource::<Messages<AppExit>>()
@@ -1737,7 +1657,6 @@ fn exit_asked(app: &App) -> Option<AppExit> {
         .cloned()
 }
 
-/// Runs a gallery of these scenarios in run-all mode until it has a report.
 fn run_all(scenarios: impl IntoIterator<Item = Scenario>) -> (App, AppExit) {
     let mut app = app_with(
         GalleryPlugin::new(Gallery::new().group("All", scenarios))
@@ -1812,8 +1731,6 @@ fn the_controls_do_nothing_while_everything_runs() {
     assert!(state.is_playing(), "pause was refused");
 }
 
-/// Plays the jump to `step` of the first scenario and waits until the
-/// gallery has paused there.
 fn jumped_to(app: &mut App, step: usize) {
     ask(app, GalleryAction::Select(0));
     ask(app, GalleryAction::JumpTo(step));
@@ -1833,7 +1750,6 @@ fn jumping_to_a_step_lands_on_the_frame_a_straight_run_reaches_before_it() {
         .spawn(Camera2d);
     let (report, trace) = scenario.run_in_traced(&mut headless, NoiseFilter::default());
     assert!(report.passed(), "{report:?}");
-    // Steps: 0 glide, 1 click, 2 wait, 3 click, 4 wait, 5 check.
     for step in [1, 3, 5] {
         let mut app = gallery_app();
         jumped_to(&mut app, step);
@@ -1856,7 +1772,6 @@ fn jumping_to_a_step_leaves_the_app_as_the_steps_before_it_made_it() {
         1,
         "the first click happened, not the second"
     );
-    // The paused app stays put however long it is looked at.
     for _ in 0..30 {
         app.update();
     }
@@ -1903,7 +1818,6 @@ fn a_jump_is_refused_while_recording() {
     assert_eq!(state.jumping_to(), None);
 }
 
-/// Every text on screen, in no particular order.
 fn texts(app: &mut App) -> Vec<String> {
     app.world_mut()
         .query::<&Text>()
@@ -1912,12 +1826,10 @@ fn texts(app: &mut App) -> Vec<String> {
         .collect()
 }
 
-/// Whether some text on screen is exactly `wanted`.
 fn shows(app: &mut App, wanted: &str) -> bool {
     texts(app).iter().any(|text| text == wanted)
 }
 
-/// Selects the first entry and shows its trace, as the person would.
 fn on_the_trace_tab(app: &mut App) {
     ask(app, GalleryAction::Select(0));
     ask(app, GalleryAction::ShowTab(GalleryTab::Trace));
@@ -2082,7 +1994,6 @@ fn the_trace_tab_redraws_when_the_step_or_the_world_looked_at_changes() {
 fn the_tabs_swap_the_step_list_between_playing_up_to_a_step_and_looking_at_one() {
     let mut app = gallery_app();
     on_the_trace_tab(&mut app);
-    // The Trace tab has nothing to list until the script has played a while.
     run_until(&mut app, 500, |world| frames(world) >= 14);
     ask(&mut app, GalleryAction::TogglePlay);
     app.update();
@@ -2112,12 +2023,10 @@ fn running_everything_traces_nothing() {
     assert!(app.world().resource::<ScenarioPlayer>().trace().is_none());
 }
 
-/// Whether some text on screen starts with `prefix`, as a change line does.
 fn lists_change(app: &mut App, prefix: &str) -> bool {
     texts(app).iter().any(|text| text.starts_with(prefix))
 }
 
-/// How many changes the Trace tab says its filter hides.
 fn hidden_count(app: &mut App) -> Option<usize> {
     texts(app).iter().find_map(|text| {
         text.strip_prefix("Hidden by the filter (")?
@@ -2127,8 +2036,6 @@ fn hidden_count(app: &mut App) -> Option<usize> {
     })
 }
 
-/// Plays the first scenario to its end and looks in the Trace tab at the
-/// first step that changed the app's `Count`; returns that step.
 fn at_the_step_that_counted(app: &mut App) -> usize {
     on_the_trace_tab(app);
     ask(app, GalleryAction::ToggleLoop);
@@ -2162,7 +2069,6 @@ fn the_trace_tab_lists_the_apps_changes_under_the_apps_filter_and_everything_on_
         texts(&mut app)
     );
     assert_eq!(hidden_count(&mut app), None);
-    // Nothing was played again to change what is listed.
     assert!(finished(app.world()));
     ask(&mut app, GalleryAction::UseNoise(NoisePreset::App));
     ask(&mut app, GalleryAction::InspectStep(step));
@@ -2175,7 +2081,6 @@ fn hiding_a_type_in_the_trace_tab_moves_its_changes_to_the_hidden_list_and_showi
     let mut app = gallery_app();
     at_the_step_that_counted(&mut app);
     let hidden = hidden_count(&mut app).unwrap_or(0);
-    // The only type the app's filter lets through in this step is the app's.
     ask(&mut app, GalleryAction::ToggleType(0));
     assert!(!lists_change(&mut app, "resource Count.0"));
     assert_eq!(hidden_count(&mut app), Some(hidden + 1));
@@ -2246,7 +2151,6 @@ fn a_type_a_keep_pattern_of_the_app_matches_cannot_be_hidden() {
     assert_eq!(state.noise_preset(), Some(NoisePreset::App));
 }
 
-/// The default variant and a larger window.
 fn default_and_large() -> [Variant; 2] {
     [
         Variant::default(),
@@ -2254,7 +2158,6 @@ fn default_and_large() -> [Variant; 2] {
     ]
 }
 
-/// A gallery app over `scenarios`, listing `variants`.
 fn variant_app(scenarios: impl IntoIterator<Item = Scenario>, variants: [Variant; 2]) -> App {
     app_with(
         GalleryPlugin::new(Gallery::new().group("All", scenarios).variants(variants))
@@ -2263,7 +2166,6 @@ fn variant_app(scenarios: impl IntoIterator<Item = Scenario>, variants: [Variant
     )
 }
 
-/// The size of the primary window, in logical pixels.
 fn window_size_of(app: &mut App) -> Vec2 {
     let window = primary(app);
     app.world()
@@ -2415,7 +2317,6 @@ fn running_everything_skips_a_scenario_that_does_not_name_the_variant() {
     assert!(summary.contains("SKIP add 2 [large]"), "{summary}");
 }
 
-/// Plays the whole catalogue and returns its report.
 fn run_everything(gallery: Gallery) -> GalleryRunReport {
     let mut app = app_with(
         GalleryPlugin::new(gallery)
@@ -2533,8 +2434,6 @@ fn save_as_setup_writes_the_world_for_an_app_without_a_save_format() {
     app.world_mut().insert_resource(CaptureNothing);
     ask(&mut app, GalleryAction::Select(0));
     run_until(&mut app, 100, |world| frames(world) >= 4);
-    // Taken over, so the script no longer plays, with its two clicks done or
-    // not: whatever the count is.
     ask(&mut app, GalleryAction::TakeOver);
     assert!(app.world().resource::<GalleryState>().can_save_as_setup());
     let count = app.world().resource::<Count>().0;
@@ -2550,11 +2449,9 @@ fn save_as_setup_writes_the_world_for_an_app_without_a_save_format() {
     assert!(status.contains("add_2.scene.ron"), "{status}");
     assert!(status.contains("Scene("), "{status}");
 
-    // A second save does not overwrite the first.
     ask(&mut app, GalleryAction::SaveAsSetup);
     assert!(dir.join("add_2-2.scene.ron").exists());
 
-    // And the saved world is a setup that brings the count back.
     app.world_mut().resource_mut::<Count>().0 = 99;
     let scenario = Scenario::new("from the save")
         .scene_setup("add_2.scene.ron")
@@ -2590,7 +2487,6 @@ fn save_as_setup_does_nothing_while_a_script_plays() {
     );
     assert!(!dir.exists(), "nothing was written");
 
-    // Paused, the same world can be saved.
     ask(&mut app, GalleryAction::TogglePlay);
     let state = app.world().resource::<GalleryState>();
     assert!(!state.is_script_playing());
@@ -2598,7 +2494,6 @@ fn save_as_setup_does_nothing_while_a_script_plays() {
     ask(&mut app, GalleryAction::SaveAsSetup);
     assert!(dir.join("add_2.scene.ron").exists());
 
-    // And so is the finished one.
     ask(&mut app, GalleryAction::TogglePlay);
     run_until(&mut app, 400, finished);
     run_until(&mut app, 10, |world| {
@@ -2618,22 +2513,17 @@ fn save_as_setup_says_why_it_failed() {
     assert!(status.contains("no way to save this app"), "{status}");
 }
 
-/// A scenario with a long list of steps, so the details panel has plenty to
-/// show.
 fn long_scenario() -> Scenario {
     let steps: Vec<Step> = (0..40).map(|_| Step::wait(1)).collect();
     Scenario::new("long").setup(spawn_app).steps(steps)
 }
 
-/// A gallery of `entries` scenarios, the first of which is [`long_scenario`].
 fn gallery_of(entries: u32) -> Gallery {
     let mut all = vec![GalleryEntry::new(long_scenario())];
     all.extend((1..entries).map(|at| GalleryEntry::new(adds(at))));
     Gallery::new().group("All", all)
 }
 
-/// The heights, in logical pixels, of the catalogue and of the details panel:
-/// the two scrolling lists of the Scenarios window, top to bottom.
 fn panel_heights(app: &mut App) -> (f32, f32) {
     let world = app.world_mut();
     let mut lists: Vec<(f32, f32)> = world
@@ -2652,7 +2542,6 @@ fn panel_heights(app: &mut App) -> (f32, f32) {
     (lists[0].1, lists[1].1)
 }
 
-/// Updates a few times so the heights set from one layout have been laid out.
 fn settle(app: &mut App) {
     for _ in 0..6 {
         app.update();
@@ -2678,7 +2567,6 @@ fn a_long_catalogue_and_a_long_list_of_steps_share_the_window_half_and_half() {
 #[test]
 fn a_long_catalogue_leaves_a_selected_scenarios_details_a_fifth_at_least() {
     let mut app = app_with(GalleryPlugin::new(gallery_of(60)).with_reset(reset_app));
-    // Nothing selected: the details panel needs almost nothing.
     settle(&mut app);
     let (catalogue, details) = panel_heights(&mut app);
     let share = details / (catalogue + details);
@@ -2696,7 +2584,6 @@ fn a_short_catalogue_gives_the_rest_to_a_long_list_of_steps() {
     assert!(share >= 0.19, "the catalogue had {share}");
 }
 
-/// A scenario file that expects the count to be `count`, on a fresh app.
 fn scenario_file(count: u32) -> String {
     Scenario::new("from a file")
         .steps([Step::wait(2)])
@@ -2705,7 +2592,6 @@ fn scenario_file(count: u32) -> String {
         .expect("a scenario exports")
 }
 
-/// A fresh directory for scenario files, named for the test.
 fn scenario_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("rin-gallery-{name}-{}", std::process::id()));
     drop(std::fs::remove_dir_all(&dir));
@@ -2713,7 +2599,6 @@ fn scenario_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// A gallery app over the `.ron` files in `dir`.
 fn watching_app(dir: &std::path::Path) -> App {
     app_with(
         GalleryPlugin::new(Gallery::new().directory("Files", dir, &Registry::default()))
@@ -2722,7 +2607,6 @@ fn watching_app(dir: &std::path::Path) -> App {
     )
 }
 
-/// Lets the gallery look at its files once.
 fn let_the_gallery_look(app: &mut App) {
     for _ in 0..bevy_stagecraft::gallery::WATCH_INTERVAL {
         app.update();
@@ -2765,12 +2649,10 @@ fn a_file_with_a_syntax_error_shows_the_error_and_keeps_the_previous_version() {
         "the error is kept for the catalogue"
     );
     assert!(!entry.is_unloaded(), "the previous version is still there");
-    // The previous version still plays, and passes.
     ask(&mut app, GalleryAction::Select(0));
     run_until(&mut app, 400, |world| {
         world.resource::<GalleryState>().result(0) == Some(ScenarioResult::Passed)
     });
-    // Fixing the file clears the error.
     std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
     let_the_gallery_look(&mut app);
     assert!(
@@ -2832,7 +2714,6 @@ fn a_directory_that_cannot_be_read_keeps_the_entries_and_recovers_on_a_later_sca
     std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
     std::fs::write(dir.join("b.ron"), scenario_file(0)).expect("written");
     let mut app = watching_app(&dir);
-    // The directory cannot be scanned: moving it away makes the read fail.
     std::fs::rename(&dir, &away).expect("moved");
     let_the_gallery_look(&mut app);
     let gallery = app.world().resource::<Gallery>();
@@ -2848,7 +2729,6 @@ fn a_directory_that_cannot_be_read_keeps_the_entries_and_recovers_on_a_later_sca
             entry.error()
         );
     }
-    // The directory comes back, unchanged: the errors clear.
     std::fs::rename(&away, &dir).expect("moved back");
     let_the_gallery_look(&mut app);
     let gallery = app.world().resource::<Gallery>();
@@ -2870,8 +2750,8 @@ fn a_file_moved_away_and_back_unchanged_is_loaded_again_and_its_error_clears() {
             .get(0)
             .is_some_and(|entry| entry.error().is_none())
     );
-    // Renaming keeps the modification time and the length, so the stamp of the
-    // file that comes back is the one of the last good read.
+    // Renaming keeps the modification time and length, so the restored
+    // file's stamp is the one of the last good read.
     std::fs::rename(&file, &away).expect("moved away");
     let_the_gallery_look(&mut app);
     let gallery = app.world().resource::<Gallery>();
@@ -2890,7 +2770,6 @@ fn a_file_moved_away_and_back_unchanged_is_loaded_again_and_its_error_clears() {
     );
 }
 
-/// A gallery with one scenario: a finger down on "Add" for a while, then up.
 fn touch_gallery_app() -> App {
     let scenario = Scenario::new("touch")
         .setup(spawn_app)
@@ -2909,7 +2788,6 @@ fn touch_gallery_app() -> App {
     )
 }
 
-/// How many fingers the overlay draws now.
 fn fingers_drawn(app: &mut App) -> usize {
     let world = app.world_mut();
     world.query::<&OverlayFinger>().iter(world).count()
@@ -2930,7 +2808,6 @@ fn a_touch_scenario_plays_in_the_gallery_and_real_touch_to_the_app_is_removed() 
             .is_touch_enabled,
         "Bevy's own touch picking is off while the script plays"
     );
-    // A real finger on the app's window never gets through.
     let window = primary(&mut app);
     app.world_mut().write_message(TouchInput {
         phase: TouchPhase::Started,

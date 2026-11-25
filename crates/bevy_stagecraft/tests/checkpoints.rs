@@ -1,8 +1,3 @@
-//! Checkpoints while recording a session, on a plain Bevy UI: a "+1" button
-//! and a label showing the count.
-//!
-//! Real input is imitated by writing the messages `bevy_winit` would.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -33,27 +28,20 @@ use bevy_stagecraft::{
     session,
 };
 
-/// What the "+1" button counts.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Counter(u32);
 
-/// The label that shows the count.
 #[derive(Component)]
 struct CountLabel;
 
-/// Every key the app saw pressed, through each way an app can read keys.
 #[derive(Resource, Default, Debug)]
 struct SeenKeys {
-    /// From `KeyboardInput` messages.
     messages: Vec<KeyCode>,
-    /// From `WindowEvent` messages.
     window_events: Vec<KeyCode>,
-    /// From `ButtonInput<KeyCode>`.
     just_pressed: Vec<KeyCode>,
 }
 
-/// Spawns the counter's UI and its camera.
 fn spawn_ui(world: &mut World) {
     world.init_resource::<Counter>();
     world.spawn(Camera2d);
@@ -84,7 +72,6 @@ fn spawn_ui(world: &mut World) {
     ));
 }
 
-/// Keeps the label in step with the counter.
 fn show_count(counter: Res<Counter>, mut labels: Query<&mut Text, With<CountLabel>>) {
     for mut text in &mut labels {
         let wanted = format!("Count: {}", counter.0);
@@ -94,7 +81,6 @@ fn show_count(counter: Res<Counter>, mut labels: Query<&mut Text, With<CountLabe
     }
 }
 
-/// Notes every key press the app can see.
 fn watch_keys(
     mut seen: ResMut<SeenKeys>,
     mut keys: MessageReader<KeyboardInput>,
@@ -116,7 +102,6 @@ fn watch_keys(
     seen.just_pressed.extend(input.get_just_pressed().copied());
 }
 
-/// A headless app with the counter, before its UI is spawned.
 fn bare_app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default().with_window_size(640, 480))
@@ -124,7 +109,6 @@ fn bare_app() -> App {
     app
 }
 
-/// The app with a session plugin writing into `dir`, its UI up and laid out.
 fn recording_app(dir: &std::path::Path, hooks: SessionHooks, overlay: bool) -> App {
     let mut app = bare_app();
     app.add_plugins(SessionPlugin::new(dir).with_hooks(hooks))
@@ -142,7 +126,6 @@ fn recording_app(dir: &std::path::Path, hooks: SessionHooks, overlay: bool) -> A
     app
 }
 
-/// A fresh directory for one test's files.
 fn dir(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     drop(fs::remove_dir_all(&dir));
@@ -156,7 +139,6 @@ fn primary(app: &mut App) -> Entity {
         .expect("a primary window")
 }
 
-/// What `bevy_winit` does for a moved real mouse.
 fn real_move(app: &mut App, position: Vec2) {
     let window = primary(app);
     if let Some(mut window) = app.world_mut().get_mut::<Window>(window) {
@@ -173,7 +155,6 @@ fn real_move(app: &mut App, position: Vec2) {
     app.update();
 }
 
-/// A real press and release, one update apart.
 fn real_click(app: &mut App) {
     let window = primary(app);
     for state in [ButtonState::Pressed, ButtonState::Released] {
@@ -188,7 +169,6 @@ fn real_click(app: &mut App) {
     }
 }
 
-/// What `bevy_winit` writes for a real key changing state, without updating.
 fn write_key(app: &mut App, key_code: KeyCode, logical_key: Key, state: ButtonState) {
     let window = primary(app);
     let input = KeyboardInput {
@@ -204,7 +184,6 @@ fn write_key(app: &mut App, key_code: KeyCode, logical_key: Key, state: ButtonSt
     app.world_mut().write_message(input);
 }
 
-/// A real key pressed and released, one update apart.
 fn real_tap(app: &mut App, key_code: KeyCode, logical_key: &Key) {
     for state in [ButtonState::Pressed, ButtonState::Released] {
         write_key(app, key_code, logical_key.clone(), state);
@@ -212,7 +191,6 @@ fn real_tap(app: &mut App, key_code: KeyCode, logical_key: &Key) {
     }
 }
 
-/// The middle of the button labelled "+1", in logical pixels.
 fn button_centre(app: &mut App) -> Vec2 {
     let world = app.world_mut();
     let label = world
@@ -227,7 +205,6 @@ fn button_centre(app: &mut App) -> Vec2 {
     transform.affine().translation * node.inverse_scale_factor
 }
 
-/// Clicks "+1" and lets the app settle.
 fn click_and_settle(app: &mut App) {
     real_click(app);
     for _ in 0..10 {
@@ -235,8 +212,6 @@ fn click_and_settle(app: &mut App) {
     }
 }
 
-/// Records three clicks on "+1" with a checkpoint (F8) after each of the
-/// first two, and returns what was saved and the app.
 fn record_with_two_checkpoints(name: &str) -> (SavedSession, App) {
     let dir = dir(name);
     let mut app = recording_app(&dir, SessionHooks::new(), false);
@@ -255,7 +230,6 @@ fn record_with_two_checkpoints(name: &str) -> (SavedSession, App) {
     (saved, app)
 }
 
-/// Plays the recording's file in a fresh app with the same start.
 fn play(path: &std::path::Path) -> ScenarioReport {
     let text = fs::read_to_string(path).expect("the file was written");
     let script = Script::from_ron(&text).expect("the file reads back");
@@ -268,7 +242,6 @@ fn play(path: &std::path::Path) -> ScenarioReport {
     scenario.run_in(&mut app)
 }
 
-/// Where `wanted` is among `steps`.
 fn position_of(steps: &[Step], wanted: &Step) -> usize {
     steps
         .iter()
@@ -306,7 +279,6 @@ fn a_session_with_two_checkpoints_yields_check_steps_at_both_points_then_expect(
         "{steps:#?}"
     );
 
-    // The end is compared with the last checkpoint, not with the start.
     let expect = &saved.script.expect;
     assert!(
         expect.contains(&Check::resource::<Counter>(".0").eq(3_u32)),
@@ -315,7 +287,6 @@ fn a_session_with_two_checkpoints_yields_check_steps_at_both_points_then_expect(
     assert!(expect.contains(&!Check::shows("Count: 2")), "{expect:#?}");
     assert!(!expect.contains(&!Check::shows("Count: 0")), "{expect:#?}");
 
-    // Every candidate starts ticked: the file has them all where they go.
     let check_steps: Vec<&Check> = steps
         .iter()
         .filter_map(|step| match step {
@@ -363,7 +334,6 @@ fn other_keys_pressed_with_the_checkpoint_key_reach_the_app_once() {
     let dir = dir("checkpoints-other-keys");
     let mut app = recording_app(&dir, SessionHooks::new(), false);
     session::start(app.world_mut(), "keys").expect("recording starts");
-    // A key the update before, then another key with the checkpoint key.
     write_key(
         &mut app,
         KeyCode::KeyA,
@@ -447,7 +417,6 @@ fn unticked_checkpoint_candidates_leave_the_file_and_the_rest_still_pass() {
     assert!(report.passed(), "{:#?}", report.failures());
     assert_eq!(report.checks.len(), 2);
 
-    // Writing the expect alone keeps the checkpoints' choice.
     saved.save_expect(Vec::new()).expect("written again");
     let script = Script::from_ron(&fs::read_to_string(&saved.path).expect("the file"))
         .expect("it reads back");
@@ -556,7 +525,6 @@ fn the_overlay_flashes_and_names_a_checkpoint_then_fades() {
     assert!(!strip_shown(&mut app));
 }
 
-/// What `bevy_winit` writes for a key that types `text`, without updating.
 fn write_typed(app: &mut App, key_code: KeyCode, text: &str, state: ButtonState) {
     let window = primary(app);
     let input = KeyboardInput {
@@ -572,7 +540,6 @@ fn write_typed(app: &mut App, key_code: KeyCode, text: &str, state: ButtonState)
     app.world_mut().write_message(input);
 }
 
-/// Types `text` letter by letter, one update for each press and release.
 fn type_text(app: &mut App, text: &str) {
     for letter in text.chars() {
         let letter = letter.to_string();
@@ -583,7 +550,6 @@ fn type_text(app: &mut App, text: &str) {
     }
 }
 
-/// The steps of the first top-level group called `name`.
 fn group_steps<'a>(steps: &'a [Step], name: &str) -> Option<&'a [Step]> {
     steps.iter().find_map(|step| match step {
         Step::Group { name: found, steps } if found == name => Some(steps.as_slice()),
@@ -591,9 +557,6 @@ fn group_steps<'a>(steps: &'a [Step], name: &str) -> Option<&'a [Step]> {
     })
 }
 
-/// Records a click on "+1" and a checkpoint after it, then types `typed`
-/// (keeping it with Enter when `finish` is that key), another click, and the
-/// stop. Returns what was saved and the app.
 fn record_named_checkpoint(
     name: &str,
     typed: &str,
@@ -661,7 +624,6 @@ fn a_named_checkpoint_plays_back_and_its_failures_show_the_group() {
         "the steps after it are in no group"
     );
 
-    // A checkpoint's check that does not hold names the group it is in.
     let mut script = saved.script;
     if let Some(Step::Group { steps, .. }) = script.steps.first_mut() {
         steps.push(Step::check(Check::shows("Count: 99")));
@@ -856,7 +818,6 @@ fn saving_the_checks_again_keeps_the_groups() {
     assert!(report.passed(), "{:#?}", report.failures());
 }
 
-/// How many of `steps` are clicks.
 fn clicks_in(steps: &[Step]) -> usize {
     steps.iter().filter(|step| **step == Step::click()).count()
 }

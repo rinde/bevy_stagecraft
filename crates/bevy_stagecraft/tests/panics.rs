@@ -1,6 +1,3 @@
-//! A panic in the app under test fails the step it happened in; the runner
-//! goes on.
-
 #![allow(
     clippy::expect_used,
     clippy::disallowed_methods,
@@ -16,7 +13,6 @@ use bevy::{
 };
 use bevy_stagecraft::{Outcome, Registry, Scenario, Step, Target, files::run_ron_files};
 
-/// A camera and a "Boom" button whose observer panics.
 fn spawn_panicking_button(world: &mut World) {
     world.spawn(Camera2d);
     world
@@ -33,7 +29,6 @@ fn spawn_panicking_button(world: &mut World) {
         });
 }
 
-/// Clicks "Boom", then waits twice.
 fn boom() -> Scenario {
     Scenario::new("boom")
         .window_size(200, 100)
@@ -46,12 +41,10 @@ fn boom() -> Scenario {
         ])
 }
 
-/// Does nothing and passes.
 fn calm() -> Scenario {
     Scenario::new("calm").steps([Step::wait(2)])
 }
 
-/// The handler an app had before a run, which a run must put back.
 fn app_handler(_: BevyError, _: ErrorContext) {}
 
 #[test]

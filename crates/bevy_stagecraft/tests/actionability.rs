@@ -1,5 +1,3 @@
-//! Steps wait until their target can be acted on, over a plain Bevy UI.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -18,15 +16,12 @@ use bevy_stagecraft::{
     Step, Target, TargetDescriptions, describe_step,
 };
 
-/// How many times the "Go" button was activated.
 #[derive(Resource, Default)]
 struct Activations(u32);
 
-/// The player frame on which a late system does its thing.
 #[derive(Resource, Clone, Copy)]
 struct AtFrame(u32);
 
-/// The "Go" button, at (100, 25) with a size of 100 by 50.
 fn go_button() -> impl Bundle {
     (
         Button,
@@ -43,26 +38,22 @@ fn go_button() -> impl Bundle {
     )
 }
 
-/// Counts an activation of the button it observes.
 fn count(_: On<Activate>, mut activations: ResMut<Activations>) {
     activations.0 += 1;
 }
 
-/// A camera and the "Go" button.
 fn spawn_go(world: &mut World) {
     world.init_resource::<Activations>();
     world.spawn(Camera2d);
     world.spawn(go_button()).observe(count);
 }
 
-/// Spawns the "Go" button on the player frame [`AtFrame`] says.
 fn spawn_late(mut commands: Commands, report: Res<ScenarioReport>, on: Res<AtFrame>) {
     if report.frames == on.0 {
         commands.spawn(go_button()).observe(count);
     }
 }
 
-/// Enables every button on the player frame [`AtFrame`] says.
 fn enable_late(
     mut commands: Commands,
     report: Res<ScenarioReport>,
@@ -76,8 +67,6 @@ fn enable_late(
     }
 }
 
-/// Moves every button right by 10 pixels each frame, from the first frame
-/// of the app until the player frame [`AtFrame`] says.
 fn slide(
     report: Res<ScenarioReport>,
     on: Res<AtFrame>,
@@ -92,8 +81,6 @@ fn slide(
     }
 }
 
-/// Plays `scenario` with `system` running in `Update` and [`AtFrame`] at `on`,
-/// and returns the report and the activations.
 fn play_with<M>(
     scenario: &Scenario,
     on: u32,
@@ -108,7 +95,6 @@ fn play_with<M>(
     (report, activations)
 }
 
-/// Plays `scenario` and returns the report and the activations.
 fn play(scenario: &Scenario) -> (ScenarioReport, u32) {
     let mut app = scenario.headless_app();
     let report = scenario.run_in(&mut app);
@@ -116,12 +102,10 @@ fn play(scenario: &Scenario) -> (ScenarioReport, u32) {
     (report, activations)
 }
 
-/// Move to "Go" and click, with no `Wait`.
 fn click_go(name: &str) -> Scenario {
     Scenario::new(name).steps([Step::move_to(Target::text("Go")), Step::click()])
 }
 
-/// The failure message of the step at `index`.
 fn failure(report: &ScenarioReport, index: usize) -> String {
     match &report.steps[index].outcome {
         Outcome::Fail(message) => message.clone(),

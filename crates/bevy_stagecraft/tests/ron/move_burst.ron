@@ -4,7 +4,6 @@
     name: "move burst",
     setup: App(PlainUi),
     steps: [
-        // Several pointer moves in one frame, ending over "Pause".
         MoveBurst([(150.0, 50.0), (152.0, 51.0), (154.0, 52.0)]),
         Click(Left),
         Wait(1),

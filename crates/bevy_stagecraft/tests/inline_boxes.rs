@@ -1,6 +1,3 @@
-//! Text with images and boxes set inline: read as its text alone, and shown
-//! in tree snapshots as lines of their own.
-
 #![allow(
     clippy::expect_used,
     clippy::panic,
@@ -19,12 +16,10 @@ use bevy_stagecraft::{
     Check, HeadlessPlugins, Outcome, Scenario, Step, Target, TextMatch, WidgetRole, tree_snapshot,
 };
 
-/// The button the tests look at.
 fn button() -> Target {
     Target::role(WidgetRole::Button, "Save now")
 }
 
-/// A button whose label has an icon in front of it and a box after it.
 fn spawn_button_with_icon(world: &mut World) {
     world.spawn(Camera2d);
     world.spawn((
@@ -44,7 +39,6 @@ fn spawn_button_with_icon(world: &mut World) {
                         kind: InlineBoxKind::InFlow,
                         size: Vec2::splat(8.0),
                     },
-                    // Nothing in a box is part of the label.
                     children![Text::new("Hidden")],
                 ),
             ],
@@ -52,7 +46,6 @@ fn spawn_button_with_icon(world: &mut World) {
     ));
 }
 
-/// The outcome of the one step of a scenario over the button.
 fn outcome_of(step: Step) -> Outcome {
     let report = Scenario::new("inline")
         .setup(spawn_button_with_icon)

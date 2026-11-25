@@ -1,6 +1,3 @@
-//! UI tree snapshots as a check: the tree below a node as lines of role,
-//! label and states, matched partially, with a line diff when it differs.
-
 #![allow(
     clippy::expect_used,
     clippy::panic,
@@ -22,17 +19,12 @@ use bevy_stagecraft::{
 };
 use common::{registry, spawn_ui};
 
-/// The name of the panel the controls sit in.
 const TOOLBAR: &str = "Toolbar";
 
-/// A labelled button.
 fn button(label: &'static str) -> impl Bundle {
     (Button, Node::default(), children![Text::new(label)])
 }
 
-/// Spawns a camera and a named panel holding two buttons (the second
-/// disabled), a checked checkbox, a slider at one half, a node that is not
-/// displayed and one the tooling owns.
 fn spawn_toolbar(world: &mut World) {
     world.spawn(Camera2d);
     world
@@ -69,7 +61,6 @@ fn spawn_toolbar(world: &mut World) {
         });
 }
 
-/// A headless app with the toolbar laid out.
 fn toolbar_app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default());
@@ -82,12 +73,10 @@ fn toolbar_app() -> App {
     app
 }
 
-/// The toolbar panel.
 fn toolbar() -> Target {
     Target::name(TOOLBAR)
 }
 
-/// The outcome of the one check step of a scenario over the toolbar.
 fn outcome_of(check: Check) -> Outcome {
     let report = Scenario::new("tree")
         .setup(spawn_toolbar)
@@ -258,7 +247,6 @@ fn pick_mode_offers_the_snapshot_of_the_node_last() {
     );
 }
 
-/// Spawns a camera and a named list of three items, the second selected.
 fn spawn_countries(world: &mut World) {
     world.spawn(Camera2d);
     world
@@ -275,10 +263,8 @@ fn spawn_countries(world: &mut World) {
         });
 }
 
-/// The name of the panel the list items sit in.
 const COUNTRIES: &str = "Countries";
 
-/// A headless app with the countries laid out.
 fn countries_app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default());
@@ -291,7 +277,6 @@ fn countries_app() -> App {
     app
 }
 
-/// The outcome of the one check step of a scenario over the countries.
 fn countries_outcome(check: Check) -> Outcome {
     Scenario::new("countries")
         .setup(spawn_countries)

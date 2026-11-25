@@ -1,6 +1,3 @@
-//! A checkpoint saved as a setup for other scenarios, on a plain Bevy UI: a
-//! "+1" button counting into a resource.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -22,30 +19,24 @@ use bevy_stagecraft::{
     Registry, SCENE_SUFFIX, Scenario, Setup, Step, Target, load_ron_file, ron_files, save_setup,
 };
 
-/// What the "+1" button counts: the state worth saving.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Counter(u32);
 
-/// A thing the app keeps, as an entity.
 #[derive(Component, Default, Reflect)]
 #[reflect(Component)]
 struct Item(String);
 
-/// Marks the button, which is UI and must not be saved even so.
 #[derive(Component, Default, Reflect)]
 #[reflect(Component)]
 struct IncrementButton;
 
-/// Makes the app's own setup save in its own format.
 #[derive(Resource)]
 struct OwnFormat;
 
-/// The app's own setup type, with a save format of its own.
 #[derive(Reflect, Debug, Clone)]
 #[reflect(AppSetup)]
 enum SaveSetup {
-    /// The counter, from a file of its own format in the scenario's directory.
     Own(String),
 }
 
@@ -75,8 +66,6 @@ impl AppSetup for SaveSetup {
     }
 }
 
-/// Spawns the counter's UI, which a scenario that starts from a saved world
-/// brings itself.
 fn spawn_ui(world: &mut World) {
     world.init_resource::<Counter>();
     world.spawn(Camera2d);
@@ -98,7 +87,6 @@ fn spawn_ui(world: &mut World) {
         .observe(|_: On<Activate>, mut counter: ResMut<Counter>| counter.0 += 1);
 }
 
-/// A headless app whose counter reads `count`, with two items and its UI.
 fn app_at(count: u32) -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default().with_window_size(640, 480));
@@ -114,14 +102,12 @@ fn app_at(count: u32) -> App {
     app
 }
 
-/// A fresh directory for one test's files.
 fn dir(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     drop(fs::remove_dir_all(&dir));
     dir
 }
 
-/// What the default filter saves of `app`, as the file's text.
 fn saved_text(app: &mut App, dir: &std::path::Path, stem: &str) -> String {
     let saved = save_setup(app.world_mut(), dir, stem, &NoiseFilter::default()).expect("saves");
     fs::read_to_string(saved.path.expect("a file was written")).expect("reads")
@@ -163,14 +149,13 @@ fn a_saved_setup_loads_from_the_scenarios_file_next_to_it() {
     assert!(ron.contains("setup: Scene(\"seven.scene.ron\")"), "{ron}");
     fs::write(dir.join("from-seven.ron"), &ron).expect("writes the scenario");
 
-    // The scenario's file is next to the saved world, so the name finds it
-    // whatever the working directory is.
+    // The scenario file sits next to the saved world, so its name resolves
+    // from any working directory.
     let loaded = load_ron_file(dir.join("from-seven.ron"), &Registry::default()).expect("loads");
     assert_eq!(loaded.base_dir(), Some(dir.as_path()));
     let report = loaded.setup(spawn_ui).run_headless();
     assert!(report.passed(), "{:?}", report.failures());
 
-    // The saved world is a setup and not a scenario to play.
     let files = ron_files(&dir).expect("lists");
     assert_eq!(files, [dir.join("from-seven.ron")]);
     assert!(dir.join(format!("seven{SCENE_SUFFIX}")).exists());
@@ -191,7 +176,6 @@ fn the_saved_file_is_the_same_on_every_run() {
 fn the_saved_file_holds_the_apps_data_and_not_its_ui() {
     let dir = dir("save-setup-excludes");
     let mut app = app_at(1);
-    // Tooling and a parentless marker on a node's child are no app data.
     app.world_mut().spawn((Item("tool".into()), NotUnderTest));
     let text = saved_text(&mut app, &dir, "data");
     assert!(text.contains("Counter"), "{text}");
@@ -225,7 +209,6 @@ fn a_saved_world_is_loaded_into_a_world_that_has_other_values() {
         .query::<&Item>()
         .iter(other.world())
         .count();
-    // The two it had, and the two the file brought: a load adds entities.
     assert_eq!(items, 4);
 }
 
@@ -323,7 +306,6 @@ fn an_app_with_its_own_save_format_saves_through_its_setup() {
     assert!(dir.join("mine.own").exists());
     assert!(!dir.join("mine.scene.ron").exists());
 
-    // And the setup it made builds the counter back, written in a script.
     let script = format!(
         "(format_version: 3, name: \"own\", setup: App({value}), steps: [], \
          expect: [Resource(path: \"Counter.0\", is: Eq(6))])"

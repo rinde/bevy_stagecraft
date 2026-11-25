@@ -1,5 +1,3 @@
-//! A plain Bevy UI, no game, driven by synthetic input in a headless app.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -20,16 +18,12 @@ use bevy::{
 };
 use bevy_stagecraft::{HeadlessPlugins, SyntheticInput};
 
-/// How many times the button was activated.
 #[derive(Resource, Default)]
 struct Activations(u32);
 
-/// Centre of the button, in logical pixels.
 const BUTTON_CENTRE: Vec2 = Vec2::new(150.0, 50.0);
-/// Centre of the scroll area, in logical pixels.
 const SCROLL_CENTRE: Vec2 = Vec2::new(150.0, 300.0);
 
-/// An app with a button at the top and a scroll area below it.
 fn ui_app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default())
@@ -83,7 +77,6 @@ fn ui_app() -> App {
     app
 }
 
-/// Runs a few frames so queued input reaches every system.
 fn settle(app: &mut App) {
     for _ in 0..3 {
         app.update();

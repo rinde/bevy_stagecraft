@@ -1,7 +1,3 @@
-//! Screenshot checks against stored baselines. Every test that renders needs
-//! a (software) GPU, so those are ignored by `just test` and run by
-//! `just test-gpu`.
-
 #![allow(
     clippy::expect_used,
     clippy::panic,
@@ -16,13 +12,11 @@ use bevy_stagecraft::{
     Check, Recorder, RecorderPlugins, Scenario, ScreenshotSettings, Step, Target,
 };
 
-/// The colour of `colour` as 8-bit sRGB, as a picture holds it.
 fn srgb8(colour: Color) -> [u8; 3] {
     let [red, green, blue, _] = colour.to_srgba().to_u8_array();
     [red, green, blue]
 }
 
-/// Whether `pixel` is within a few levels of `wanted` in every channel.
 fn near(pixel: [u8; 4], wanted: [u8; 3]) -> bool {
     pixel
         .iter()
@@ -30,17 +24,12 @@ fn near(pixel: [u8; 4], wanted: [u8; 3]) -> bool {
         .all(|(have, want)| have.abs_diff(want) <= 6)
 }
 
-/// A fresh output directory under cargo's scratch space.
 fn output_dir(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     let _ = fs::remove_dir_all(&dir);
     dir
 }
 
-/// A scenario over two solid-coloured nodes and no text, so its pictures do
-/// not depend on a driver's glyph rendering, that moves the pointer onto the
-/// inner node and compares the frame with the baseline `home`, kept in `dir`.
-/// `inner` is the colour of the inner node.
 fn solid_colours(dir: &Path, inner: Color) -> Scenario {
     Scenario::new("Solid colours")
         .window_size(320, 240)
@@ -74,7 +63,6 @@ fn solid_colours(dir: &Path, inner: Color) -> Scenario {
         ])
 }
 
-/// A recorder app, with screenshot baselines rewritten when `update`.
 fn recorder_app(update: bool) -> App {
     let mut app = App::new();
     app.add_plugins(RecorderPlugins::default().with_window_size(320, 240));
@@ -100,7 +88,6 @@ fn gpu_a_screenshot_check_compares_with_its_baseline_and_writes_a_diff_on_a_chan
     let blue = Color::srgb_u8(30, 60, 220);
     let baseline = dir.join("solid-colours/home.png");
 
-    // No baseline yet: the first run fails and writes it.
     let first = solid_colours(&dir, blue).run_in(&mut recorder_app(false));
     assert!(!first.passed(), "a missing baseline fails the first run");
     assert!(baseline.exists(), "the picture is kept as the baseline");
@@ -115,11 +102,9 @@ fn gpu_a_screenshot_check_compares_with_its_baseline_and_writes_a_diff_on_a_chan
     );
     assert!(near(picture.get_pixel(5, 5).0, [200, 40, 40]));
 
-    // The same scene matches.
     let second = solid_colours(&dir, blue).run_in(&mut recorder_app(false));
     assert!(second.passed(), "failures: {:?}", second.failures());
 
-    // One colour changes: the check fails and leaves the picture and a diff.
     let green = Color::srgb_u8(30, 200, 60);
     let changed = solid_colours(&dir, green).run_in(&mut recorder_app(false));
     assert!(!changed.passed());
@@ -130,7 +115,6 @@ fn gpu_a_screenshot_check_compares_with_its_baseline_and_writes_a_diff_on_a_chan
     assert_eq!(diff_picture.get_pixel(150, 50).0, [255, 0, 255, 255]);
     assert_ne!(diff_picture.get_pixel(5, 5).0, [255, 0, 255, 255]);
 
-    // Updating rewrites the baseline, and the new colour then matches.
     let updated = solid_colours(&dir, green).run_in(&mut recorder_app(true));
     assert!(updated.passed(), "failures: {:?}", updated.failures());
     let after = solid_colours(&dir, green).run_in(&mut recorder_app(false));

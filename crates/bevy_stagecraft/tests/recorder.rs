@@ -1,7 +1,3 @@
-//! The offscreen recorder. Every test that plays a scenario needs a (software)
-//! GPU, so those are ignored by `just test` and run by `just test-gpu`; a
-//! scenario that is only skipped records nothing and runs without one.
-
 #![allow(
     clippy::expect_used,
     clippy::panic,
@@ -27,8 +23,6 @@ use bevy_stagecraft::{
 };
 use common::{Activations, SHUFFLE_SEEDS, shuffle, shuffled_schedules, spawn_ui};
 
-/// A scenario over the plain UI that clicks "Pause" and checks it was
-/// activated, or, when `broken`, expects it twice.
 fn click_pause(name: &str, broken: bool) -> Scenario {
     let wanted: u32 = if broken { 2 } else { 1 };
     Scenario::new(name)
@@ -44,14 +38,12 @@ fn click_pause(name: &str, broken: bool) -> Scenario {
         ])
 }
 
-/// A fresh output directory under cargo's scratch space.
 fn output_dir(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     let _ = fs::remove_dir_all(&dir);
     dir
 }
 
-/// Runs updates until every picture asked for has come back.
 fn wait_for_pictures(app: &mut App) {
     for _ in 0..240 {
         if app
@@ -91,8 +83,6 @@ fn gpu_a_click_reaches_a_button_through_an_image_targeted_camera() {
         "every camera renders to the image, none to the window"
     );
 
-    // And the picture really holds the UI: the white button on the clear
-    // colour, and the overlay's caption strip over it.
     request_capture(
         app.world_mut(),
         CaptureMeta {
@@ -214,7 +204,6 @@ fn gpu_a_failed_scenario_gets_a_trace_page_with_snapshots_and_pictures_per_step(
         .first()
         .and_then(|scenario| scenario.trace.as_ref())
         .expect("the recording keeps the trace");
-    // Every picture the page refers to was written next to it.
     for point in trace.points() {
         let name = format!("frame-{:05}.png", point.frame);
         if page.contains(&name) {
@@ -228,8 +217,6 @@ fn gpu_a_failed_scenario_gets_a_trace_page_with_snapshots_and_pictures_per_step(
     );
 }
 
-/// Every picture of the "determinism" scenario recorded into `dir` by name, in
-/// name order, with `shuffled` schedules shuffled by its seed.
 fn record_frames(
     dir: &str,
     shuffled: Vec<(Interned<dyn ScheduleLabel>, u64)>,
@@ -266,7 +253,6 @@ fn record_frames(
     frames
 }
 
-/// The picture names of `frames`.
 fn frame_names(frames: &[(String, Vec<u8>)]) -> Vec<String> {
     frames.iter().map(|(name, _)| name.clone()).collect()
 }
@@ -313,13 +299,11 @@ fn gpu_shuffling_the_order_of_unordered_systems_changes_no_recorded_frame() {
     }
 }
 
-/// The colour of `colour` as 8-bit sRGB, as a picture holds it.
 fn srgb8(colour: Color) -> [u8; 3] {
     let [red, green, blue, _] = colour.to_srgba().to_u8_array();
     [red, green, blue]
 }
 
-/// Whether `pixel` is within a few levels of `wanted` in every channel.
 fn near(pixel: [u8; 4], wanted: [u8; 3]) -> bool {
     pixel
         .iter()
@@ -357,8 +341,8 @@ fn gpu_the_pick_outlines_are_drawn_just_outside_the_node_in_a_recorded_frame() {
     let picture = image::open(&path).expect("frame 0").to_rgba8();
     let pixel = |x: u32, y: u32| picture.get_pixel(x, y).0;
     let theme = OverlayTheme::default();
-    // The button spans x 100..200 and y 25..75; the hovered outline is the
-    // two pixels just outside it, the picked one the two beyond those.
+    // The button spans x 100..200, y 25..75; the hovered outline is the 2 px
+    // outside it, the picked one the 2 px beyond.
     for (x, y) in [(99, 50), (150, 23), (201, 50), (150, 76)] {
         assert!(
             near(pixel(x, y), srgb8(theme.pick_hovered)),
@@ -381,7 +365,6 @@ fn gpu_the_pick_outlines_are_drawn_just_outside_the_node_in_a_recorded_frame() {
     );
 }
 
-/// The width and height in a PNG's header.
 fn png_size(path: &std::path::Path) -> (u32, u32) {
     let bytes = fs::read(path).expect("a picture");
     let number = |at: usize| {
@@ -439,8 +422,6 @@ fn gpu_recording_variants_writes_one_entry_per_scenario_and_variant() {
         "the picture has the window's physical size"
     );
     for scenario in &recording.scenarios {
-        // A picture at another scale factor than the cameras' target is
-        // black, the right size and empty.
         let picture = image::open(dir.join(&scenario.slug).join("frame-00005.png"))
             .expect("a picture")
             .to_rgba8();
@@ -487,8 +468,7 @@ fn gpu_a_variant_a_scenario_cannot_run_in_is_recorded_as_a_failed_entry() {
 #[test]
 fn a_scenario_restricted_to_another_variant_is_recorded_as_skipped() {
     let dir = output_dir("recorder-variant-skipped");
-    // A scenario limited to the default variant, recorded only in a named one:
-    // nothing plays, so no GPU is needed.
+    // Plays nothing, so no GPU is needed.
     let scenario = Scenario::new("only the default").variants(["default"]);
     let recording = Recorder::new(|_app| {})
         .variants([Variant::new("wide")])

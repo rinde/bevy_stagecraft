@@ -1,8 +1,3 @@
-//! Locators on a plain Bevy UI: finding a widget by marker component, by
-//! `Name`, by role and label, inside another target and as the nth of
-//! several; refusing ambiguity, suggesting close matches for a miss, and
-//! reading and writing them as RON.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -26,51 +21,39 @@ use bevy_stagecraft::{
 };
 use common::UiCheck;
 
-/// The test id of the "Pause" button.
 #[derive(Component, Reflect, Debug, Default)]
 #[reflect(Component)]
 struct PauseButton;
 
-/// Marks each row of the list; every row has it, so it is no test id.
 #[derive(Component, Reflect, Debug, Default)]
 #[reflect(Component)]
 struct Row;
 
-/// A reflected type that is not a component.
 #[derive(Reflect, Debug, Default)]
 struct NotAComponent;
 
-/// One of two reflected components with the same short name.
 mod first {
     use bevy::prelude::*;
 
-    /// A component whose short name [`super::second::Twin`] shares.
     #[derive(Component, Reflect, Debug, Default)]
     #[reflect(Component)]
     pub struct Twin;
 }
 
-/// The other of two reflected components with the same short name.
 mod second {
     use bevy::prelude::*;
 
-    /// A component whose short name [`super::first::Twin`] shares.
     #[derive(Component, Reflect, Debug, Default)]
     #[reflect(Component)]
     pub struct Twin;
 }
 
-/// What was clicked: how often "Pause", and which rows were deleted, in
-/// order.
 #[derive(Resource, Default, Debug)]
 struct Clicks {
-    /// Activations of "Pause".
     pauses: u32,
-    /// The fruit of each row whose "Delete" was activated.
     deleted: Vec<String>,
 }
 
-/// A button showing `label`.
 fn button(label: &str) -> impl Bundle {
     (
         Button,
@@ -83,8 +66,6 @@ fn button(label: &str) -> impl Bundle {
     )
 }
 
-/// A column with a "Pause" button (test id, `Name` and label), two rows of
-/// a fruit and a "Delete" button, and an unchecked "Dark mode" checkbox.
 fn spawn(world: &mut World) {
     world.init_resource::<Clicks>();
     world.spawn(Camera2d);
@@ -133,7 +114,6 @@ fn spawn(world: &mut World) {
     ));
 }
 
-/// A headless app.
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default());
@@ -142,7 +122,6 @@ fn app() -> App {
     app
 }
 
-/// Plays `scenario` in a fresh app, returning the report and the clicks.
 fn run(scenario: &Scenario) -> (ScenarioReport, Clicks) {
     let mut app = app();
     let report = scenario.run_in(&mut app);
@@ -153,7 +132,6 @@ fn run(scenario: &Scenario) -> (ScenarioReport, Clicks) {
     (report, clicks)
 }
 
-/// The outcome of every step, in order.
 fn outcomes(report: &ScenarioReport) -> Vec<Outcome> {
     report
         .steps
@@ -162,12 +140,10 @@ fn outcomes(report: &ScenarioReport) -> Vec<Outcome> {
         .collect()
 }
 
-/// Moves to `target`, clicks, and lets a frame pass.
 const fn click(target: Target) -> [Step; 3] {
     [Step::move_to(target), Step::click(), Step::wait(1)]
 }
 
-/// The "Delete" button of the row with this name.
 fn delete_in(row: &str) -> Target {
     Target::within(
         Target::name(row),
@@ -246,7 +222,6 @@ fn an_ambiguous_target_fails_a_check_even_inside_not_or_any() {
         !Check::hovered(Target::component::<Row>()),
         Check::any([Check::exists(deletes), Check::exists(Target::text("Pause"))]),
     ];
-    // A failed step skips the rest, so each check plays on its own.
     for check in checks {
         let (report, _) = run(&Scenario::new("ambiguous inverted")
             .setup(spawn)
@@ -343,7 +318,6 @@ fn a_target_that_matches_nothing_suggests_close_matches() {
     assert_eq!(outcomes(&report), wanted);
 }
 
-/// A scenario using every locator in steps, in checks and in an app check.
 fn every_locator() -> Scenario {
     Scenario::new("every locator")
         .steps(click(Target::component::<PauseButton>()))
@@ -370,13 +344,10 @@ fn every_locator_round_trips_through_ron_and_plays_from_a_file() {
         "MoveTo(Nth(1, Text(\"Delete\")))",
         "role: Checkbox,",
         "label: \"Pause\",",
-        // An app check's value is written compact.
         "Check(App(Found(Nth(0,Component(\"Row\")))))",
     ] {
         assert!(ron.contains(written), "{written} in {ron}");
     }
-    // A role reads as written by hand on one line, the label left out for
-    // any.
     let by_hand = "(format_version: 3, name: \"x\", steps: [\
         MoveTo(Role(role: Button, label: \"Pause\")), Check(Exists(Role(role: Checkbox)))])";
     let read = Scenario::from_ron_with(by_hand, &Registry::default()).unwrap();
@@ -397,7 +368,6 @@ fn every_locator_round_trips_through_ron_and_plays_from_a_file() {
     assert_eq!(clicks.deleted, ["Pears", "Pears"]);
 }
 
-/// Loads a script with these steps against the default registry.
 fn load(steps: &str) -> Result<Scenario, LoadError> {
     Scenario::from_ron_with(
         &format!("(format_version: 3, name: \"x\", steps: [Wait(1), {steps}])"),
@@ -454,7 +424,6 @@ fn a_component_target_must_name_one_reflected_component_and_nesting_must_name_wi
     assert!(load("MoveTo(Component(\"bevy_ui_widgets::button::Button\"))").is_ok());
 }
 
-/// A laid-out app showing [`spawn`].
 fn laid_out() -> App {
     let mut app = app();
     spawn(app.world_mut());
@@ -464,7 +433,6 @@ fn laid_out() -> App {
     app
 }
 
-/// The middle of `entity`, in logical pixels.
 fn centre(app: &App, entity: Entity) -> Vec2 {
     let world = app.world();
     let node = world.get::<ComputedNode>(entity).expect("laid out");
@@ -472,7 +440,6 @@ fn centre(app: &App, entity: Entity) -> Vec2 {
     transform.affine().translation * node.inverse_scale_factor
 }
 
-/// The entity named `name`.
 fn named(app: &mut App, name: &str) -> Entity {
     let world = app.world_mut();
     world
@@ -498,8 +465,6 @@ fn targets_rank_a_test_id_then_role_and_label_then_text_then_name_then_the_posit
             Target::screen(at),
         ]
     );
-    // Every row has the marker and nothing in it is unique to it but its
-    // name: a target that is ambiguous is never offered.
     let row = named(&mut app, "first row");
     let at = centre(&app, row);
     assert_eq!(
@@ -511,9 +476,8 @@ fn targets_rank_a_test_id_then_role_and_label_then_text_then_name_then_the_posit
 #[test]
 fn a_bevy_ui_button_is_no_button_role_and_a_widgets_button_is() {
     let mut world = World::new();
-    // Since Bevy 0.20 the deprecated `bevy_ui` `Button` is an alias of a
-    // crate-private struct that cannot be named here, so it is built and
-    // inserted through reflection, as a scene would.
+    // Bevy 0.20's `Button` alias is crate-private: insert it through
+    // reflection, as a scene would.
     let registry = AppTypeRegistry::new_with_derived_types();
     let registration = registry
         .read()

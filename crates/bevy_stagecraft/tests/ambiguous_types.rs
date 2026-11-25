@@ -1,7 +1,3 @@
-//! Types whose short type paths are the same: a script names them by their
-//! full type path, and a short path that fits several is a load error
-//! listing the candidates.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -20,46 +16,37 @@ use bevy::{
 };
 use bevy_stagecraft::{HeadlessPlugins, LoadError, Outcome, Registry, Scenario};
 
-/// The first of two modules that each define `Label` and `Score`.
 mod one {
     use bevy::prelude::*;
 
-    /// A component sharing its short type path with [`super::two::Label`].
     #[derive(Component, Reflect, Debug, Default)]
     #[reflect(Component)]
     pub struct Label;
 
-    /// A resource sharing its short type path with [`super::two::Score`].
     #[derive(Resource, Reflect, Debug, Default)]
     #[reflect(Resource)]
     pub struct Score(pub u32);
 }
 
-/// The second of two modules that each define `Label` and `Score`.
 mod two {
     use bevy::prelude::*;
 
-    /// A component sharing its short type path with [`super::one::Label`].
     #[derive(Component, Reflect, Debug, Default)]
     #[reflect(Component)]
     pub struct Label;
 
-    /// A resource sharing its short type path with [`super::one::Score`].
     #[derive(Resource, Reflect, Debug, Default)]
     #[reflect(Resource)]
     pub struct Score(pub u32);
 }
 
-/// How often the button marked `two::Label` was activated.
 #[derive(Resource, Default, Debug)]
 struct Activations(u32);
 
-/// The full type path of `T`, as a script writes it.
 fn path<T: TypePath>() -> &'static str {
     T::type_path()
 }
 
-/// Loads a script of one step.
 fn load(step: &str) -> Result<Scenario, LoadError> {
     Scenario::from_ron_with(
         &format!("(format_version: 3, name: \"x\", steps: [{step}])"),
@@ -69,7 +56,6 @@ fn load(step: &str) -> Result<Scenario, LoadError> {
 
 #[test]
 fn a_short_path_shared_by_two_types_is_refused_listing_both_full_paths() {
-    // Bevy UI has a `Label` of its own, listed after ours (sorted by path).
     let listed = format!(
         "`Label` names more than one registered type (`{}`, `{}`, `{}`); write its full type path",
         path::<one::Label>(),
@@ -124,7 +110,6 @@ fn a_target_by_full_type_path_finds_the_entity_of_that_type_only() {
         other = path::<one::Label>(),
         score = path::<two::Score>(),
     );
-    // Apart, so the pointer can only be on one.
     let button = |top: i32| {
         (
             Button,

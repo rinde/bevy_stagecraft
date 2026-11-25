@@ -1,5 +1,3 @@
-//! Scenarios over a plain Bevy UI, no game.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -19,20 +17,16 @@ use bevy_stagecraft::{
     ScenarioReport, Step, Target,
 };
 
-/// How many times a button was activated.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Activations(u32);
 
-/// Total distance dragged over the drag pad.
 #[derive(Resource, Default)]
 struct Dragged(Vec2);
 
-/// How many drag events the drag pad saw.
 #[derive(Resource, Default)]
 struct DragEvents(u32);
 
-/// Spawns a camera, a "Pause" button, and a drag pad.
 fn spawn_ui(world: &mut World) {
     world.init_resource::<Activations>();
     world.init_resource::<Dragged>();
@@ -74,17 +68,12 @@ fn spawn_ui(world: &mut World) {
         );
 }
 
-/// This app's own checks over the pad, the cursor and the keyboard.
 #[derive(Reflect, Debug, Clone, PartialEq)]
 #[reflect(AppCheck)]
 enum PadCheck {
-    /// The window's cursor is at this position.
     CursorAt(Vec2),
-    /// The pad was dragged this far to the right and not up or down.
     DraggedRight(f32),
-    /// The pad saw this many drag events.
     DragEvents(u32),
-    /// Control and A are both held.
     ShortcutHeld,
 }
 
@@ -136,7 +125,6 @@ impl AppCheck for PadCheck {
     }
 }
 
-/// Covers the button with a named panel.
 fn spawn_cover(world: &mut World) {
     world.spawn((
         Name::new("Modal panel"),
@@ -153,7 +141,6 @@ fn spawn_cover(world: &mut World) {
     ));
 }
 
-/// A scenario over the plain UI that clicks "Pause".
 fn click_pause() -> Scenario {
     Scenario::new("click pause").setup(spawn_ui).steps([
         Step::move_to(Target::text("Pause")),
@@ -163,7 +150,6 @@ fn click_pause() -> Scenario {
     ])
 }
 
-/// The button was activated exactly once.
 fn activated_once() -> Check {
     Check::resource::<Activations>(".0").eq(1_u32)
 }
@@ -307,11 +293,9 @@ fn dragging_across_a_pad_reports_the_distance() {
     assert!(report.passed(), "{:?}", report.failures());
 }
 
-/// This app's own targets, found by Bevy with no registration call.
 #[derive(Reflect, Debug, Clone)]
 #[reflect(AppTarget)]
 enum LatticeTarget {
-    /// A row of the lattice, counted in pixels below the top of the button.
     Row(f32),
 }
 

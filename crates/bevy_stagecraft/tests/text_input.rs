@@ -1,5 +1,3 @@
-//! A text input has a role and a value that a scenario can check.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -19,7 +17,6 @@ use bevy_stagecraft::{
     WorldSnapshot, checks_that_hold, suggest_checks, target_alternatives, tree_snapshot,
 };
 
-/// Spawns a camera and one field labelled "Name".
 fn spawn_field(world: &mut World) {
     world.spawn(Camera2d);
     world.spawn((
@@ -38,12 +35,10 @@ fn spawn_field(world: &mut World) {
     ));
 }
 
-/// The field, named by its role and label.
 fn field() -> Target {
     Target::role(WidgetRole::TextInput, "Name")
 }
 
-/// A headless app with the field laid out, and the field.
 fn app() -> (App, Entity) {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default());
@@ -62,8 +57,6 @@ fn app() -> (App, Entity) {
     (app, root)
 }
 
-/// Types `text` into the field of `app` as the player would not: through
-/// an edit queued on it.
 fn insert(app: &mut App, root: Entity, text: &str) {
     app.world_mut()
         .get_mut::<EditableText>(root)
@@ -72,7 +65,6 @@ fn insert(app: &mut App, root: Entity, text: &str) {
     app.update();
 }
 
-/// The outcome of a check after "Alice" was typed into the field.
 fn outcome_after_typing(check: Check) -> Outcome {
     let report = Scenario::new("typed")
         .setup(spawn_field)

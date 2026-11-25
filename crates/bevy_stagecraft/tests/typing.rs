@@ -1,5 +1,3 @@
-//! The `Type` step against Bevy's own text field and against a plain observer.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -17,19 +15,16 @@ use bevy::{
 };
 use bevy_stagecraft::{HeadlessPlugins, Outcome, Scenario, Step, Target, keystroke};
 
-/// Everything typed into the observer field, as the key events delivered it.
 #[derive(Resource, Default)]
 struct Typed(String);
 
-/// Spawns a camera and two text fields, "First" above "Second".
 fn spawn_fields(world: &mut World) {
     world.spawn(Camera2d);
     for (name, top) in [("First", 20), ("Second", 120)] {
         world.spawn((
             Name::new(name),
-            // Since Bevy 0.20 `EditableText` only holds the text; `TextInput`
-            // is the widget that takes keys, and a click focuses only a node
-            // with a `TabIndex`.
+            // Click focus needs a `TabIndex` and `TextInput`; `EditableText` only
+            // holds the text.
             TextInput,
             TabIndex(0),
             EditableText::new(""),
@@ -45,7 +40,6 @@ fn spawn_fields(world: &mut World) {
     }
 }
 
-/// What a field named `name` holds after the scenario ran.
 fn value_of(app: &mut App, name: &str) -> String {
     let mut query = app.world_mut().query::<(&Name, &EditableText)>();
     query
@@ -55,7 +49,6 @@ fn value_of(app: &mut App, name: &str) -> String {
         .expect("the field exists")
 }
 
-/// An app with the headless plugins, ready to run a scenario in.
 fn headless() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default());
@@ -64,7 +57,6 @@ fn headless() -> App {
     app
 }
 
-/// Runs `scenario` over two text fields and returns the report and the app.
 fn run(scenario: Scenario) -> (bevy_stagecraft::ScenarioReport, App) {
     let mut app = headless();
     let report = scenario.setup(spawn_fields).run_in(&mut app);

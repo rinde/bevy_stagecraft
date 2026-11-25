@@ -1,7 +1,3 @@
-//! Picking one node of a plain Bevy UI, headless: the node under a position,
-//! the targets that name it, the checks that hold for it and the app's check
-//! forms. The gallery's pick mode is tested in `gallery.rs`.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -24,14 +20,10 @@ use bevy_stagecraft::{
 };
 use common::{Activations, UiTarget, spawn_ui};
 
-/// A value the "Save" button carries, so a component check has a field.
 #[derive(Component, Reflect, Debug, Clone, Copy)]
 #[reflect(Component)]
 struct Level(u32);
 
-/// Spawns the common "Pause" button, a disabled "Save" button with a
-/// [`Level`], a label showing a number, two labels showing the same text,
-/// and a tooling node lying over "Pause".
 fn spawn_form(world: &mut World) {
     spawn_ui(world);
     world.spawn((
@@ -83,7 +75,6 @@ fn spawn_form(world: &mut World) {
     ));
 }
 
-/// A laid-out headless app showing [`spawn_form`].
 fn form_app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default());
@@ -96,7 +87,6 @@ fn form_app() -> App {
     app
 }
 
-/// The node showing exactly `text`.
 fn text_node(app: &mut App, text: &str) -> Entity {
     let world = app.world_mut();
     world
@@ -107,7 +97,6 @@ fn text_node(app: &mut App, text: &str) -> Entity {
         .0
 }
 
-/// The button labelled `text`.
 fn button_with(app: &mut App, text: &str) -> Entity {
     let label = text_node(app, text);
     app.world()
@@ -116,7 +105,6 @@ fn button_with(app: &mut App, text: &str) -> Entity {
         .parent()
 }
 
-/// The middle of `entity`, in logical pixels.
 fn centre(app: &App, entity: Entity) -> Vec2 {
     let world = app.world();
     let node = world.get::<ComputedNode>(entity).expect("laid out");
@@ -223,7 +211,6 @@ fn through_a_screen_target_only_the_texts_shown_are_offered() {
 fn a_label_that_is_not_its_own_target_offers_its_text_through_text_of() {
     let mut app = form_app();
     let label = text_node(&mut app, "Score: 3");
-    // The app names the label with a target of its own.
     let app_target = Target::app(UiTarget::Showing("Score: 3".into()));
     let checks = checks_that_hold(app.world(), label, &app_target, &NoiseFilter::default());
     assert!(

@@ -1,6 +1,3 @@
-//! Scenarios run at another root font size (Bevy's `RemSize`): a variant's
-//! text size setting.
-
 #![allow(
     clippy::expect_used,
     clippy::disallowed_methods,
@@ -17,29 +14,20 @@ use bevy_stagecraft::{
     AppSetup, Check, ReflectAppSetup, Scenario, ScenarioReport, Step, Target, Variant,
 };
 
-/// How many times the button was activated.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Activations(u32);
 
-/// The root font size the scenario's setup closure saw.
 #[derive(Resource)]
 struct SeenRem(f32);
 
-/// The width of the panel in front of the button, in logical pixels.
 const PANEL_WIDTH: i32 = 700;
 
-/// The rem size of the "large text" variant: ten times Bevy's default.
 const LARGE_REM: f32 = 200.0;
 
-/// A row whose last item is a button labelled "Pause" in the default font
-/// size, which is one rem, so the button grows with the root font size. It
-/// starts 700 px in and does not shrink, so it fits an 800 px window only
-/// while its label is narrow enough.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq)]
 #[reflect(AppSetup)]
 enum LabelRow {
-    /// The only layout.
     Default,
 }
 
@@ -81,7 +69,6 @@ impl AppSetup for LabelRow {
     }
 }
 
-/// Presses the label row's button in an 800 px window.
 fn press_label() -> Scenario {
     Scenario::new("label")
         .app_setup(LabelRow::Default)
@@ -92,7 +79,6 @@ fn press_label() -> Scenario {
         .expect_check(Check::resource::<Activations>(".0").eq(1_u32))
 }
 
-/// Plays `scenario` in `variant`.
 fn play(scenario: &Scenario, variant: &Variant) -> ScenarioReport {
     variant
         .apply(scenario)

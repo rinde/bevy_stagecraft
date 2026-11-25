@@ -1,6 +1,3 @@
-//! `OnTop` asks what the person sees: is the widget painted topmost at its
-//! middle, whatever a covering node lets the pointer through.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -16,10 +13,8 @@ use bevy::{
 };
 use bevy_stagecraft::{Check, Outcome, Scenario, Step, Target, WidgetRole};
 
-/// How many frames the UI gets to be laid out and stacked before a check.
 const SETTLE_FRAMES: u16 = 3;
 
-/// A camera and the "Go" button, at (100, 25) with a size of 100 by 50.
 fn spawn_go(world: &mut World) {
     world.spawn(Camera2d);
     world.spawn((
@@ -37,8 +32,6 @@ fn spawn_go(world: &mut World) {
     ));
 }
 
-/// A node over the middle of the "Go" button, at `z`, with `colour` as its
-/// background, that lets the pointer through like a floating popup does.
 fn spawn_popup(world: &mut World, z: i32, colour: Color) {
     world.spawn((
         Name::new("Popup"),
@@ -59,7 +52,6 @@ fn spawn_popup(world: &mut World, z: i32, colour: Color) {
     ));
 }
 
-/// The "Go" button, and a popup at `z` painted `colour` over it.
 fn with_popup(name: &str, z: i32, colour: Color) -> Scenario {
     Scenario::new(name)
         .setup(move |world| {
@@ -96,8 +88,6 @@ fn the_pointer_reaches_a_widget_that_a_popup_covers_without_blocking() {
     assert!(report.passed(), "{:?}", report.failures());
 }
 
-/// A node over the middle of the "Go" button that paints only through
-/// `painter`, whatever it is, and lets the pointer through.
 fn with_painted_popup(name: &str, painter: impl Bundle + Clone) -> Scenario {
     Scenario::new(name)
         .setup(move |world| {
@@ -123,8 +113,6 @@ fn with_painted_popup(name: &str, painter: impl Bundle + Clone) -> Scenario {
         .step(Step::wait(SETTLE_FRAMES))
 }
 
-/// Plays `scenario` with `check` as its last step and returns that step's
-/// failure message, if it failed.
 fn failure_of(scenario: Scenario, check: Check) -> Option<String> {
     let report = scenario.step(Step::check(check)).run_headless();
     match &report.steps.last()?.outcome {
@@ -181,7 +169,6 @@ fn not_on_top_holds_for_a_widget_that_a_covering_popup_hides() {
     assert!(report.passed(), "{:?}", report.failures());
 }
 
-/// A widget with no `Node`, so nothing ever lays it out, around the text "Go".
 fn spawn_unlaid_go(world: &mut World) {
     world.spawn(Camera2d);
     world.spawn((Button, children![Text::new("Go")]));
@@ -212,7 +199,6 @@ fn not_on_top_holds_for_a_widget_that_is_never_laid_out() {
     assert!(report.passed(), "{:?}", report.failures());
 }
 
-/// A "Go" button that lies wholly outside the box its parent clips to.
 fn spawn_clipped_go(world: &mut World) {
     world.spawn(Camera2d);
     world.spawn((
@@ -310,8 +296,6 @@ fn on_top_reads_and_writes_as_ron() {
     assert!(written.contains("OnTop(Text(\"Go\"))"), "{written}");
 }
 
-/// A "Go" button holding a plain node "Inner" (no widget) whose middle a popup
-/// covers, while the button's own middle stays free.
 fn spawn_button_with_covered_inner(world: &mut World) {
     world.spawn(Camera2d);
     world.spawn((
@@ -362,8 +346,6 @@ fn a_plain_node_inside_a_widget_is_judged_by_itself_not_by_the_widget() {
     let scenario = Scenario::new("inner covered")
         .setup(spawn_button_with_covered_inner)
         .step(Step::wait(SETTLE_FRAMES));
-    // The button's own middle is free, so it stays on top while its inner
-    // node is covered: the node and the widget are judged apart.
     let report = scenario
         .clone()
         .step(Step::check(Check::on_top(Target::name("Outer"))))

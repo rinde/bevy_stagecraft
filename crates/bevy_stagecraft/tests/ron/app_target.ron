@@ -2,7 +2,7 @@
     format_version: 3,
     name: "app target",
     setup: Some(App(PlainUi)),
-    // Headless runs arrange no view, but it is read when the file loads.
+    // Headless runs arrange no view, but loading the file still reads it.
     view: App(Zoomed(2.0)),
     steps: [
         MoveTo(App(PauseButton)),

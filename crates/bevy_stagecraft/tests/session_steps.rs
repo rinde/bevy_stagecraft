@@ -1,5 +1,3 @@
-//! Turning a log of real input into steps, without a window.
-
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -45,7 +43,6 @@ const fn key(frame: u32, key: KeyCode, state: ButtonState) -> RecordedEvent {
     )
 }
 
-/// A key press that produced `text`, as a real keyboard reports it.
 fn typed_key(frame: u32, key: KeyCode, text: &str) -> RecordedEvent {
     at(
         frame,
@@ -282,8 +279,6 @@ fn short_gaps_keep_their_length() {
     assert!(convert(&events).contains(&Step::Wait(30)));
 }
 
-/// A click at (10, 10), an idle stretch of about 80 frames, then a path to
-/// (150, 90) that ends in a click on `end`.
 fn idle_then_click_on(end: &Target) -> Vec<RecordedEvent> {
     let here = Target::screen(Vec2::new(10.0, 10.0));
     let mut events = vec![
@@ -303,7 +298,6 @@ fn idle_then_click_on(end: &Target) -> Vec<RecordedEvent> {
     events
 }
 
-/// The longest `Wait` among `steps`.
 fn longest_wait(steps: &[Step]) -> u16 {
     steps
         .iter()
@@ -472,7 +466,6 @@ fn a_checkpoint_falls_between_the_steps_around_it_and_is_no_step_itself() {
         "the first checkpoint is between the clicks: {logged:?}"
     );
     assert!(clicks[1] < logged.checkpoints[1], "{logged:?}");
-    // The script's clock reaches the checkpoint's frame before its checks.
     let frames_before = |count: usize| -> u32 {
         logged.steps[..count]
             .iter()
@@ -526,7 +519,6 @@ fn a_checkpoint_inside_a_folded_chord_moves_after_it() {
     assert_eq!(logged.checkpoints, vec![tap + 1], "{logged:?}");
 }
 
-/// The press and release of one typed key, `text` being what it produced.
 fn typed_pair(frame: u32, code: KeyCode, text: &str) -> [RecordedEvent; 2] {
     [
         typed_key(frame, code, text),
@@ -534,7 +526,6 @@ fn typed_pair(frame: u32, code: KeyCode, text: &str) -> [RecordedEvent; 2] {
     ]
 }
 
-/// The `Type` steps and what they typed.
 fn typed_texts(steps: &[Step]) -> Vec<&str> {
     steps
         .iter()
@@ -694,9 +685,6 @@ fn a_long_run_of_single_keystrokes_becomes_one_exact_type_step() {
     assert_eq!(typed_texts(&steps), [expected.as_str()], "{steps:?}");
 }
 
-/// The frames the steps spend, as playback counts them: waits and glides by
-/// their length, a drag by its length plus its press and release, every other
-/// step as one.
 fn played_frames(steps: &[Step]) -> u32 {
     steps
         .iter()
@@ -797,8 +785,6 @@ fn a_drag_longer_than_a_u16_is_spelt_out_and_events_after_it_stay_in_time() {
     );
 }
 
-/// Both keys of a modifier go down, then `released` comes up first; the other
-/// stays held while `a` is typed and released, then it comes up too.
 fn overlapping(first: KeyCode, second: KeyCode, released: KeyCode) -> Vec<RecordedEvent> {
     let kept = if released == first { second } else { first };
     let mut events = vec![

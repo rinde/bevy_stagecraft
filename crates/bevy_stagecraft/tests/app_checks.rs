@@ -1,6 +1,3 @@
-//! The app's own checks: one reflected enum with `#[reflect(AppCheck)]`,
-//! found by Bevy's type registry with no registration call.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -18,12 +15,9 @@ use bevy_stagecraft::{
 };
 use common::{UiCheck, UiSetup, registry, spawn_ui};
 
-/// A second app check type. It opts out of automatic registration, so only
-/// the test that registers it by hand sees two app check types.
 #[derive(Reflect, Debug, Clone)]
 #[reflect(AppCheck, no_auto_register)]
 enum OtherCheck {
-    /// Always holds.
     Fine,
 }
 
@@ -33,7 +27,6 @@ impl AppCheck for OtherCheck {
     }
 }
 
-/// Loads a script of format version 3 with these steps.
 fn load(steps: &str) -> Result<Scenario, LoadError> {
     Scenario::from_ron_with(
         &format!("(format_version: 3, name: \"x\", steps: [Wait(1), {steps}])"),
@@ -43,7 +36,6 @@ fn load(steps: &str) -> Result<Scenario, LoadError> {
 
 #[test]
 fn an_app_check_in_a_file_is_found_with_no_registration_call_and_runs() {
-    // A default registry: nothing about `UiCheck` is registered by hand.
     let scenario = Scenario::from_ron(
         "(format_version: 3, name: \"x\", steps: [\
             Check(App(Activated(0))),\

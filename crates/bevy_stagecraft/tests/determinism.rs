@@ -1,11 +1,3 @@
-//! A scenario plays the same way on every run.
-//!
-//! Since Bevy 0.20 several of Bevy's own system sets (the UI's in `PostUpdate`
-//! among them) are ordered only where systems' tracked data access conflicts.
-//! These tests play a scenario whose every click moves and relabels what it
-//! clicked, so layout, text and the actionability wait all take part, and
-//! compare whole runs.
-
 #![allow(
     clippy::expect_used,
     clippy::disallowed_methods,
@@ -22,20 +14,15 @@ use bevy::{
 use bevy_stagecraft::{Check, NoiseFilter, Scenario, Step, Target};
 use common::{SHUFFLE_SEEDS, shuffle, shuffled_schedules};
 
-/// How far the button moves to the right each time it is activated.
 const HOP: f32 = 60.0;
 
-/// How many times the hopping button was activated.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Hops(u32);
 
-/// Marks the text inside the hopping button.
 #[derive(Component)]
 struct HopLabel;
 
-/// A camera and a "Hop" button that, when activated, moves right and says how
-/// often it was activated, so the next step must wait for the new layout.
 fn spawn_hopping_button(world: &mut World) {
     world.init_resource::<Hops>();
     world.spawn(Camera2d);
@@ -70,8 +57,6 @@ fn spawn_hopping_button(world: &mut World) {
         );
 }
 
-/// Clicks the button three times, each time where it has moved to, by its new
-/// label, then checks the count.
 fn hop_three_times(scale_factor: f32) -> Scenario {
     Scenario::new("hop three times")
         .window_size(320, 160)

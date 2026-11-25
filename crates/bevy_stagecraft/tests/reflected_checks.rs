@@ -1,7 +1,3 @@
-//! Built-in checks that read plain Bevy data through reflection: counts,
-//! resource and component fields, states, widget states and text, combined
-//! with `All`, `Any` and `Within`.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -21,61 +17,45 @@ use bevy_stagecraft::{
     Step, Target, TextMatch, Value,
 };
 
-/// A ghost, to be counted.
 #[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Ghost;
 
-/// Marks a selected ghost.
 #[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Selected;
 
-/// The tool the editor uses.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 enum Tool {
-    /// Lays track.
     Lay,
-    /// Draws.
     Draw,
 }
 
-/// The editor's settings.
 #[derive(Resource, Reflect, Debug)]
 #[reflect(Resource)]
 struct Editor {
-    /// The current tool.
     tool: Tool,
-    /// The zoom factor.
     zoom: f32,
 }
 
-/// A gauge with a value, on a node with a "Speed" label inside it.
 #[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Gauge {
-    /// The value, from 0 to 1.
     value: f32,
 }
 
-/// The app's mode.
 #[derive(States, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 enum Mode {
-    /// The start.
     #[default]
     Menu,
-    /// Editing.
     Editing,
 }
 
-/// Frames left until "Saved" shows.
 #[derive(Resource, Debug)]
 struct Countdown(u32);
 
-/// How many frames "Later" takes to show "Saved".
 const SAVE_DELAY: u32 = 5;
 
-/// Shows "Saved" once the countdown runs out.
 fn count_down(mut commands: Commands, countdown: Option<ResMut<Countdown>>) {
     let Some(mut countdown) = countdown else {
         return;
@@ -88,8 +68,6 @@ fn count_down(mut commands: Commands, countdown: Option<ResMut<Countdown>>) {
     }
 }
 
-/// A headless app with the test types registered, the `Mode` state and the
-/// countdown.
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins((HeadlessPlugins::default(), StatesPlugin))
@@ -105,12 +83,10 @@ fn app() -> App {
     app
 }
 
-/// A registry that knows every type the app registered.
 fn registry() -> Registry {
     Registry::default().with_types_of(app().world())
 }
 
-/// A button showing `label`.
 fn button(label: &str) -> impl Bundle {
     (
         Button,
@@ -123,7 +99,6 @@ fn button(label: &str) -> impl Bundle {
     )
 }
 
-/// Spawns two ghosts, one selected, the editor and a column of widgets.
 fn spawn(world: &mut World) {
     world.insert_resource(Editor {
         tool: Tool::Draw,
@@ -186,12 +161,10 @@ fn spawn(world: &mut World) {
     world.insert_resource(InputFocus::from_entity(lay));
 }
 
-/// Plays `scenario` in a fresh [`app`].
 fn run(scenario: &Scenario) -> ScenarioReport {
     scenario.run_in(&mut app())
 }
 
-/// The outcome of every step, in order.
 fn outcomes(report: &ScenarioReport) -> Vec<Outcome> {
     report
         .steps
@@ -200,7 +173,6 @@ fn outcomes(report: &ScenarioReport) -> Vec<Outcome> {
         .collect()
 }
 
-/// Clicks the button showing `label` and lets one frame pass.
 fn click(label: &str) -> [Step; 3] {
     [
         Step::move_to(Target::text(label)),
@@ -461,7 +433,6 @@ fn not_within_holds_only_if_the_check_never_holds_in_time() {
     );
 }
 
-/// A scenario with every reflected check.
 fn every_kind() -> Scenario {
     Scenario::new("every kind").steps([
         Step::check(Check::count::<Ghost>().and::<Selected>().eq(1)),
@@ -513,7 +484,6 @@ fn every_reflected_check_round_trips_through_ron_and_exports_stably() {
     assert_eq!(loaded.to_ron().unwrap(), ron, "export is stable");
 }
 
-/// Loads a script with these steps against the test types.
 fn load(steps: &str) -> Result<Scenario, LoadError> {
     Scenario::from_ron_with(
         &format!("(format_version: 3, name: \"x\", steps: [Wait(1), {steps}])"),
@@ -524,8 +494,8 @@ fn load(steps: &str) -> Result<Scenario, LoadError> {
 #[test]
 fn an_unknown_type_is_a_load_error_naming_the_step_and_close_names() {
     let error = load("Check(Count(with: [\"Gost\"], is: Eq(1)))").unwrap_err();
-    // The app registers every type that derives `Reflect`, Bevy's own
-    // among them, so other close names may follow; the closest comes first.
+    // The app registers every `Reflect` type, Bevy's own included, so other
+    // close names may follow; the closest comes first.
     assert!(
         matches!(
             &error,
@@ -582,7 +552,6 @@ fn a_type_of_the_wrong_kind_is_a_load_error() {
 
 #[test]
 fn a_type_the_app_never_registered_fails_when_the_check_runs() {
-    /// Never registered anywhere, not even by itself.
     #[derive(Component, Reflect, Debug)]
     #[reflect(no_auto_register)]
     struct Unregistered;
@@ -616,8 +585,6 @@ fn a_misspelt_field_in_rust_cannot_run_even_inside_not() {
 
 #[test]
 fn installing_adds_state_type_data_to_a_state_the_app_registered_without_it() {
-    // The app knows `Mode` as a plain reflected type, as Bevy's automatic
-    // registration would leave it, but not as a state.
     let mut app = App::new();
     app.add_plugins((HeadlessPlugins::default(), StatesPlugin))
         .init_state::<Mode>()

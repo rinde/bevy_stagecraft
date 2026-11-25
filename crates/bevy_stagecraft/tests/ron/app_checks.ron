@@ -5,7 +5,6 @@
     window_size: (800, 600),
     setup: App(PlainUi),
     steps: [
-        // The app's own checks: values of its `#[reflect(AppCheck)]` enum.
         Check(App(Activated(0))),
         Check(App(Found(Text("Pause")))),
         Check(Not(App(Found(Text("Resume"))))),

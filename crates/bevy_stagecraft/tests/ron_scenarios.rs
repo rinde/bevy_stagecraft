@@ -1,5 +1,3 @@
-//! Every `.ron` file in `tests/ron` is one test, named after the file.
-
 mod common;
 
 use std::process::ExitCode;

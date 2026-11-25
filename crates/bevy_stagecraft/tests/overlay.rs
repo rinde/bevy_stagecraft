@@ -1,5 +1,3 @@
-//! The cursor overlay and caption strip over a plain Bevy UI, headless.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -27,18 +25,14 @@ use bevy_stagecraft::{
     },
 };
 
-/// How many times the button was activated.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Activations(u32);
 
-/// This test's own checks, over the overlay.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq)]
 #[reflect(AppCheck)]
 enum OverlayCheck {
-    /// The overlay exists and took none of the picking hits.
     NotHovered,
-    /// Never holds.
     Never,
 }
 
@@ -64,7 +58,6 @@ impl AppCheck for OverlayCheck {
     }
 }
 
-/// Spawns a camera and a "Pause" button.
 fn spawn_ui(world: &mut World) {
     world.init_resource::<Activations>();
     world.spawn(Camera2d);
@@ -85,7 +78,6 @@ fn spawn_ui(world: &mut World) {
         .observe(|_: On<Activate>, mut count: ResMut<Activations>| count.0 += 1);
 }
 
-/// A finished headless app with the overlay on top.
 fn overlay_app() -> App {
     let mut app = App::new();
     app.add_plugins((HeadlessPlugins::default(), CursorOverlayPlugin));
@@ -94,7 +86,6 @@ fn overlay_app() -> App {
     app
 }
 
-/// The position of the arrow's top-left corner, as laid out.
 fn cursor_position(app: &mut App) -> Option<Vec2> {
     let world = app.world_mut();
     let mut query = world.query_filtered::<&Node, With<OverlayCursor>>();
@@ -105,7 +96,6 @@ fn cursor_position(app: &mut App) -> Option<Vec2> {
     }
 }
 
-/// Every entity the overlay draws.
 fn overlay_entities(world: &World) -> Vec<Entity> {
     let Some(query) = world.try_query_filtered::<Entity, Or<(
         With<OverlayCursor>,
@@ -250,11 +240,9 @@ fn steps_read_in_words() {
     );
 }
 
-/// An app's own targets, for the caption strip's words.
 #[derive(Reflect, Debug, Clone)]
 #[reflect(AppTarget)]
 enum LatticeTarget {
-    /// A lattice point.
     Point(i32, i32),
 }
 
@@ -348,21 +336,14 @@ fn without_an_overlay_camera_the_overlay_aims_at_the_default_ui_camera() {
     );
 }
 
-/// Records every parentless node as it is added: whether it carries a
-/// `UiTargetCamera` and whether it is the overlay's. This is what an app's
-/// `UiRoot` observer sees.
 #[derive(Resource, Default)]
 struct AddedRoots(Vec<AddedRoot>);
 
-/// One parentless node, as it was when `Node` was added.
 struct AddedRoot {
-    /// Whether it already carried a `UiTargetCamera`.
     aimed: bool,
-    /// Whether it is one of the overlay's.
     overlay: bool,
 }
 
-/// Notes a parentless node as it appears.
 fn note_root(
     added: On<Add<Node>>,
     nodes: Query<(Has<ChildOf>, Has<UiTargetCamera>, Has<OverlayRoot>)>,
@@ -375,7 +356,6 @@ fn note_root(
     }
 }
 
-/// The overlay's roots that were added without a target camera.
 fn unaimed_overlay_roots(app: &App) -> usize {
     app.world()
         .resource::<AddedRoots>()
@@ -385,7 +365,6 @@ fn unaimed_overlay_roots(app: &App) -> usize {
         .count()
 }
 
-/// The overlay's roots now, with the camera each aims at.
 fn overlay_aims(app: &mut App) -> Vec<Option<Entity>> {
     let world = app.world_mut();
     let mut roots = world.query_filtered::<Option<&UiTargetCamera>, With<OverlayRoot>>();
@@ -404,7 +383,6 @@ fn the_overlay_never_adds_a_root_without_a_target_camera() {
     app.finish();
     app.cleanup();
 
-    // No camera yet: the overlay waits.
     for _ in 0..3 {
         app.update();
     }
@@ -414,7 +392,6 @@ fn the_overlay_never_adds_a_root_without_a_target_camera() {
     );
     assert_eq!(unaimed_overlay_roots(&app), 0);
 
-    // A camera spawned in a later frame.
     let first = app.world_mut().spawn(Camera2d).id();
     app.update();
     app.update();
@@ -422,7 +399,6 @@ fn the_overlay_never_adds_a_root_without_a_target_camera() {
     assert!(aims.len() > 10, "the overlay exists now: {}", aims.len());
     assert!(aims.iter().all(|aim| *aim == Some(first)));
 
-    // A press starts a ring, the one root that appears long after the rest.
     {
         let mut input = app.world_mut().resource_mut::<SyntheticInput>();
         input.move_cursor(Vec2::new(40.0, 30.0));
@@ -435,8 +411,8 @@ fn the_overlay_never_adds_a_root_without_a_target_camera() {
     assert_eq!(rings.len(), 1, "the press started a ring");
     assert!(rings[0].is_some_and(|aimed| aimed.0 == first));
 
-    // Another camera takes over as the default UI camera (a despawned
-    // camera needs the renderer's world to sync to, which this app lacks).
+    // Swap the default UI camera instead of despawning one: this app has no
+    // render world to sync a despawn to.
     let second = app
         .world_mut()
         .spawn((
@@ -453,7 +429,6 @@ fn the_overlay_never_adds_a_root_without_a_target_camera() {
     assert!(aims.len() > 10);
     assert!(aims.iter().all(|aim| *aim == Some(second)));
 
-    // No camera renders to the window any more: no overlay, so no unaimed root.
     for camera in [first, second] {
         app.world_mut()
             .entity_mut(camera)
@@ -463,7 +438,6 @@ fn the_overlay_never_adds_a_root_without_a_target_camera() {
     app.update();
     assert_eq!(overlay_aims(&mut app).len(), 0);
 
-    // And back again.
     app.world_mut()
         .entity_mut(first)
         .insert(RenderTarget::Window(WindowRef::Primary));
@@ -493,7 +467,6 @@ fn the_default_check_marks_are_ascii_the_bundled_font_can_draw() {
     }
 }
 
-/// How many fingers and marks the overlay has, and the fingers' positions.
 fn touch_overlay(app: &mut App) -> (Vec<Vec2>, usize) {
     let world = app.world_mut();
     let mut fingers = world.query_filtered::<&Node, With<OverlayFinger>>();

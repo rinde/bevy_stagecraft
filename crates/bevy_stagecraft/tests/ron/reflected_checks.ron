@@ -5,14 +5,12 @@
     window_size: (800, 600),
     setup: App(PlainUi),
     steps: [
-        // Bevy UI has a `Button` too, so the short name is ambiguous.
         Check(Count(with: ["bevy_ui_widgets::button::Button"], is: Eq(1))),
         Check(Resource(path: "Activations.0", is: Eq(0))),
         Check(Exists(Text("Pause"))),
         Check(Not(Disabled(Text("Pause")))),
         Glide(target: Text("Pause"), frames: 10),
         Click(Left),
-        // No guessed Wait: the check waits up to five frames for the click.
         Check(Within(5, Resource(path: "Activations.0", is: Eq(1)))),
         Check(All([Visible(Text("Pause")), TextOf(Text("Pause"), Exact("Pause"))])),
     ],

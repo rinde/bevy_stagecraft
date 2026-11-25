@@ -1,10 +1,3 @@
-//! The documentation budgets: `AGENTS.md`, `README.md` and `agent-docs/` stay
-//! small, linked and free of dead links.
-//!
-//! The limits below are the source of truth; `agent-docs/writing-docs.md`
-//! names this file for them. A failure means split the file by topic, not
-//! compress it.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -18,29 +11,19 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-/// Lines `AGENTS.md` may have.
 const AGENTS_MAX_LINES: usize = 100;
-/// Bytes `AGENTS.md` may have.
 const AGENTS_MAX_BYTES: usize = 6 * 1024;
-/// Lines `README.md` may have.
 const README_MAX_LINES: usize = 200;
-/// Bytes `README.md` may have.
 const README_MAX_BYTES: usize = 10 * 1024;
-/// Lines each markdown file under `agent-docs/` may have.
 const GUIDE_MAX_LINES: usize = 250;
-/// Bytes each markdown file under `agent-docs/` may have.
 const GUIDE_MAX_BYTES: usize = 16 * 1024;
-/// Characters a line may have outside fenced code blocks.
 const MAX_LINE_CHARS: usize = 200;
-/// What to do about a budget failure.
 const ADVICE: &str = "split it by topic (do not compress it), see agent-docs/writing-docs.md";
 
-/// The repository root.
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// Every markdown file under `dir`, recursively, as paths relative to the root.
 fn markdown_under(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root().join(dir)) else {
         return;
@@ -55,7 +38,6 @@ fn markdown_under(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The checked files: `AGENTS.md`, `README.md` and `agent-docs/**/*.md`.
 fn doc_files() -> Vec<PathBuf> {
     let mut files = vec![PathBuf::from("AGENTS.md"), PathBuf::from("README.md")];
     markdown_under(Path::new("agent-docs"), &mut files);
@@ -63,12 +45,10 @@ fn doc_files() -> Vec<PathBuf> {
     files
 }
 
-/// The text of a file relative to the root.
 fn read(rel: &Path) -> String {
     fs::read_to_string(root().join(rel)).unwrap_or_default()
 }
 
-/// The lines of `text` outside fenced code blocks, with their 1-based number.
 fn prose_lines(text: &str) -> Vec<(usize, &str)> {
     let mut fenced = false;
     let mut out = Vec::new();
@@ -83,7 +63,6 @@ fn prose_lines(text: &str) -> Vec<(usize, &str)> {
     out
 }
 
-/// The targets of the inline links `[text](target)` on a line.
 fn link_targets(line: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut rest = line;
@@ -98,7 +77,6 @@ fn link_targets(line: &str) -> Vec<&str> {
     out
 }
 
-/// The GitHub anchor of a heading text.
 fn slug(heading: &str) -> String {
     heading
         .trim()
@@ -109,7 +87,6 @@ fn slug(heading: &str) -> String {
         .collect()
 }
 
-/// The anchors a markdown file offers.
 fn anchors(text: &str) -> BTreeSet<String> {
     prose_lines(text)
         .into_iter()
@@ -118,7 +95,6 @@ fn anchors(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// `base` joined with `target`, with `.` and `..` resolved.
 fn resolve(base: &Path, target: &str) -> PathBuf {
     let mut out = PathBuf::new();
     for c in base
@@ -138,7 +114,6 @@ fn resolve(base: &Path, target: &str) -> PathBuf {
     out
 }
 
-/// Fails, listing every problem, when there are any.
 fn assert_clean(problems: &[String]) {
     assert!(
         problems.is_empty(),

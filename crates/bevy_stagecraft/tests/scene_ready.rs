@@ -1,6 +1,3 @@
-//! The player holds the first step until the scenes a setup spawned are
-//! loaded, so a check needs no `Within` for a scene with assets.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -32,45 +29,30 @@ use bevy::{
 };
 use bevy_stagecraft::{Check, HeadlessPlugins, Scenario, Step};
 
-/// Marks the entity the nested scene spawns.
 #[derive(Component, Reflect, Default, Clone, FromTemplate)]
 #[reflect(Component)]
 struct Inner;
 
-/// Marks the entity of the scene that includes the nested one.
 #[derive(Component, Reflect, Default, Clone, FromTemplate)]
 #[reflect(Component)]
 struct Outer;
 
-/// What the loader waits for and the app counts.
 #[derive(Default)]
 struct Gate {
-    /// Frames the app has run.
     frames: u32,
-    /// The load waiting for its frame, to wake when it comes.
     waker: Option<Waker>,
 }
 
-/// The gate shared between the app and the loader.
 type SharedGate = Arc<Mutex<Gate>>;
 
-/// Loads `inner.bsn` as a scene once the app has run `release_at` frames, as
-/// a file read that takes a while would.
 #[derive(TypePath)]
 struct SlowSceneLoader {
-    /// The gate.
     gate: SharedGate,
-    /// The frame from which the load completes.
     release_at: u32,
 }
 
-/// A future that is pending until the gate's frame count reaches `release_at`.
-/// It parks its waker instead of waking itself: Bevy's single-threaded task
-/// pool would run a self-waking task forever.
 struct UntilFrame {
-    /// The gate.
     gate: SharedGate,
-    /// The frame from which it is ready.
     release_at: u32,
 }
 
@@ -108,7 +90,6 @@ impl AssetLoader for SlowSceneLoader {
     }
 }
 
-/// A headless app whose `inner.bsn` loads only after `release_at` frames.
 fn app(release_at: u32) -> App {
     let dir = Dir::default();
     dir.insert_asset_text(Path::new("inner.bsn"), "");
@@ -135,7 +116,6 @@ fn app(release_at: u32) -> App {
     app
 }
 
-/// Queues a scene that includes the nested `inner.bsn`.
 fn spawn_outer(world: &mut World) {
     world.queue_spawn_scene(bsn! { :"inner.bsn" Outer });
 }
