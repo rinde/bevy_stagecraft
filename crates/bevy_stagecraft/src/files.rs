@@ -6,6 +6,13 @@
 //! once per [`Variant`] (window size, scale factor, theme), as one test named
 //! `file [variant]`.
 //!
+//! `*.scene.ron` files are saved worlds, not scenarios, and [`ron_files`]
+//! skips them; each scenario's `base_dir` is its file's directory. A file
+//! that names the variants it runs in is [`FileOutcome::Skipped`] in the
+//! others, reported as `skipped` apart from `failed` and counted as passed. A
+//! file whose app panics fails (the player catches the panic as a failed
+//! step) and the runner goes on with the next file.
+//!
 //! ```toml
 //! [[test]]
 //! name = "ron_scenarios"
@@ -307,7 +314,6 @@ pub fn run_ron_tagged(
 /// words that do not start with `-` filter by file name, as with
 /// `cargo test <filter>`. See [`run_ron_tests_with_variants`] to play every
 /// file in several windows and themes.
-#[must_use]
 pub fn run_ron_tests(
     dir: impl AsRef<Path>,
     registry: &Registry,
@@ -323,7 +329,6 @@ pub fn run_ron_tests(
 /// in the default variant), and succeeds only if all of them passed. A filter
 /// word on the command line matches those names, so `cargo test narrow` plays
 /// the narrow variant of every file.
-#[must_use]
 pub fn run_ron_tests_with_variants(
     dir: impl AsRef<Path>,
     registry: &Registry,
@@ -645,7 +650,7 @@ mod tests {
         assert_eq!(results[1].variant, "narrow");
         assert!(results[1].skipped());
         assert!(results[1].passed(), "a skip is not a failure");
-        assert!(results[1].failures().is_empty());
+        assert_eq!(results[1].failures().len(), 0);
         assert_eq!(results[2].variant, "retina");
         assert!(
             results[2].skipped(),

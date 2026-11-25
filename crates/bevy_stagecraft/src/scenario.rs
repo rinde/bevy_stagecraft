@@ -4,6 +4,54 @@
 //! serialisable [`Script`] and back (see [`crate::script`]). The setup and
 //! view closures are the exception: they are Rust only, so they stay out of
 //! the script.
+//!
+//! # What a scenario holds
+//!
+//! The app's setup and view (`app_setup`, `scene_setup`, `app_view`, which a
+//! file holds), steps, and expected [`Check`]s
+//! (`expect_check`). Nothing else is a check: there are no check closures, so
+//! every scenario exports. Closures for setup and view run after the data
+//! ones and are never in a file. Beside them:
+//!
+//! - `base_dir`: where a setup that names a file (and a screenshot baseline)
+//!   looks for it. `load_ron_file` sets it to the file's directory.
+//! - `action_timeout`: frames a step waits for its target, else
+//!   [`DEFAULT_ACTION_TIMEOUT`].
+//! - `scale_factor`: physical pixels per logical pixel, `None` meaning 1.
+//! - `variants`: the names of the [`Variant`](crate::Variant)s it runs in
+//!   (a file's `variants: [..]`), empty for every one. The default variant
+//!   answers to `default`.
+//! - tags and annotations (see [`crate::annotation`]).
+//!
+//! # Steps
+//!
+//! A [`Step::Group`] is only a label and may nest. [`flatten`] gives the leaf
+//! steps as [`FlatStep`]s with the path of names, and everything that plays,
+//! numbers or reports steps works on that flat list, so playback is frame for
+//! frame the same as without groups. [`with_group_path`] puts the path, joined
+//! by [`GROUP_SEPARATOR`] (ASCII, as the bundled font has no `›`), before a
+//! line.
+//!
+//! [`Step::Type`] types one character per frame through
+//! [`SyntheticInput`](crate::SyntheticInput); `into` clicks its target first.
+//! [`Step::MoveBurst`] makes several pointer moves in one frame, as a
+//! high-rate mouse does. [`Step::Capture`] reads the world and keeps the
+//! value under a name for later comparisons (see
+//! [`Value`](crate::Value)); it takes no frame and cannot sit under a
+//! `Timeout` or `Force`.
+//!
+//! [`Step::Timeout`] and [`Step::Force`] wrap one step: a `MoveTo`, `Glide`,
+//! `Drag`, `Click`, `Press`, or a `Type` with an `into`; any other step inside
+//! one is a load error. [`Step::inner`] sees through them and
+//! [`Step::waits_for_target`] says whether a step waits on its target.
+//!
+//! Touch steps (`TouchDown`, `TouchMove`, `TouchUp`, `TouchCancel`) name a
+//! finger (`finger`; 0 is left out of a file; `with_finger` sets it).
+//! `TouchTap` is down, then up the next frame, since Bevy clicks only an
+//! entity hovered the frame before; `TouchDrag` takes `frames + 2`. The ones
+//! that aim at a target wait for it and take `Timeout` and `Force`.
+//!
+//! [`Modifiers`] is written as a list in a file, `[Ctrl, Shift]`.
 
 use alloc::sync::Arc;
 use core::{fmt, ops::BitOr};
@@ -54,14 +102,6 @@ impl Modifiers {
         self.bits & other.bits == other.bits
     }
 
-    /// The set without the modifiers in `other`.
-    #[must_use]
-    pub(crate) const fn without(self, other: Self) -> Self {
-        Self {
-            bits: self.bits & !other.bits,
-        }
-    }
-
     /// Whether no modifier is in the set.
     #[must_use]
     pub const fn is_empty(self) -> bool {
@@ -81,6 +121,15 @@ impl Modifiers {
         .filter_map(|(modifier, key)| self.contains(modifier).then_some(key))
         .collect()
     }
+}
+
+/// For serde: leave finger 0 out of a file.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+const fn is_first_finger(finger: &u8) -> bool {
+    *finger == 0
 }
 
 /// For serde: leave the modifiers out of a file when there are none.
@@ -161,7 +210,8 @@ impl BitOr for Modifiers {
 /// last frame) and receives the pointer (nothing covers it). A press
 /// ([`Step::Click`] or [`Step::Press`]) right after a step that moved the
 /// pointer to a widget also waits for that widget to be enabled and still
-/// to receive the pointer, and so does the start of a [`Step::Drag`]. The
+/// to receive the pointer, and so does the start of a [`Step::Drag`]; the touch
+/// steps that put a finger on a target wait the same way. The
 /// wait lasts at most the scenario's action timeout
 /// ([`Scenario::action_timeout`], [`DEFAULT_ACTION_TIMEOUT`] frames unless
 /// it says), or the step's own ([`Step::Timeout`]); when it runs out the
@@ -195,6 +245,53 @@ pub enum Step {
     /// Move to `from`, press the left button, glide to `to` over `frames`
     /// frames, and release. Takes `frames + 2` frames.
     Drag {
+        /// Where the drag starts.
+        from: Target,
+        /// Where the drag ends.
+        to: Target,
+        /// How many frames the movement takes; at least one.
+        frames: u16,
+    },
+    /// Put a finger down at the target (one frame). The finger is not the
+    /// mouse: the cursor and `Hovered` stay where they are.
+    TouchDown {
+        /// Where the finger lands.
+        at: Target,
+        /// Which finger; 0 unless it says.
+        #[serde(default, skip_serializing_if = "is_first_finger")]
+        finger: u8,
+    },
+    /// Move a finger that is down to the target (one frame).
+    TouchMove {
+        /// Where the finger goes.
+        to: Target,
+        /// Which finger; 0 unless it says.
+        #[serde(default, skip_serializing_if = "is_first_finger")]
+        finger: u8,
+    },
+    /// Lift a finger that is down, where it is (one frame).
+    TouchUp {
+        /// Which finger; 0 unless it says.
+        #[serde(default, skip_serializing_if = "is_first_finger")]
+        finger: u8,
+    },
+    /// The system takes a finger away without a lift (one frame): the
+    /// pointer ends with no click. On Bevy 0.20 widgets see `Pointer<Out>`
+    /// and never `Pointer<Cancel>`, as on a device; an app that must react
+    /// reads `Touches` (`just_canceled`).
+    TouchCancel {
+        /// Which finger; 0 unless it says.
+        #[serde(default, skip_serializing_if = "is_first_finger")]
+        finger: u8,
+    },
+    /// Put finger 0 down at the target and lift it on the next frame (two
+    /// frames, because Bevy only clicks an entity a pointer hovered the frame
+    /// before).
+    TouchTap(Target),
+    /// Put finger 0 down at `from`, move it to `to` along the eased path of
+    /// [`Step::Glide`] over `frames` frames, and lift it. Takes `frames + 2`
+    /// frames.
+    TouchDrag {
         /// Where the drag starts.
         from: Target,
         /// Where the drag ends.
@@ -273,7 +370,9 @@ pub enum Step {
     /// The step, waiting at most this many frames for its target to be
     /// actionable instead of the scenario's action timeout. Wraps a
     /// [`Step::MoveTo`], [`Step::Glide`], [`Step::Drag`], [`Step::Click`],
-    /// [`Step::Press`] or a [`Step::Type`] with an `into`:
+    /// [`Step::Press`], a [`Step::Type`] with an `into`, or a touch step that
+    /// acts on a target ([`Step::TouchDown`], [`Step::TouchMove`],
+    /// [`Step::TouchTap`], [`Step::TouchDrag`]):
     /// `Timeout(120, MoveTo(Text("Go")))`.
     Timeout(u16, Box<Self>),
     /// The step at once, with no waiting and no check that its target can be
@@ -397,6 +496,55 @@ impl Step {
         Self::Drag { from, to, frames }
     }
 
+    /// Put finger 0 down at `at`.
+    #[must_use]
+    pub const fn touch_down(at: Target) -> Self {
+        Self::TouchDown { at, finger: 0 }
+    }
+
+    /// Move finger 0 to `to`.
+    #[must_use]
+    pub const fn touch_move(to: Target) -> Self {
+        Self::TouchMove { to, finger: 0 }
+    }
+
+    /// Lift finger 0.
+    #[must_use]
+    pub const fn touch_up() -> Self {
+        Self::TouchUp { finger: 0 }
+    }
+
+    /// Cancel finger 0.
+    #[must_use]
+    pub const fn touch_cancel() -> Self {
+        Self::TouchCancel { finger: 0 }
+    }
+
+    /// Tap `target` with finger 0.
+    #[must_use]
+    pub const fn touch_tap(target: Target) -> Self {
+        Self::TouchTap(target)
+    }
+
+    /// Drag finger 0 from `from` to `to` over `frames` frames.
+    #[must_use]
+    pub const fn touch_drag(from: Target, to: Target, frames: u16) -> Self {
+        Self::TouchDrag { from, to, frames }
+    }
+
+    /// The same touch step for another finger; other steps are unchanged.
+    #[must_use]
+    pub const fn with_finger(mut self, id: u8) -> Self {
+        match &mut self {
+            Self::TouchDown { finger, .. }
+            | Self::TouchMove { finger, .. }
+            | Self::TouchUp { finger }
+            | Self::TouchCancel { finger } => *finger = id,
+            _ => {}
+        }
+        self
+    }
+
     /// Turn the wheel by `x` and `y` pixels.
     #[must_use]
     pub const fn wheel(x: f32, y: f32) -> Self {
@@ -495,6 +643,10 @@ impl Step {
             Self::MoveTo(_)
                 | Self::Glide { .. }
                 | Self::Drag { .. }
+                | Self::TouchDown { .. }
+                | Self::TouchMove { .. }
+                | Self::TouchTap(_)
+                | Self::TouchDrag { .. }
                 | Self::Click(_)
                 | Self::Press(_)
                 | Self::Type { into: Some(_), .. }

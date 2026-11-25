@@ -635,7 +635,7 @@ mod tests {
         )
         .expect("the report has the step");
         assert_eq!(everything.changes.len(), 2);
-        assert!(everything.hidden.is_empty());
+        assert_eq!(everything.hidden.len(), 0);
     }
 
     /// The view of step `index` as the recorder's default filter lists it.

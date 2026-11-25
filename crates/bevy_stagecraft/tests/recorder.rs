@@ -164,6 +164,29 @@ fn gpu_recording_a_plain_ui_scenario_writes_a_filmstrip_a_gif_and_an_index() {
 
 #[test]
 #[ignore = "needs a GPU: run by `just test-gpu`"]
+fn gpu_checking_scenarios_reports_outcomes_without_writing_or_taking_pictures() {
+    let checked = Recorder::new(|_app| {})
+        .every(5)
+        .scenario(click_pause("click the pause button", false))
+        .scenario(click_pause("click it twice", true))
+        .check()
+        .expect("checking works");
+
+    assert!(checked.any_failed(), "the broken scenario is reported");
+    let passed: Vec<_> = checked
+        .scenarios
+        .iter()
+        .map(bevy_stagecraft::ScenarioRecording::passed)
+        .collect();
+    assert_eq!(passed, [true, false], "one passed, one failed");
+    for scenario in &checked.scenarios {
+        assert_eq!(scenario.pictures, 0, "no pictures were taken");
+        assert!(scenario.trace.is_none(), "no trace was kept");
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU: run by `just test-gpu`"]
 fn gpu_a_failed_scenario_gets_a_trace_page_with_snapshots_and_pictures_per_step() {
     let dir = output_dir("recorder-trace");
     let recording = Recorder::new(|_app| {})

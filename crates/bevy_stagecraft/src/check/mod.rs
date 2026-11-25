@@ -10,6 +10,48 @@
 //! short type paths with a reflect path after them (`Editor.tool`). Anything
 //! else is one of the app's own checks: a value of the one enum it marks
 //! with `#[reflect(AppCheck)]` (see [`AppCheck`]), written inside `App(..)`.
+//!
+//! # How a check is polled
+//!
+//! The player polls a check each frame with [`Check::poll`], which gives
+//! `None` while a [`Check::Within`] inside it still waits, else an
+//! [`Outcome`]. Inside, a check comes to one `Verdict` per
+//! frame: holds, fails, pending, broken (it cannot run at all: an ambiguous
+//! target, say) or unavailable (it cannot run here: a screenshot without the
+//! recorder). `Not`, `All`, `Any` and `Within` pass unavailable through, and
+//! it is skipped rather than failed. A broken check fails even inside `Not`
+//! or `Any`.
+//!
+//! A check is read from RON whole, so values keep their spelling; its serde
+//! form goes through a private mirror enum so no derived functions are
+//! public. A bare name, `Named(..)` or `Custom(..)` is refused with a hint to
+//! write `App(..)`.
+//!
+//! # What the built-ins read
+//!
+//! - `Tree { of, matches }`: the UI below a node as indented lines of role,
+//!   label and states (a text input also `= "value"`), matched partially: the
+//!   expected tree lists only what matters, siblings may be left out, their
+//!   order must hold. A mismatch is a `-`/`+` line diff. [`tree_snapshot`]
+//!   writes the same text for a node, and is the last check pick mode offers.
+//! - `Count`, `Resource`, `Component` and `InState`: types by short type
+//!   path, fields by reflect path, values as raw RON read with
+//!   `TypedReflectDeserializer`.
+//! - `Unit`: `Physical` by default, or `Logical`, which reads a physical
+//!   number as logical (divided by the primary window's scale factor) in a
+//!   `Resource` or `Component` check and in the matching `Measure`. Builder
+//!   `.logical()`; file `unit: Logical`.
+//! - `Disabled`, `Checked`, `Selected` (also a `Tab` its list's
+//!   `SelectedTab` names), `Pressed`, `Focused`, `Visible`: `Visible` and
+//!   `OnTop` are about the named node itself, never the widget above it (a
+//!   hidden list inside a visible `Selectable` row is not `Visible`); the
+//!   other states read the nearest widget at or above the node. `OnTop` treats
+//!   a text label as standing for its widget, and asks who is painted
+//!   topmost at the node's middle by `UiStack` order, ignoring `Pickable`
+//!   (the actionability wait honours it); only nodes that paint cover.
+//! - `TextOf` reads a `TextInput`'s `EditableText` value, not its label;
+//!   `Shows` finds a value too.
+//! - `Screenshot`: see [`screenshot`].
 
 mod app;
 mod capture;

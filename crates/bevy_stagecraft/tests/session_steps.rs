@@ -7,7 +7,7 @@
 )]
 
 use bevy::{
-    input::{ButtonState, keyboard::KeyCode, mouse::MouseButton},
+    input::{ButtonState, keyboard::KeyCode, mouse::MouseButton, touch::TouchPhase},
     math::Vec2,
 };
 use bevy_stagecraft::{
@@ -659,4 +659,397 @@ fn shift_held_across_several_characters_still_makes_one_type_step() {
     events.push(key(10, KeyCode::ShiftLeft, ButtonState::Released));
     let steps = convert(&events);
     assert_eq!(typed_texts(&steps), ["AB"], "{steps:?}");
+}
+
+#[test]
+fn a_key_pressed_but_never_released_after_typing_is_not_part_of_the_run() {
+    let mut events = Vec::new();
+    events.extend(typed_pair(3, KeyCode::KeyA, "a"));
+    events.extend(typed_pair(6, KeyCode::KeyB, "b"));
+    events.push(typed_key(9, KeyCode::KeyC, "c"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["ab"], "{steps:?}");
+}
+
+#[test]
+fn shift_left_down_after_typing_is_not_part_of_the_run() {
+    let mut events = Vec::new();
+    events.extend(typed_pair(3, KeyCode::KeyA, "a"));
+    events.push(key(6, KeyCode::ShiftLeft, ButtonState::Pressed));
+    events.push(typed_key(8, KeyCode::KeyB, "B"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), ["a"], "{steps:?}");
+}
+
+#[test]
+fn a_long_run_of_single_keystrokes_becomes_one_exact_type_step() {
+    let mut events = Vec::new();
+    let mut expected = String::new();
+    for index in 0..20_000_u32 {
+        events.extend(typed_pair(index * 4, KeyCode::KeyA, "x"));
+        expected.push('x');
+    }
+    events.push(typed_key(20_000 * 4, KeyCode::KeyB, "tail"));
+    let steps = convert(&events);
+    assert_eq!(typed_texts(&steps), [expected.as_str()], "{steps:?}");
+}
+
+/// The frames the steps spend, as playback counts them: waits and glides by
+/// their length, a drag by its length plus its press and release, every other
+/// step as one.
+fn played_frames(steps: &[Step]) -> u32 {
+    steps
+        .iter()
+        .map(|step| match step {
+            Step::Wait(frames) | Step::Glide { frames, .. } => u32::from(*frames),
+            Step::Drag { frames, .. } => u32::from(*frames) + 2,
+            _ => 1,
+        })
+        .sum()
+}
+
+fn tap_at(frame: u32, x: f32, y: f32) -> [RecordedEvent; 2] {
+    let target = Target::screen(Vec2::new(x, y));
+    [
+        button(frame, ButtonState::Pressed, x, y, target.clone()),
+        button(frame + 1, ButtonState::Released, x, y, target),
+    ]
+}
+
+#[test]
+fn a_pause_longer_than_a_u16_is_several_waits_that_add_up() {
+    let options = StepOptions {
+        idle_frames: 200_000,
+        idle_wait: 30,
+        ..StepOptions::default()
+    };
+    let mut events = vec![moved(0, 10.0, 10.0)];
+    events.extend(tap_at(1, 10.0, 10.0));
+    events.extend(tap_at(70_001, 10.0, 10.0));
+    let steps = steps_from_events(&events, 70_002, &options);
+    let waited: u32 = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Wait(frames) => Some(u32::from(*frames)),
+            _ => None,
+        })
+        .sum();
+    assert!(waited >= 70_000, "{steps:?}");
+    assert!(
+        steps.iter().all(|step| !matches!(step, Step::Wait(0))),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn a_glide_longer_than_a_u16_keeps_its_length_and_its_end() {
+    let events = [moved(0, 0.0, 0.0), moved(70_000, 100.0, 0.0)];
+    // A pause between samples this long would end the run, so lift the limit.
+    let options = StepOptions {
+        idle_frames: 200_000,
+        ..StepOptions::default()
+    };
+    let steps = steps_from_events(&events, 70_000, &options);
+    let glides: Vec<_> = steps
+        .iter()
+        .filter_map(|step| match step {
+            Step::Glide { target, frames } => Some((target, u32::from(*frames))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(glides.iter().map(|(_, frames)| frames).sum::<u32>(), 70_000);
+    assert!(glides.len() >= 2, "{steps:?}");
+    assert!(
+        matches!(glides.last(), Some((Target::Screen(end), _)) if *end == Vec2::new(100.0, 0.0)),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn a_drag_longer_than_a_u16_is_spelt_out_and_events_after_it_stay_in_time() {
+    let from = Target::screen(Vec2::new(10.0, 10.0));
+    let to = Target::screen(Vec2::new(110.0, 10.0));
+    let mut events = vec![
+        moved(0, 10.0, 10.0),
+        button(5, ButtonState::Pressed, 10.0, 10.0, from),
+        moved(70_005, 110.0, 10.0),
+        button(70_006, ButtonState::Released, 110.0, 10.0, to),
+    ];
+    events.push(key(70_020, KeyCode::KeyA, ButtonState::Pressed));
+    events.push(key(70_021, KeyCode::KeyA, ButtonState::Released));
+    let options = StepOptions {
+        idle_frames: 200_000,
+        ..StepOptions::default()
+    };
+    let steps = steps_from_events(&events, 70_030, &options);
+    assert!(
+        steps.iter().all(|step| !matches!(step, Step::Drag { .. })),
+        "{steps:?}"
+    );
+    let tap = steps
+        .iter()
+        .position(|step| matches!(step, Step::Tap { .. }))
+        .unwrap();
+    let before = played_frames(steps.get(..tap).unwrap());
+    assert!(
+        (70_019..=70_024).contains(&before),
+        "the tap plays at frame {before}: {steps:?}"
+    );
+}
+
+/// Both keys of a modifier go down, then `released` comes up first; the other
+/// stays held while `a` is typed and released, then it comes up too.
+fn overlapping(first: KeyCode, second: KeyCode, released: KeyCode) -> Vec<RecordedEvent> {
+    let kept = if released == first { second } else { first };
+    let mut events = vec![
+        key(0, first, ButtonState::Pressed),
+        key(1, second, ButtonState::Pressed),
+        key(2, released, ButtonState::Released),
+    ];
+    events.extend(typed_pair(4, KeyCode::KeyA, "a"));
+    events.push(key(8, kept, ButtonState::Released));
+    events
+}
+
+#[test]
+fn text_stays_a_key_step_while_the_other_side_of_a_modifier_is_held() {
+    let pairs = [
+        (KeyCode::ControlLeft, KeyCode::ControlRight),
+        (KeyCode::AltLeft, KeyCode::AltRight),
+        (KeyCode::SuperLeft, KeyCode::SuperRight),
+    ];
+    for (left, right) in pairs {
+        for released in [left, right] {
+            let steps = convert(&overlapping(left, right, released));
+            assert!(
+                typed_texts(&steps).is_empty(),
+                "{released:?} released first: {steps:?}"
+            );
+            assert!(
+                steps.contains(&Step::tap(KeyCode::KeyA)),
+                "{released:?} released first: {steps:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn text_is_typed_again_once_both_sides_of_a_modifier_are_released() {
+    for released in [KeyCode::ControlLeft, KeyCode::ControlRight] {
+        let mut events = overlapping(KeyCode::ControlLeft, KeyCode::ControlRight, released);
+        events.extend(typed_pair(12, KeyCode::KeyB, "b"));
+        let steps = convert(&events);
+        assert_eq!(typed_texts(&steps), ["b"], "{steps:?}");
+    }
+}
+
+#[test]
+fn a_chord_folds_while_the_other_control_key_is_still_held() {
+    for released in [KeyCode::ControlLeft, KeyCode::ControlRight] {
+        let kept = if released == KeyCode::ControlLeft {
+            KeyCode::ControlRight
+        } else {
+            KeyCode::ControlLeft
+        };
+        let events = [
+            key(0, KeyCode::ControlLeft, ButtonState::Pressed),
+            key(1, KeyCode::ControlRight, ButtonState::Pressed),
+            key(2, released, ButtonState::Released),
+            typed_key(4, KeyCode::KeyS, "s"),
+            key(5, KeyCode::KeyS, ButtonState::Released),
+            key(6, kept, ButtonState::Released),
+        ];
+        let steps = convert(&events);
+        assert!(typed_texts(&steps).is_empty(), "{steps:?}");
+        assert!(
+            steps.contains(&Step::tap(KeyCode::KeyS)),
+            "{released:?} released first: {steps:?}"
+        );
+    }
+}
+
+const fn touch(
+    frame: u32,
+    finger: u8,
+    phase: TouchPhase,
+    x: f32,
+    y: f32,
+    target: Target,
+) -> RecordedEvent {
+    at(
+        frame,
+        RecordedKind::Touch {
+            finger,
+            phase,
+            position: Vec2::new(x, y),
+            target,
+        },
+    )
+}
+
+const fn at_point(x: f32, y: f32) -> Target {
+    Target::screen(Vec2::new(x, y))
+}
+
+fn without_waits(steps: Vec<Step>) -> Vec<Step> {
+    steps
+        .into_iter()
+        .filter(|step| !matches!(step, Step::Wait(_)))
+        .collect()
+}
+
+#[test]
+fn a_finger_down_and_up_in_place_is_a_touch_tap_on_the_label() {
+    let label = Target::text("+1");
+    let steps = convert(&[
+        touch(5, 0, TouchPhase::Started, 50.0, 50.0, label.clone()),
+        touch(8, 0, TouchPhase::Ended, 50.0, 50.0, label.clone()),
+    ]);
+    assert_eq!(without_waits(steps), vec![Step::touch_tap(label)]);
+}
+
+#[test]
+fn a_straight_finger_drag_is_one_touch_drag() {
+    let mut events = vec![touch(
+        10,
+        0,
+        TouchPhase::Started,
+        0.0,
+        0.0,
+        at_point(0.0, 0.0),
+    )];
+    for step in 1_u8..=20 {
+        let i = f32::from(step);
+        events.push(touch(
+            10 + u32::from(step),
+            0,
+            TouchPhase::Moved,
+            5.0 * i,
+            2.0 * i,
+            at_point(5.0 * i, 2.0 * i),
+        ));
+    }
+    events.push(touch(
+        31,
+        0,
+        TouchPhase::Ended,
+        100.0,
+        40.0,
+        at_point(100.0, 40.0),
+    ));
+    let steps = without_waits(convert(&events));
+    assert_eq!(
+        steps,
+        vec![Step::touch_drag(
+            at_point(0.0, 0.0),
+            at_point(100.0, 40.0),
+            19
+        )]
+    );
+}
+
+#[test]
+fn a_very_short_straight_finger_drag_is_spelt_out_so_it_plays_no_longer_than_recorded() {
+    for held in 1_u32..=2 {
+        let events = [
+            touch(10, 0, TouchPhase::Started, 0.0, 0.0, at_point(0.0, 0.0)),
+            touch(
+                10 + held,
+                0,
+                TouchPhase::Ended,
+                100.0,
+                40.0,
+                at_point(100.0, 40.0),
+            ),
+        ];
+        let steps = without_waits(convert(&events));
+        assert_eq!(
+            steps,
+            vec![
+                Step::touch_down(at_point(0.0, 0.0)),
+                Step::touch_move(at_point(100.0, 40.0)),
+                Step::touch_up(),
+            ],
+            "held {held} frames"
+        );
+    }
+}
+
+#[test]
+fn a_bent_finger_path_keeps_its_corner_as_touch_moves() {
+    let events = [
+        touch(1, 0, TouchPhase::Started, 0.0, 0.0, at_point(0.0, 0.0)),
+        touch(5, 0, TouchPhase::Moved, 20.0, 0.0, at_point(20.0, 0.0)),
+        touch(10, 0, TouchPhase::Moved, 40.0, 0.0, at_point(40.0, 0.0)),
+        touch(15, 0, TouchPhase::Moved, 40.0, 20.0, at_point(40.0, 20.0)),
+        touch(20, 0, TouchPhase::Moved, 40.0, 40.0, at_point(40.0, 40.0)),
+        touch(22, 0, TouchPhase::Ended, 40.0, 40.0, at_point(40.0, 40.0)),
+    ];
+    let steps = without_waits(convert(&events));
+    assert_eq!(
+        steps,
+        vec![
+            Step::touch_down(at_point(0.0, 0.0)),
+            Step::touch_move(at_point(40.0, 0.0)),
+            Step::touch_move(at_point(40.0, 40.0)),
+            Step::touch_up(),
+        ]
+    );
+}
+
+#[test]
+fn a_cancelled_finger_is_a_touch_cancel() {
+    let events = [
+        touch(1, 0, TouchPhase::Started, 9.0, 9.0, at_point(9.0, 9.0)),
+        touch(30, 0, TouchPhase::Canceled, 9.0, 9.0, at_point(9.0, 9.0)),
+    ];
+    let steps = without_waits(convert(&events));
+    assert_eq!(
+        steps,
+        vec![Step::touch_down(at_point(9.0, 9.0)), Step::touch_cancel()]
+    );
+}
+
+#[test]
+fn two_fingers_at_once_are_spelt_out_with_their_finger_numbers() {
+    let events = [
+        touch(1, 0, TouchPhase::Started, 10.0, 10.0, at_point(10.0, 10.0)),
+        touch(2, 1, TouchPhase::Started, 90.0, 10.0, at_point(90.0, 10.0)),
+        touch(6, 1, TouchPhase::Ended, 90.0, 10.0, at_point(90.0, 10.0)),
+        touch(8, 0, TouchPhase::Ended, 10.0, 10.0, at_point(10.0, 10.0)),
+    ];
+    let steps = without_waits(convert(&events));
+    assert_eq!(
+        steps,
+        vec![
+            Step::touch_down(at_point(10.0, 10.0)),
+            Step::touch_down(at_point(90.0, 10.0)).with_finger(1),
+            Step::touch_up().with_finger(1),
+            Step::touch_up(),
+        ]
+    );
+}
+
+#[test]
+fn touch_leaves_the_scripts_mouse_pointer_alone() {
+    let steps = convert(&[
+        moved(1, 5.0, 5.0),
+        touch(10, 0, TouchPhase::Started, 70.0, 70.0, at_point(70.0, 70.0)),
+        touch(12, 0, TouchPhase::Ended, 70.0, 70.0, at_point(70.0, 70.0)),
+        button(20, ButtonState::Pressed, 5.0, 5.0, at_point(5.0, 5.0)),
+        button(21, ButtonState::Released, 5.0, 5.0, at_point(5.0, 5.0)),
+    ]);
+    let steps = without_waits(steps);
+    assert!(
+        steps.contains(&Step::Click(MouseButton::Left)),
+        "no extra MoveTo needed for the click: {steps:?}"
+    );
+    assert_eq!(
+        steps
+            .iter()
+            .filter(|step| matches!(step, Step::MoveTo(_)))
+            .count(),
+        1,
+        "{steps:?}"
+    );
 }

@@ -8,14 +8,43 @@
 //! tag naming its best target above it, and the picked node has an outline of
 //! its own (see [`PickHighlight`]).
 //!
+//! # What is drawn
+//!
+//! * the arrow cursor ([`OverlayCursor`]), a press ring ([`OverlayRing`]), a
+//!   marker while a button is held ([`OverlayHeld`]) and the trail
+//!   ([`OverlayTrailDot`]);
+//! * the caption strip: the scenario's caption, the step in words
+//!   ([`describe_step`], [`current_step_text`], which show the group path of a
+//!   step in a group) and the checks ([`checks_text`]);
+//! * a circle under every finger that is down ([`OverlayFinger`], read from
+//!   Bevy's `Touches`, which scripted fingers reach) and a mark where a finger
+//!   went down or lifted, or was cancelled ([`OverlayTouchMark`],
+//!   [`TouchMarkKind`]), shrinking and fading over [`TOUCH_MARK_FRAMES`]
+//!   frames, with its age counted in frames. A touch step never moves the
+//!   arrow. The systems are `show_fingers` and `animate_touch_marks`, in
+//!   [`OverlaySystems::Update`]; the colours are
+//!   [`OverlayTheme::finger`], [`OverlayTheme::touch_down_mark`] and
+//!   [`OverlayTheme::touch_up_mark`];
+//! * for a checkpoint taken by the session recorder, a flash and a caption
+//!   line ([`checkpoint_text`]); while the session asks for a checkpoint's
+//!   name (see [`crate::session::SessionRecorder::naming`]) the line is the
+//!   prompt instead ([`naming_text`]).
+//!
+//! The marks are ASCII (`PASS`, `FAIL`), because the bundled font draws the
+//! check and cross dingbats as empty boxes. Words for an app's own targets
+//! come from [`TargetDescriptions`]; colours and sizes from [`OverlayTheme`].
+//!
 //! Only the gallery and the recorder add [`CursorOverlayPlugin`]; headless
 //! tests never do. Everything it draws is screen-space UI with
 //! [`Pickable::IGNORE`], so it can never take a picking hit from the UI under
 //! it.
 //!
-//! Every top-level node carries a `UiTargetCamera` from the moment it is
-//! spawned, so an app can tell the overlay's roots from its own. The overlay
-//! therefore waits for a camera (see [`OverlayCamera`]).
+//! Every top-level node ([`OverlayRoot`]) carries a `UiTargetCamera` from the
+//! moment it is spawned, so an app's `Add<Node>` observer never sees an
+//! unaimed overlay root. The overlay therefore waits for a camera: the
+//! roots are spawned the first frame there is one, aimed at [`OverlayCamera`]
+//! if it names one and else at the default UI camera. They follow that camera
+//! if it changes and are despawned when it goes.
 
 use alloc::{collections::VecDeque, sync::Arc};
 use core::fmt;
@@ -35,7 +64,7 @@ use bevy::{
         system::{Commands, Local, Query, Res, ResMut},
     },
     image::Image,
-    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
+    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton, touch::Touches},
     math::Vec2,
     picking::Pickable,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
@@ -74,6 +103,18 @@ pub const HELD_SIZE: f32 = 26.0;
 pub const TRAIL_LENGTH: u16 = 8;
 /// Diameter of a trail dot, in logical pixels.
 pub const TRAIL_DOT_SIZE: f32 = 6.0;
+/// Diameter of the filled circle drawn under each finger that is down, in
+/// logical pixels.
+pub const FINGER_SIZE: f32 = 30.0;
+/// How many frames the mark where a finger went down or lifted takes to
+/// shrink and fade.
+pub const TOUCH_MARK_FRAMES: u16 = 24;
+/// Diameter of a touch mark when it appears, in logical pixels.
+pub const TOUCH_MARK_START_SIZE: f32 = 56.0;
+/// Diameter of a touch mark when it is gone, in logical pixels.
+pub const TOUCH_MARK_END_SIZE: f32 = 36.0;
+/// Border width of a touch mark, in logical pixels.
+pub const TOUCH_MARK_BORDER: f32 = 4.0;
 /// Height of the caption strip, in logical pixels.
 pub const CAPTION_HEIGHT: f32 = 56.0;
 /// Font size of the caption strip's text, in logical pixels.
@@ -112,6 +153,13 @@ pub struct OverlayTheme {
     pub cursor_held: Color,
     /// Colour of the ring shown while a button is down.
     pub held_ring: Color,
+    /// Fill of the circle under each finger that is down.
+    pub finger: Color,
+    /// Colour of the mark where a finger went down; it fades to nothing.
+    pub touch_down_mark: Color,
+    /// Colour of the mark where a finger lifted or was cancelled; it fades
+    /// to nothing.
+    pub touch_up_mark: Color,
     /// Colour of a press ring when it appears; it fades to nothing.
     pub press_ring: Color,
     /// Colour of the newest trail dot; older ones fade.
@@ -159,6 +207,9 @@ impl Default for OverlayTheme {
             cursor: Color::WHITE,
             cursor_held: Color::srgb(1.0, 0.75, 0.2),
             held_ring: Color::srgba(1.0, 0.75, 0.2, 0.9),
+            finger: Color::srgba(0.2, 0.8, 0.9, 0.55),
+            touch_down_mark: Color::srgba(0.3, 0.9, 0.4, 0.95),
+            touch_up_mark: Color::srgba(0.7, 0.4, 1.0, 0.95),
             press_ring: Color::srgba(1.0, 0.4, 0.2, 0.9),
             trail: Color::srgba(1.0, 1.0, 1.0, 0.5),
             caption_background: Color::srgba(0.05, 0.05, 0.08, 0.85),
@@ -284,6 +335,15 @@ const fn button_name(button: MouseButton) -> &'static str {
     }
 }
 
+/// Which finger a touch step is about, unless it is the first.
+fn finger_suffix(finger: u8) -> String {
+    if finger == 0 {
+        String::new()
+    } else {
+        format!(" (finger {finger})")
+    }
+}
+
 /// The target the pointer was last sent to before step `index`, which is what
 /// a click or a press then acts on.
 fn last_target(steps: &[Step]) -> Option<&Target> {
@@ -317,6 +377,24 @@ pub fn describe_step(step: &Step, before: &[Step], descriptions: &TargetDescript
         Step::Click(button) => with_target(button_name(*button)),
         Step::Drag { from, to, .. } => format!(
             "Drag {} to {}",
+            descriptions.describe(from),
+            descriptions.describe(to)
+        ),
+        Step::TouchDown { at, finger } => format!(
+            "Touch down on {}{}",
+            descriptions.describe(at),
+            finger_suffix(*finger)
+        ),
+        Step::TouchMove { to, finger } => format!(
+            "Touch move to {}{}",
+            descriptions.describe(to),
+            finger_suffix(*finger)
+        ),
+        Step::TouchUp { finger } => format!("Touch up{}", finger_suffix(*finger)),
+        Step::TouchCancel { finger } => format!("Touch cancel{}", finger_suffix(*finger)),
+        Step::TouchTap(target) => format!("Tap {}", descriptions.describe(target)),
+        Step::TouchDrag { from, to, .. } => format!(
+            "Touch drag {} to {}",
             descriptions.describe(from),
             descriptions.describe(to)
         ),
@@ -405,6 +483,32 @@ pub struct OverlayRing {
     /// Frames since the press.
     pub age: u16,
     /// Where the press happened, which the ring stays centred on.
+    pub centre: Vec2,
+}
+
+/// The filled circle under a finger that is down, one per finger, which
+/// holds the finger's id. It exists exactly while the finger is down and is
+/// not the arrow: a touch step never moves the mouse cursor.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct OverlayFinger(pub u64);
+
+/// Which end of a touch a mark shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchMarkKind {
+    /// Where a finger went down.
+    Down,
+    /// Where a finger lifted, or was cancelled.
+    Up,
+}
+
+/// A short mark where a finger went down or lifted, shrinking and fading.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct OverlayTouchMark {
+    /// Down or up.
+    pub kind: TouchMarkKind,
+    /// Frames since the mark appeared.
+    pub age: u16,
+    /// Where it is centred.
     pub centre: Vec2,
 }
 
@@ -565,6 +669,8 @@ impl Plugin for CursorOverlayPlugin {
                     move_cursor,
                     spawn_rings,
                     animate_rings,
+                    show_fingers,
+                    animate_touch_marks,
                     update_trail,
                     show_checkpoint,
                     show_pick_outlines,
@@ -1064,6 +1170,134 @@ fn animate_rings(
                 .press_ring
                 .with_alpha(theme.press_ring.alpha() * (1.0 - progress)),
         );
+    }
+}
+
+/// A touch mark node centred on `centre`, at its starting size.
+fn touch_mark_bundle(
+    kind: TouchMarkKind,
+    centre: Vec2,
+    theme: &OverlayTheme,
+    camera: Entity,
+) -> impl bevy::ecs::bundle::Bundle {
+    let colour = match kind {
+        TouchMarkKind::Down => theme.touch_down_mark,
+        TouchMarkKind::Up => theme.touch_up_mark,
+    };
+    (
+        OverlayTouchMark {
+            kind,
+            age: 0,
+            centre,
+        },
+        OverlayRoot,
+        NotUnderTest,
+        UiTargetCamera(camera),
+        Node {
+            left: px(centre.x - TOUCH_MARK_START_SIZE / 2.0),
+            top: px(centre.y - TOUCH_MARK_START_SIZE / 2.0),
+            ..round_marker(TOUCH_MARK_START_SIZE, TOUCH_MARK_BORDER)
+        },
+        BorderColor::all(colour),
+        Pickable::IGNORE,
+        GlobalZIndex(OVERLAY_Z_INDEX),
+    )
+}
+
+/// Draws a filled circle under every finger that is down, and a mark where
+/// one went down or lifted.
+///
+/// It reads Bevy's `Touches`, so the scripted fingers and anything else that
+/// writes `TouchInput` look the same. The mouse arrow is not involved.
+fn show_fingers(
+    mut commands: Commands,
+    touches: Res<Touches>,
+    theme: Res<OverlayTheme>,
+    aim: Res<OverlayAim>,
+    mut fingers: Query<(Entity, &OverlayFinger, &mut Node, &mut BackgroundColor)>,
+) {
+    let Some(camera) = aim.0 else {
+        return;
+    };
+    for touch in touches.iter_just_pressed() {
+        commands.spawn(touch_mark_bundle(
+            TouchMarkKind::Down,
+            touch.position(),
+            &theme,
+            camera,
+        ));
+    }
+    for touch in touches
+        .iter_just_released()
+        .chain(touches.iter_just_canceled())
+    {
+        commands.spawn(touch_mark_bundle(
+            TouchMarkKind::Up,
+            touch.position(),
+            &theme,
+            camera,
+        ));
+    }
+    let mut seen = Vec::new();
+    for (entity, OverlayFinger(id), mut node, mut colour) in &mut fingers {
+        let Some(touch) = touches.get_pressed(*id) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        seen.push(*id);
+        let at = touch.position();
+        node.left = px(at.x - FINGER_SIZE / 2.0);
+        node.top = px(at.y - FINGER_SIZE / 2.0);
+        colour.0 = theme.finger;
+    }
+    for touch in touches.iter() {
+        if seen.contains(&touch.id()) {
+            continue;
+        }
+        let at = touch.position();
+        commands.spawn((
+            OverlayFinger(touch.id()),
+            OverlayRoot,
+            NotUnderTest,
+            UiTargetCamera(camera),
+            Node {
+                left: px(at.x - FINGER_SIZE / 2.0),
+                top: px(at.y - FINGER_SIZE / 2.0),
+                ..round_marker(FINGER_SIZE, 0.0)
+            },
+            BackgroundColor(theme.finger),
+            Pickable::IGNORE,
+            GlobalZIndex(OVERLAY_Z_INDEX + 1),
+        ));
+    }
+}
+
+/// Shrinks and fades the touch marks and removes the ones that are done.
+/// Counts frames, not seconds, so every runner draws the same thing.
+fn animate_touch_marks(
+    mut commands: Commands,
+    theme: Res<OverlayTheme>,
+    mut marks: Query<(Entity, &mut OverlayTouchMark, &mut Node, &mut BorderColor)>,
+) {
+    for (entity, mut mark, mut node, mut border) in &mut marks {
+        // The mark spawned this frame has not been drawn yet.
+        mark.age += 1;
+        if mark.age >= TOUCH_MARK_FRAMES {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let progress = f32::from(mark.age) / f32::from(TOUCH_MARK_FRAMES);
+        let size =
+            (TOUCH_MARK_END_SIZE - TOUCH_MARK_START_SIZE).mul_add(progress, TOUCH_MARK_START_SIZE);
+        node.width = px(size);
+        node.height = px(size);
+        node.left = px(mark.centre.x - size / 2.0);
+        node.top = px(mark.centre.y - size / 2.0);
+        let colour = match mark.kind {
+            TouchMarkKind::Down => theme.touch_down_mark,
+            TouchMarkKind::Up => theme.touch_up_mark,
+        };
+        *border = BorderColor::all(colour.with_alpha(colour.alpha() * (1.0 - progress)));
     }
 }
 

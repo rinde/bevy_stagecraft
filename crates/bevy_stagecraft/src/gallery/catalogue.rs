@@ -1,4 +1,19 @@
 //! The scenarios a gallery offers, grouped.
+//!
+//! A [`Gallery`] is a list of groups of [`GalleryEntry`]s. Scenarios are added
+//! one by one or as a directory of `.ron` files ([`Gallery::directory`]), which
+//! is then watched: [`Gallery::prepare_files`] is what is done to every
+//! scenario read from a file, on a reload as on the first load. An entry keeps
+//! its `source`, its `error` (why the file does not load now, with the last
+//! good version kept in place) and whether it was never loaded at all
+//! ([`GalleryEntry::is_unloaded`]): such a placeholder is refused when
+//! selected and counts as a failure in a run of everything.
+//!
+//! Watching is polling, with no file-watcher dependency: the gallery compares
+//! each file's modification time and length every [`WATCH_INTERVAL`] updates
+//! (see [`crate::gallery`]'s `watch` module) and reports what it found as a
+//! `Reload::Changed` or `Reload::Added`. [`Gallery::variants`] lists the
+//! variants the whole catalogue can be played in.
 
 use alloc::sync::Arc;
 use std::{
@@ -68,6 +83,10 @@ pub struct GalleryEntry {
     unloaded: bool,
     /// How the file looked when it was last read.
     stamp: Option<FileStamp>,
+    /// Whether `error` comes from the directory scan (the file is gone, or the
+    /// directory could not be read) and not from loading the file, so the next
+    /// scan that finds the file reads it again whatever its stamp.
+    scan_error: bool,
 }
 
 impl GalleryEntry {
@@ -81,6 +100,7 @@ impl GalleryEntry {
             error: None,
             unloaded: false,
             stamp: None,
+            scan_error: false,
         }
     }
 
@@ -104,6 +124,7 @@ impl GalleryEntry {
             return;
         };
         self.stamp = stamp_of(&path);
+        self.scan_error = false;
         match load_ron_file(&path, registry) {
             Ok(scenario) => {
                 self.scenario = match prepare {
@@ -200,8 +221,10 @@ impl Gallery {
     /// restarts if its file changed. A file that does not load shows its
     /// error in the catalogue and leaves the last version that loaded in
     /// place (one that never loaded cannot be played). An unreadable
-    /// directory gives an empty group, and a file that is deleted keeps its
-    /// entry, marked.
+    /// directory gives an empty group at first; once the gallery runs, a
+    /// failed scan keeps every entry, marked with the error, and the next
+    /// good scan reads them again. A file that is deleted keeps its entry,
+    /// marked.
     ///
     /// Files are looked at every [`WATCH_INTERVAL`] updates, so this needs no
     /// file-watching dependency. Call [`Gallery::prepare_files`] first if the
@@ -264,7 +287,7 @@ impl Gallery {
         };
         let prepare = self.prepare.clone();
         for watched in self.watched.clone() {
-            let files = ron_files(&watched.dir).unwrap_or_default();
+            let scan = ron_files(&watched.dir);
             let before: usize = self
                 .groups
                 .iter()
@@ -274,6 +297,22 @@ impl Gallery {
             let Some(group) = self.groups.get_mut(watched.group) else {
                 continue;
             };
+            let files = match scan {
+                Ok(files) => files,
+                Err(error) => {
+                    // A failed scan says nothing about the files: keep every
+                    // entry as it is and only note why it cannot be refreshed.
+                    let message = format!("The directory could not be read: {error}");
+                    for (at, entry) in group.entries.iter_mut().enumerate() {
+                        if entry.source.is_some() && entry.error.as_ref() != Some(&message) {
+                            entry.error = Some(message.clone());
+                            entry.scan_error = true;
+                            reloads.push(Reload::Changed(before + at));
+                        }
+                    }
+                    continue;
+                }
+            };
             for (at, entry) in group.entries.iter_mut().enumerate() {
                 let Some(path) = entry.source.clone() else {
                     continue;
@@ -282,9 +321,10 @@ impl Gallery {
                     let gone = "The file is gone".to_owned();
                     if entry.error.as_ref() != Some(&gone) {
                         entry.error = Some(gone);
+                        entry.scan_error = true;
                         reloads.push(Reload::Changed(before + at));
                     }
-                } else if stamp_of(&path) != entry.stamp {
+                } else if entry.scan_error || stamp_of(&path) != entry.stamp {
                     entry.reload(&registry, prepare.as_ref());
                     reloads.push(Reload::Changed(before + at));
                 }
@@ -408,5 +448,48 @@ impl Gallery {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, reason = "tests may panic")]
+
+    use super::*;
+    use crate::Step;
+
+    #[test]
+    fn a_file_restored_with_the_same_stamp_is_reloaded_and_reported() {
+        let dir =
+            std::env::temp_dir().join(format!("rin-catalogue-restored-{}", std::process::id()));
+        drop(fs::remove_dir_all(&dir));
+        fs::create_dir_all(&dir).expect("a temp directory");
+        let file = dir.join("a.ron");
+        let away = dir.join("elsewhere");
+        let text = Scenario::new("a")
+            .steps([Step::wait(1)])
+            .to_ron()
+            .expect("a scenario exports");
+        fs::write(&file, text).expect("written");
+        let mut gallery = Gallery::new().directory("Files", &dir, &Registry::default());
+        let revision = gallery.revision();
+
+        fs::rename(&file, &away).expect("moved away");
+        let reloads = gallery.poll_files();
+        assert!(matches!(reloads.as_slice(), [Reload::Changed(0)]));
+        assert_eq!(
+            gallery.get(0).and_then(GalleryEntry::error),
+            Some("The file is gone")
+        );
+        assert_ne!(gallery.revision(), revision, "the catalogue is told");
+
+        // A rename keeps the modification time and length: the same stamp.
+        fs::rename(&away, &file).expect("moved back");
+        let revision = gallery.revision();
+        let reloads = gallery.poll_files();
+        assert!(matches!(reloads.as_slice(), [Reload::Changed(0)]));
+        assert!(gallery.get(0).is_some_and(|entry| entry.error().is_none()));
+        assert_ne!(gallery.revision(), revision, "the catalogue is told again");
+        drop(fs::remove_dir_all(&dir));
     }
 }

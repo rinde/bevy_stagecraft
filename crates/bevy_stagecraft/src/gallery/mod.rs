@@ -9,7 +9,9 @@
 //!
 //! # Two windows
 //!
-//! The primary window holds the app, untouched. The Scenarios window has its
+//! The primary window holds the app, untouched. The Scenarios window is placed
+//! directly to the left of it (on macOS automatic window tabbing is turned
+//! off first, so the two never become tabs). It has its
 //! own UI camera ([`ScenariosCamera`]), which renders to that window only and
 //! so is never the default UI camera: the app's UI and the overlay keep going
 //! to the camera of the primary window. A scenario whose cameras render

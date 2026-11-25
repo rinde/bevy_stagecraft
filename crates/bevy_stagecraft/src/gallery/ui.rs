@@ -1,5 +1,26 @@
 //! The Scenarios window: its camera, the catalogue, the controls and the live
 //! list of checks.
+//!
+//! The window sits directly to the left of the app window, the pair centred at
+//! the top of the primary monitor. Its height is shared between the catalogue
+//! and the details panel ([`share_room`]): half each, unless one needs less
+//! than half, when the other gets the rest, and neither gets under a fifth.
+//! `split_panels` sets it each frame from the previous layout. The details
+//! panel has the scenario's step list (lines and checks show a step's group
+//! path, numbered flat; a click is a jump, see [`GalleryAction::JumpTo`]), the
+//! **Trace** tab, the suggestion checklists and, in pick mode, the pick panel:
+//! the targets, the checks that hold and the app's check forms (see
+//! [`crate::check::pick`]).
+//!
+//! The Trace tab redraws on a cheap `TraceKey`, not every frame, and when the
+//! gallery's `revision` changes; picking and the suggestion checklists take
+//! precedence over it. The gallery traces with
+//! [`NoiseFilter::nothing`](crate::NoiseFilter::nothing) and the tab filters
+//! the changes it lists when drawing (see
+//! [`StepView::new`](crate::StepView::new)), which is why the filter can change
+//! without playing again. Hiding a type rewrites `noise_types` when the tab is
+//! drawn; the tab ends with the filter as code
+//! ([`NoiseFilter::to_code`](crate::NoiseFilter::to_code)).
 
 use bevy::{
     camera::{Camera2d, RenderTarget},
@@ -1078,14 +1099,13 @@ fn trace_key(
         points: trace.map_or(0, |trace| trace.points().len()),
         found: step
             .and_then(|step| trace?.step(step))
-            .map(|step| {
+            .map_or_default(|step| {
                 (
                     step.targets.clone(),
                     step.checks.clone(),
                     step.captured.clone(),
                 )
-            })
-            .unwrap_or_default(),
+            }),
     }
 }
 

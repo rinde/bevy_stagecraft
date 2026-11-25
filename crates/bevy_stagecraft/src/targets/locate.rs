@@ -133,16 +133,13 @@ fn count_of(count: usize) -> String {
 /// The app's entities (not the tooling's, not disabled ones) for which
 /// `keep` holds, in document order.
 fn app_nodes(world: &World, keep: impl Fn(&EntityRef<'_>) -> bool) -> Vec<Entity> {
-    let mut found: Vec<Entity> = world
-        .try_query::<EntityRef>()
-        .map(|query| {
-            query
-                .iter_manual(world)
-                .filter(|entity| keep(entity) && !is_tooling(world, entity.id()))
-                .map(|entity| entity.id())
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut found: Vec<Entity> = world.try_query::<EntityRef>().map_or_default(|query| {
+        query
+            .iter_manual(world)
+            .filter(|entity| keep(entity) && !is_tooling(world, entity.id()))
+            .map(|entity| entity.id())
+            .collect()
+    });
     in_document_order(world, &mut found);
     found
 }
@@ -238,17 +235,14 @@ fn nothing_matches(world: &World, target: &Target) -> String {
 /// Every non-empty value `read` takes from an entity of the app, each once,
 /// sorted.
 fn app_values(world: &World, read: impl Fn(&EntityRef<'_>) -> Option<String>) -> Vec<String> {
-    let mut values: Vec<String> = world
-        .try_query::<EntityRef>()
-        .map(|query| {
-            query
-                .iter_manual(world)
-                .filter(|entity| !is_tooling(world, entity.id()))
-                .filter_map(|entity| read(&entity))
-                .filter(|value| !value.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut values: Vec<String> = world.try_query::<EntityRef>().map_or_default(|query| {
+        query
+            .iter_manual(world)
+            .filter(|entity| !is_tooling(world, entity.id()))
+            .filter_map(|entity| read(&entity))
+            .filter(|value| !value.is_empty())
+            .collect()
+    });
     values.sort_unstable();
     values.dedup();
     values

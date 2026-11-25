@@ -19,7 +19,7 @@ use bevy::{
         ButtonInput, ButtonState,
         keyboard::{Key, KeyCode, KeyboardInput, NativeKey},
         mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
-        touch::TouchPhase,
+        touch::{TouchInput, TouchPhase, Touches},
     },
     picking::events::PointerOver,
     picking::input::PointerInputSettings,
@@ -37,7 +37,10 @@ use bevy_stagecraft::{
     GalleryState, GalleryTab, HeadlessPlugins, Measure, NoiseFilter, NoisePreset, Outcome, Probe,
     ReflectAppSetup, Registry, Scenario, ScenarioPlayer, ScenarioResult, ScenariosCamera,
     ScenariosWindow, Script, SessionHooks, Speed, Step, Target, TraceWorld, Variant, WidgetRole,
-    overlay::{OverlayCheckpointFlash, OverlayPickOutline, OverlayRoot, PickHighlight},
+    overlay::{
+        OverlayCheckpointFlash, OverlayFinger, OverlayPickOutline, OverlayRoot, OverlayTouchMark,
+        PickHighlight,
+    },
     player::ScenarioReport,
     script::Setup,
 };
@@ -692,7 +695,7 @@ fn the_scenarios_window_has_its_own_camera_and_the_overlay_stays_with_the_app() 
         .iter(world)
         .map(ComputedUiTargetCamera::get)
         .collect();
-    assert!(!overlay.is_empty());
+    assert_ne!(overlay.len(), 0);
     assert!(
         overlay.iter().all(|camera| *camera == Some(app_camera)),
         "the overlay is drawn by the app's camera, not the Scenarios one"
@@ -2819,4 +2822,155 @@ fn the_catalogue_entry_of_a_file_that_does_not_load_shows_why() {
                 .starts_with("Does not load, the previous version stays")
         });
     assert!(shown);
+}
+
+#[test]
+fn a_directory_that_cannot_be_read_keeps_the_entries_and_recovers_on_a_later_scan() {
+    let dir = scenario_dir("unreadable");
+    let away = dir.with_extension("away");
+    drop(std::fs::remove_dir_all(&away));
+    std::fs::write(dir.join("a.ron"), scenario_file(0)).expect("written");
+    std::fs::write(dir.join("b.ron"), scenario_file(0)).expect("written");
+    let mut app = watching_app(&dir);
+    // The directory cannot be scanned: moving it away makes the read fail.
+    std::fs::rename(&dir, &away).expect("moved");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    assert_eq!(gallery.len(), 2, "no entry is dropped");
+    for at in 0..2 {
+        let entry = gallery.get(at).expect("the entry stays");
+        assert!(!entry.is_unloaded(), "the last version is kept");
+        assert!(
+            entry
+                .error()
+                .is_some_and(|error| error.starts_with("The directory could not be read")),
+            "the failed scan is named: {:?}",
+            entry.error()
+        );
+    }
+    // The directory comes back, unchanged: the errors clear.
+    std::fs::rename(&away, &dir).expect("moved back");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    assert_eq!(gallery.len(), 2);
+    assert!((0..2).all(|at| gallery.get(at).is_some_and(|entry| entry.error().is_none())));
+}
+
+#[test]
+fn a_file_moved_away_and_back_unchanged_is_loaded_again_and_its_error_clears() {
+    let dir = scenario_dir("restored");
+    let away = dir.join("elsewhere");
+    drop(std::fs::remove_dir_all(&away));
+    let file = dir.join("a.ron");
+    std::fs::write(&file, scenario_file(0)).expect("written");
+    let mut app = watching_app(&dir);
+    assert!(
+        app.world()
+            .resource::<Gallery>()
+            .get(0)
+            .is_some_and(|entry| entry.error().is_none())
+    );
+    // Renaming keeps the modification time and the length, so the stamp of the
+    // file that comes back is the one of the last good read.
+    std::fs::rename(&file, &away).expect("moved away");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    assert_eq!(
+        gallery.get(0).and_then(|entry| entry.error()),
+        Some("The file is gone")
+    );
+    std::fs::rename(&away, &file).expect("moved back");
+    let_the_gallery_look(&mut app);
+    let gallery = app.world().resource::<Gallery>();
+    assert_eq!(gallery.len(), 1);
+    assert!(
+        gallery.get(0).is_some_and(|entry| entry.error().is_none()),
+        "the error clears: {:?}",
+        gallery.get(0).and_then(|entry| entry.error())
+    );
+}
+
+/// A gallery with one scenario: a finger down on "Add" for a while, then up.
+fn touch_gallery_app() -> App {
+    let scenario = Scenario::new("touch")
+        .setup(spawn_app)
+        .steps([
+            Step::touch_down(Target::text("Add")),
+            Step::wait(30),
+            Step::touch_up(),
+            Step::wait(2),
+            Step::touch_tap(Target::text("Add")),
+        ])
+        .expect_check(Check::resource::<Count>(".0").eq(2_u32));
+    app_with(
+        GalleryPlugin::new(Gallery::new().group("Touch", [scenario]))
+            .with_reset(reset_app)
+            .with_loop_pause(2),
+    )
+}
+
+/// How many fingers the overlay draws now.
+fn fingers_drawn(app: &mut App) -> usize {
+    let world = app.world_mut();
+    world.query::<&OverlayFinger>().iter(world).count()
+}
+
+#[test]
+fn a_touch_scenario_plays_in_the_gallery_and_real_touch_to_the_app_is_removed() {
+    let mut app = touch_gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| {
+        world.resource::<Touches>().iter().count() == 1
+    });
+    app.update();
+    assert_eq!(fingers_drawn(&mut app), 1, "the finger is drawn while down");
+    assert!(
+        !app.world()
+            .resource::<PointerInputSettings>()
+            .is_touch_enabled,
+        "Bevy's own touch picking is off while the script plays"
+    );
+    // A real finger on the app's window never gets through.
+    let window = primary(&mut app);
+    app.world_mut().write_message(TouchInput {
+        phase: TouchPhase::Started,
+        position: Vec2::new(500.0, 500.0),
+        window,
+        force: None,
+        id: 7,
+    });
+    app.update();
+    assert_eq!(
+        app.world().resource::<Touches>().iter().count(),
+        1,
+        "only the script's finger is down"
+    );
+    run_until(&mut app, 400, finished);
+    let report = app.world().resource::<ScenarioReport>();
+    assert!(report.passed(), "{:?}", report.failures());
+    assert_eq!(count(app.world()), 2, "the tap was an activation too");
+}
+
+#[test]
+fn taking_over_cancels_a_finger_the_script_holds_and_hands_touch_back() {
+    let mut app = touch_gallery_app();
+    ask(&mut app, GalleryAction::Select(0));
+    run_until(&mut app, 100, |world| {
+        world.resource::<Touches>().iter().count() == 1
+    });
+    ask(&mut app, GalleryAction::TakeOver);
+    app.update();
+    app.update();
+    assert_eq!(app.world().resource::<Touches>().iter().count(), 0);
+    assert_eq!(fingers_drawn(&mut app), 0);
+    assert!(
+        app.world()
+            .resource::<PointerInputSettings>()
+            .is_touch_enabled
+    );
+    let marks = {
+        let world = app.world_mut();
+        world.query::<&OverlayTouchMark>().iter(world).count()
+    };
+    assert!(marks <= 2, "{marks}");
 }

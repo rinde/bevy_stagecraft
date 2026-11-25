@@ -1,7 +1,25 @@
 //! Finding the screen position, or the widget, to act on.
 //!
 //! Targets are plain data. They are turned into pixels on the frame a step
-//! uses them, so layout changes between steps are followed. Submodules:
+//! uses them, so layout changes between steps are followed. A [`Target`] is
+//! a position (`Screen`, `World`), text, or a locator for one node:
+//! `Component(..)` (a reflected marker component by short type path, checked
+//! at load time like `Count`), `Name(..)`, `Role(role: .., label: ..)`,
+//! `Within(outer, inner)`, `Nth(n, target)` and `App(..)`, the app's own
+//! `#[reflect(AppTarget)]` value. It is an opaque `Reflect` type read and
+//! written as RON, so the nested ones can be boxed.
+//!
+//! A locator is strict: several matches are `Lookup::Ambiguous`, which a
+//! check reports as broken, listing them; none is `Lookup::Missing`, with
+//! close matches suggested. [`resolve`] works to a pixel and so refuses an
+//! entity that is not a UI node (a `Node`, or a `ComputedNode` with a
+//! `UiGlobalTransform`, as `bevy_ui_widgets`' `ScrollbarThumb`; a camera or
+//! a bare named entity is neither); [`entity_of`] is the same lookup but
+//! names an entity that need not be a UI node, so an app check or target can
+//! reach a shared selection. [`WidgetRole`] is read from `bevy_ui_widgets`
+//! components, not AccessKit; a `TextInput` is named by its label, never by
+//! its value. [`NotUnderTest`] hides gallery and overlay UI from lookups.
+//! Submodules:
 //! `locate` (finding the one node a target names, strictly, with close
 //! matches for a miss and a list for an ambiguity), `role` (widget roles
 //! read from `bevy_ui_widgets`) and `actionable` (whether a target can be
@@ -523,14 +541,13 @@ pub(crate) fn enclosing_button(world: &World, entity: Entity) -> Option<Entity> 
 fn resolve_world(world: &World, position: Vec3) -> Result<ResolvedTarget, String> {
     let mut cameras: Vec<_> = world
         .try_query::<(Entity, &Camera, &GlobalTransform)>()
-        .map(|query| {
+        .map_or_default(|query| {
             query
                 .iter_manual(world)
                 .filter(|(entity, camera, _)| camera.is_active && !is_tooling(world, *entity))
                 .map(|(entity, camera, transform)| (camera.order, entity, camera, *transform))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     cameras.sort_by_key(|(order, entity, _, _)| (*order, *entity));
     let Some((_, _, camera, transform)) = cameras.first() else {
         return Err("there is no active camera to project a world target through".into());

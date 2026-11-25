@@ -594,8 +594,7 @@ pub(super) fn count(world: &World, types: &[&TypeRegistration]) -> usize {
     }
     let disabling: Vec<ComponentId> = world
         .get_resource::<DefaultQueryFilters>()
-        .map(|filters| filters.disabling_ids().collect())
-        .unwrap_or_default();
+        .map_or_default(|filters| filters.disabling_ids().collect());
     world
         .archetypes()
         .iter()
@@ -618,7 +617,7 @@ mod tests {
             close_names("Gost", ["Ghost", "Host", "Score", "Ghosts"]),
             ["Ghost", "Host", "Ghosts"]
         );
-        assert!(close_names("Editor", ["Camera", "Window"]).is_empty());
+        assert_eq!(close_names("Editor", ["Camera", "Window"]).len(), 0);
     }
 
     #[test]

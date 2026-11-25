@@ -202,16 +202,13 @@ fn marker_targets(world: &World, subject: Entity) -> Vec<Target> {
     };
     let types = registry.read();
     let filter = NoiseFilter::default();
-    let mut names: Vec<String> = world
-        .inspect_entity(subject)
-        .map(|infos| {
-            infos
-                .filter_map(|(_, info)| types.get(info.type_id()?))
-                .filter(|registration| is_test_id(registration, &filter))
-                .map(|registration| name_of(&types, registration))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut names: Vec<String> = world.inspect_entity(subject).map_or_default(|infos| {
+        infos
+            .filter_map(|(_, info)| types.get(info.type_id()?))
+            .filter(|registration| is_test_id(registration, &filter))
+            .map(|registration| name_of(&types, registration))
+            .collect()
+    });
     names.sort_unstable();
     names.dedup();
     names.into_iter().map(Target::Component).collect()
@@ -329,9 +326,8 @@ fn component_checks(
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut checks = Vec::new();
     for entity in chain_up_to(world, start, subject) {
-        let mut found: Vec<(String, &TypeRegistration)> = world
-            .inspect_entity(entity)
-            .map(|infos| {
+        let mut found: Vec<(String, &TypeRegistration)> =
+            world.inspect_entity(entity).map_or_default(|infos| {
                 infos
                     .filter_map(|(_, info)| types.get(info.type_id()?))
                     .filter(|registration| {
@@ -341,8 +337,7 @@ fn component_checks(
                     })
                     .map(|registration| (name_of(&types, registration), registration))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         found.sort_by(|(a, _), (b, _)| a.cmp(b));
         for (name, registration) in found {
             if !seen.insert(name.clone()) {
@@ -772,18 +767,16 @@ impl Picked {
     pub fn refresh(&mut self, world: &World) {
         self.checks = self
             .target()
-            .map(|target| checks_that_hold(world, self.subject, target, &self.filter))
-            .unwrap_or_default();
+            .map_or_default(|target| checks_that_hold(world, self.subject, target, &self.filter));
         let built: Vec<Result<Check, String>> = world
             .get_resource::<AppTypeRegistry>()
-            .map(|registry| {
+            .map_or_default(|registry| {
                 let types = registry.read();
                 self.forms
                     .iter()
                     .map(|picked| picked.form.check(&types))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         // The lock is let go first: running a check takes it again.
         for (picked, check) in self.forms.iter_mut().zip(built) {
             picked.holds = check.as_ref().is_ok_and(|check| {

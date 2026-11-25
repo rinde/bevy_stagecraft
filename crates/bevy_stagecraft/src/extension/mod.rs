@@ -33,6 +33,20 @@
 //!
 //! One type per extension point and app: a second type with the same
 //! attribute is a load error naming both.
+//!
+//! Each trait has its own optional hooks for recordings: [`AppSetup`] may
+//! `capture` the app's state as a setup, [`AppView`] may name the `current`
+//! view, and [`AppTarget`] may say what it is `at` a position (for a
+//! recording and for pick mode). The type data for each (`ReflectAppSetup`,
+//! `ReflectAppView`, `ReflectAppTarget`) holds the cast and a function
+//! pointer to the associated function, as `ReflectAppCheck` does. A value
+//! built from RON in Rust is typed against the world's registry when used.
+//!
+//! The script's own `setup` is [`Setup`]: `App(..)` or the built-in
+//! `Scene("x.scene.ron")`, a world saved by [`crate::save`]; any other form
+//! is refused with a hint. `view` is [`View`]: `App(..)`. An `AppSetup` that
+//! queues BSN scenes needs no wait of its own: the player holds the first
+//! step until they are loaded (see [`crate::player`]).
 
 mod setup;
 mod target;

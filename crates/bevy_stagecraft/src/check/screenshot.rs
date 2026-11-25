@@ -1,6 +1,22 @@
 //! Screenshot checks: the frame, or one node's rectangle of it, against a
 //! picture stored next to the scenario (Playwright's `toHaveScreenshot`).
 //!
+//! The baseline is `<base_dir>/<slug of the scenario name>/<name>.png`
+//! (see `directory_name`). A missing baseline is written and fails. A
+//! mismatch writes `.diagnostics/<name>.actual.png` and
+//! `.diagnostics/<name>.diff.png` in the baseline directory, and a match
+//! removes them; a name may not start with `.`, so no baseline can collide
+//! with them, and other files beside the baselines are never touched. Update
+//! mode (`RIN_UPDATE_SNAPSHOTS`) rewrites the baseline. With `of`, the picture
+//! is the target's node rectangle: the upright bounding box, in whole
+//! physical pixels, of its box under the complete `UiGlobalTransform`, so a
+//! quarter turn swaps width and height; it is clipped to the picture.
+//! [`Tolerance`] is `colour` per channel (default 2) and `pixels`, the
+//! share of pixels that may differ (default 0).
+//!
+//! The compare, crop and diff code is ungated; PNG encoding and decoding need
+//! feature `record`.
+//!
 //! Pixels need the renderer, so only the recorder (feature `record`) can
 //! take them. Everywhere else the check is *skipped*: it is recorded as
 //! [`Outcome::Skipped`](crate::Outcome::Skipped), which does not fail the
@@ -18,7 +34,7 @@ use std::{fs, path::Path, path::PathBuf};
 use bevy::{
     camera::visibility::Visibility,
     ecs::{entity::Entity, resource::Resource, world::World},
-    math::{UVec2, Vec2},
+    math::{Affine2, UVec2, Vec2},
     ui::{ComputedNode, UiGlobalTransform},
 };
 use serde::{Deserialize, Serialize};
@@ -42,6 +58,11 @@ const MAX_PICTURE_FRAMES: u32 = 600;
 const DIFF_COLOUR: [u8; 4] = [255, 0, 255, 255];
 /// How much of its brightness a pixel that matches keeps in a diff image.
 const DIFF_DIM_DIVISOR: u8 = 3;
+/// The directory, inside a baseline directory, that holds the pictures a
+/// failure leaves. A screenshot name may not start with `.`, so no baseline
+/// (`<name>.png`) can be this directory or lie in it, whatever the names are:
+/// `home.actual` is a baseline of its own and `home`'s picture taken is not it.
+const DIAGNOSTICS_DIR: &str = ".diagnostics";
 /// The file name suffix of the picture a baseline is compared with.
 const ACTUAL_SUFFIX: &str = "actual";
 /// The file name suffix of the picture that shows what differs.
@@ -163,6 +184,40 @@ pub(crate) fn directory_name(scenario: &str) -> String {
         "scenario".into()
     } else {
         slug
+    }
+}
+
+/// The file in a baseline directory that names the scenario it belongs to.
+/// A screenshot name may not start with `.`, so it never clashes with one.
+const OWNER_FILE: &str = ".scenario";
+
+/// Claims `folder` for `scenario`, or says who has it already.
+///
+/// `directory_name` is lossy (`A B` and `A-B` are both `a-b`), so two
+/// scenarios, or a scenario and one of its variants, could share baselines
+/// and overwrite each other's. The folder therefore records the exact name
+/// that owns it in [`OWNER_FILE`]; a different name finds it taken and the
+/// check is broken, not silently compared. A folder with baselines but no
+/// record (made before this existed) is adopted by the first scenario that
+/// uses it. Failing to write the record is not an error: the baselines then
+/// work as they did, unprotected.
+fn claim_directory(folder: &Path, scenario: &str) -> Result<(), String> {
+    let owner = folder.join(OWNER_FILE);
+    let Ok(existing) = fs::read_to_string(&owner) else {
+        if fs::create_dir_all(folder).is_ok() {
+            let _ = fs::write(&owner, format!("{scenario}\n"));
+        }
+        return Ok(());
+    };
+    let existing = existing.trim_end_matches(['\r', '\n']);
+    if existing == scenario {
+        Ok(())
+    } else {
+        Err(format!(
+            "the baseline directory {} belongs to the scenario `{existing}`, and `{scenario}` \
+             would share it: rename one of them so their names differ in letters or digits",
+            folder.display()
+        ))
     }
 }
 
@@ -459,6 +514,7 @@ pub(crate) fn prepare(
     let folder = directory
         .unwrap_or_else(|| Path::new("."))
         .join(directory_name(scenario));
+    let claim = claim_directory(&folder, scenario);
     let mut judgements = Vec::new();
     for part in check.parts() {
         let Check::Screenshot {
@@ -470,6 +526,7 @@ pub(crate) fn prepare(
             continue;
         };
         let judgement = match &picture {
+            Ok(_) if claim.is_err() => Judgement::Broken(claim.clone().err().unwrap_or_default()),
             Ok(picture) => {
                 let (judgement, record) = judge(
                     world,
@@ -523,15 +580,49 @@ pub(super) fn verdict(world: &World, check: &Check) -> Verdict {
     }
 }
 
+/// How far a corner may sit inside a pixel edge and still count as on it:
+/// a node turned a quarter turn has corners off by float noise, which would
+/// otherwise widen the crop by a whole pixel.
+const EDGE_EPSILON: f32 = 1e-3;
+
 /// The rectangle of the picture a target's node covers, in physical pixels:
 /// where its top left is and how big it is.
+///
+/// This is the axis-aligned bounding box of the node's box after its complete
+/// [`UiGlobalTransform`] (its own `UiTransform` and those of its parents:
+/// rotation, scale and translation), widened to whole pixels. A node turned a
+/// quarter turn therefore swaps its width and height; one turned any other
+/// way is cropped to the smallest upright rectangle holding it, so pixels of
+/// the picture outside the node itself but inside that rectangle are part of
+/// the crop. Parts left of or above the picture are clipped here and the rest
+/// by [`Picture::crop`].
 fn node_rectangle(world: &World, node: Entity) -> Option<(UVec2, UVec2)> {
     let computed = world.get::<ComputedNode>(node)?;
-    let centre = world.get::<UiGlobalTransform>(node)?.affine().translation;
-    let size: Vec2 = computed.size();
-    let top_left = (centre - size / 2.0).floor().max(Vec2::ZERO);
-    let bottom_right = (centre + size / 2.0).ceil().max(Vec2::ZERO);
-    Some((top_left.as_uvec2(), (bottom_right - top_left).as_uvec2()))
+    let transform = world.get::<UiGlobalTransform>(node)?.affine();
+    Some(bounds(transform, computed.size()))
+}
+
+/// [`node_rectangle`] for a box of `size` centred on the origin that
+/// `transform` places.
+fn bounds(transform: Affine2, size: Vec2) -> (UVec2, UVec2) {
+    let half = size / 2.0;
+    let (low, high) = [
+        Vec2::new(-half.x, -half.y),
+        Vec2::new(half.x, -half.y),
+        Vec2::new(-half.x, half.y),
+        half,
+    ]
+    .into_iter()
+    .map(|corner| transform.transform_point2(corner))
+    .fold((Vec2::MAX, Vec2::MIN), |(low, high), point| {
+        (low.min(point), high.max(point))
+    });
+    let top_left = (low + EDGE_EPSILON).floor().max(Vec2::ZERO);
+    let bottom_right = (high - EDGE_EPSILON).ceil().max(Vec2::ZERO);
+    (
+        top_left.as_uvec2(),
+        (bottom_right - top_left).max(Vec2::ZERO).as_uvec2(),
+    )
 }
 
 /// Compares the picture, or the part of it a node covers, with its baseline.
@@ -632,8 +723,12 @@ fn compare(
     tolerance: Tolerance,
     update: bool,
 ) -> Result<Compared, String> {
-    let actual_path = baseline.with_file_name(format!("{name}.{ACTUAL_SUFFIX}.png"));
-    let diff_path = baseline.with_file_name(format!("{name}.{DIFF_SUFFIX}.png"));
+    // Files an older version left as `<name>.actual.png` beside the baselines
+    // are never touched: one of them may be a baseline of a check with that
+    // name. They are stale and can be deleted by hand.
+    let diagnostics = baseline.with_file_name(DIAGNOSTICS_DIR);
+    let actual_path = diagnostics.join(format!("{name}.{ACTUAL_SUFFIX}.png"));
+    let diff_path = diagnostics.join(format!("{name}.{DIFF_SUFFIX}.png"));
     if update {
         write_png(baseline, actual)?;
         remove_stale(&actual_path, &diff_path);
@@ -775,7 +870,137 @@ mod png {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::targets::Target;
+    use crate::{HeadlessPlugins, targets::Target};
+    use bevy::{
+        prelude::*,
+        ui::{UiTransform, px},
+    };
+
+    /// Updates the headless app gets to lay the UI out and place it.
+    const LAYOUT_FRAMES: u8 = 3;
+
+    #[test]
+    fn a_quarter_turn_swaps_the_width_and_height_of_the_crop() {
+        let turned =
+            Affine2::from_angle_translation(core::f32::consts::FRAC_PI_2, Vec2::new(100.0, 50.0));
+        let (top_left, size) = bounds(turned, Vec2::new(40.0, 20.0));
+        assert_eq!((top_left, size), (UVec2::new(90, 30), UVec2::new(20, 40)));
+    }
+
+    #[test]
+    fn a_scale_grows_the_crop_about_the_centre() {
+        let scaled =
+            Affine2::from_scale_angle_translation(Vec2::new(2.0, 0.5), 0.0, Vec2::new(100.0, 50.0));
+        let (top_left, size) = bounds(scaled, Vec2::new(40.0, 20.0));
+        assert_eq!((top_left, size), (UVec2::new(60, 45), UVec2::new(80, 10)));
+    }
+
+    #[test]
+    fn a_turn_of_forty_five_degrees_is_cropped_to_the_upright_bounding_box() {
+        let turned =
+            Affine2::from_angle_translation(core::f32::consts::FRAC_PI_4, Vec2::new(50.0, 50.0));
+        let (top_left, size) = bounds(turned, Vec2::new(20.0, 20.0));
+        // The diagonal is 28.28 long, so the box runs from 35.86 to 64.14.
+        assert_eq!((top_left, size), (UVec2::new(35, 35), UVec2::new(30, 30)));
+    }
+
+    #[test]
+    fn a_node_partly_left_of_the_picture_is_clipped_to_its_visible_part() {
+        let (top_left, size) = bounds(
+            Affine2::from_translation(Vec2::new(5.0, 20.0)),
+            Vec2::new(30.0, 10.0),
+        );
+        assert_eq!((top_left, size), (UVec2::new(0, 15), UVec2::new(20, 10)));
+    }
+
+    #[test]
+    fn the_crop_of_a_transformed_node_is_read_from_the_world() {
+        let mut world = World::new();
+        // A physical scale factor of 2 makes the computed size physical already.
+        let node = world
+            .spawn((
+                ComputedNode {
+                    size: Vec2::new(80.0, 40.0),
+                    ..ComputedNode::default()
+                },
+                UiGlobalTransform::from(Affine2::from_angle_translation(
+                    core::f32::consts::FRAC_PI_2,
+                    Vec2::new(200.0, 100.0),
+                )),
+            ))
+            .id();
+        assert_eq!(
+            node_rectangle(&world, node),
+            Some((UVec2::new(180, 60), UVec2::new(40, 80)))
+        );
+    }
+
+    /// Lays out a 200 by 100 panel at (50, 50) carrying `transform`, with a 40
+    /// by 30 child at local (20, 10), in a headless app at `scale_factor`, and
+    /// gives the child's rectangle as the screenshot check would crop it.
+    fn laid_out_child_rectangle(
+        transform: UiTransform,
+        scale_factor: f32,
+    ) -> Option<(UVec2, UVec2)> {
+        let mut app = App::new();
+        app.add_plugins(HeadlessPlugins::default().with_scale_factor(scale_factor));
+        app.finish();
+        app.cleanup();
+        app.world_mut().spawn(Camera2d);
+        let child = app
+            .world_mut()
+            .spawn(Node {
+                position_type: PositionType::Absolute,
+                left: px(20),
+                top: px(10),
+                width: px(40),
+                height: px(30),
+                ..Node::default()
+            })
+            .id();
+        app.world_mut()
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(50),
+                    top: px(50),
+                    width: px(200),
+                    height: px(100),
+                    ..Node::default()
+                },
+                transform,
+            ))
+            .add_child(child);
+        for _ in 0..LAYOUT_FRAMES {
+            app.update();
+        }
+        node_rectangle(app.world(), child)
+    }
+
+    #[test]
+    fn a_child_of_a_parent_turned_a_quarter_turn_is_cropped_with_width_and_height_swapped() {
+        // The parent turns about its middle (150, 100); the child's middle,
+        // (-60, -25) from there, lands at (25, -60) from it: (175, 40).
+        let rectangle =
+            laid_out_child_rectangle(UiTransform::from_rotation(Rot2::degrees(90.0)), 1.0);
+        assert_eq!(rectangle, Some((UVec2::new(160, 20), UVec2::new(30, 40))));
+    }
+
+    #[test]
+    fn a_child_of_a_scaled_parent_is_cropped_to_the_scaled_box_clipped_to_the_picture() {
+        // Doubled about (150, 100) the child's middle moves to (30, 50) and
+        // the box to 80 by 60, whose first ten columns lie left of the picture.
+        let rectangle = laid_out_child_rectangle(UiTransform::from_scale(Vec2::splat(2.0)), 1.0);
+        assert_eq!(rectangle, Some((UVec2::new(0, 20), UVec2::new(70, 60))));
+    }
+
+    #[test]
+    fn at_a_physical_scale_factor_of_two_the_crop_is_in_physical_pixels() {
+        // The same layout as the quarter turn above, twice as many pixels.
+        let rectangle =
+            laid_out_child_rectangle(UiTransform::from_rotation(Rot2::degrees(90.0)), 2.0);
+        assert_eq!(rectangle, Some((UVec2::new(320, 40), UVec2::new(60, 80))));
+    }
 
     #[test]
     fn a_picture_differs_only_past_the_colour_tolerance() {
@@ -846,6 +1071,48 @@ mod tests {
         assert_eq!(directory_name("???"), "scenario");
     }
 
+    /// A fresh directory for one test's baselines.
+    fn scratch(test: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("rin-claims-{}-{test}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        path
+    }
+
+    #[test]
+    fn scenarios_whose_names_make_the_same_directory_do_not_share_it() {
+        let dir = scratch("collision");
+        let folder = dir.join(directory_name("A B"));
+        assert_eq!(directory_name("A B"), directory_name("A-B"));
+        assert!(claim_directory(&folder, "A B").is_ok());
+        assert!(claim_directory(&folder, "A B").is_ok());
+        let refused = claim_directory(&folder, "A-B").err().unwrap_or_default();
+        assert!(
+            refused.contains("`A B`") && refused.contains("`A-B`"),
+            "{refused}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn variants_whose_labels_make_the_same_directory_do_not_share_it() {
+        let dir = scratch("variant-collision");
+        let folder = dir.join(directory_name("Home [dark mode]"));
+        assert!(claim_directory(&folder, "Home [dark mode]").is_ok());
+        assert!(claim_directory(&folder, "Home [dark-mode]").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_of_baselines_from_before_owners_were_recorded_is_adopted() {
+        let dir = scratch("legacy");
+        let folder = dir.join("home");
+        assert!(fs::create_dir_all(&folder).is_ok());
+        assert!(fs::write(folder.join("home.png"), b"x").is_ok());
+        assert!(claim_directory(&folder, "Home").is_ok());
+        assert!(claim_directory(&folder, "HOME").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_screenshot_check_is_skipped_where_there_is_no_renderer() {
         use crate::{Outcome, Scenario};
@@ -863,7 +1130,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Outcome::Skipped, Outcome::Skipped]
         );
-        assert!(report.screenshots.is_empty());
+        assert_eq!(report.screenshots.len(), 0);
     }
 
     #[test]
@@ -999,8 +1266,8 @@ mod flow {
         let report = run(&dir, &check, [10, 20, 90, 255], false);
         assert!(!report.passed());
         let folder = dir.join("home-screen");
-        assert!(folder.join("home.actual.png").exists());
-        assert!(folder.join("home.diff.png").exists());
+        assert!(folder.join(".diagnostics/home.actual.png").exists());
+        assert!(folder.join(".diagnostics/home.diff.png").exists());
         assert!(matches!(
             report.screenshots.first().map(|record| &record.result),
             Some(ScreenshotResult::Mismatch { diff: Some(_), .. })
@@ -1009,7 +1276,71 @@ mod flow {
         let loose = check.with_tolerance(Tolerance::default().with_colour(100));
         let accepted = run(&dir, &loose, [10, 20, 90, 255], false);
         assert!(accepted.passed(), "{:?}", accepted.failures());
-        assert!(!folder.join("home.actual.png").exists());
+        assert!(!folder.join(".diagnostics/home.actual.png").exists());
+    }
+
+    /// Reads the baseline of `name` in the `home-screen` folder of `dir`.
+    fn baseline_of(dir: &Path, name: &str) -> Vec<u8> {
+        fs::read(dir.join(format!("home-screen/{name}.png"))).unwrap_or_default()
+    }
+
+    #[test]
+    fn diagnostics_never_overwrite_or_delete_a_baseline_with_a_colliding_name() {
+        let dir = directory("colliding");
+        let home = Check::screenshot("home");
+        let other = Check::screenshot("home.actual");
+        let diff = Check::screenshot("home.diff");
+        for check in [&home, &other, &diff] {
+            run(&dir, check, [10, 20, 30, 255], false);
+        }
+        // Give each baseline its own colour so a clobbered one shows.
+        run(&dir, &other, [1, 2, 3, 255], true);
+        run(&dir, &diff, [4, 5, 6, 255], true);
+        let (kept_other, kept_diff) = (
+            baseline_of(&dir, "home.actual"),
+            baseline_of(&dir, "home.diff"),
+        );
+        assert!(!kept_other.is_empty() && !kept_diff.is_empty());
+
+        // A mismatch in `home` leaves both alone.
+        let mismatch = run(&dir, &home, [10, 20, 90, 255], false);
+        assert!(!mismatch.passed());
+        assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
+        assert_eq!(baseline_of(&dir, "home.diff"), kept_diff);
+
+        // A match in `home` removes its own leftovers only.
+        let matched = run(&dir, &home, [10, 20, 30, 255], false);
+        assert!(matched.passed(), "{:?}", matched.failures());
+        assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
+        assert_eq!(baseline_of(&dir, "home.diff"), kept_diff);
+        assert!(
+            !dir.join("home-screen/.diagnostics/home.actual.png")
+                .exists()
+        );
+
+        // So does an update.
+        run(&dir, &home, [10, 20, 90, 255], false);
+        let updated = run(&dir, &home, [10, 20, 90, 255], true);
+        assert!(updated.passed(), "{:?}", updated.failures());
+        assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
+        assert_eq!(baseline_of(&dir, "home.diff"), kept_diff);
+
+        // Both baselines still compare against their own picture.
+        let still = run(&dir, &other, [1, 2, 3, 255], false);
+        assert!(still.passed(), "{:?}", still.failures());
+    }
+
+    #[test]
+    fn pictures_an_older_version_left_beside_the_baselines_are_not_touched() {
+        let dir = directory("legacy");
+        let check = Check::screenshot("home");
+        run(&dir, &check, [10, 20, 30, 255], false);
+        let legacy = dir.join("home-screen/home.actual.png");
+        fs::write(&legacy, b"old").unwrap_or_default();
+        run(&dir, &check, [10, 20, 90, 255], false);
+        run(&dir, &check, [10, 20, 30, 255], false);
+        run(&dir, &check, [10, 20, 90, 255], true);
+        assert_eq!(fs::read(&legacy).unwrap_or_default(), b"old");
     }
 
     #[test]

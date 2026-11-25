@@ -11,11 +11,27 @@
 //!
 //! * runs of moves become `Glide`s along a simplified path;
 //! * a press and release in place becomes a `Click`, a straight press, move
-//!   and release a `Drag`;
+//!   and release a `Drag`, a key pressed and released on its own a `Tap`, and
+//!   keys that typed text, each released within
+//!   [`StepOptions::hold_frames`], one `Type` step (never Enter, Tab or
+//!   Backspace, nor a Ctrl, Alt or Super chord, which stay `Tap`s);
+//! * real touch becomes `TouchTap` (finger 0, in place), `TouchDrag` (finger
+//!   0, straight) or `TouchDown`, `TouchMove`s and `TouchUp` or `TouchCancel`,
+//!   with `with_finger` for the other fingers. Fingers are numbered from 0 by
+//!   the lowest free number, not by the system's touch id. A finger that came
+//!   down before the session is ignored, moves in one frame are merged, and
+//!   the fingers still down are lifted on stop. Touch never moves the
+//!   script's mouse pointer;
 //! * a click on a UI node with a label becomes `Target::text(..)`; anything
 //!   else is offered to the app's [`AppTarget::at`](crate::AppTarget::at)
 //!   and stays `screen(..)` if the app has no answer;
-//! * idle time beyond a threshold is shortened to a short `Wait`.
+//! * idle time beyond a threshold is shortened to a short `Wait`, and further
+//!   before the pointer goes to a widget (see
+//!   [`StepOptions::widget_idle_frames`]), as playback waits for it. A step
+//!   holds at most `u16::MAX` frames, so a longer pause is several `Wait`s, a
+//!   longer `Glide` several legs along the straight line, and a longer `Drag`
+//!   a move, press, `Glide`s and release; the clock of the emitted steps
+//!   always equals the frames they play.
 //!
 //! # What the app plugs in
 //!
@@ -93,8 +109,7 @@
 //!
 //! Only the primary window is recorded, and nothing carrying
 //! [`crate::NotUnderTest`] is ever named as a target. A click on a label plays
-//! back on the middle of the labelled node, not on the exact pixel. Typed
-//! text is not recorded, only key presses. Touch is not recorded.
+//! back on the middle of the labelled node, not on the exact pixel.
 
 use core::{fmt, time::Duration};
 use std::{fs, path::PathBuf};
@@ -114,6 +129,7 @@ use bevy::{
         ButtonState, InputSystems,
         keyboard::{KeyCode, KeyboardInput},
         mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
+        touch::{TouchInput, TouchPhase},
     },
     math::Vec2,
     time::{Real, Time},
@@ -409,6 +425,9 @@ struct Active {
     held_buttons: Vec<MouseButton>,
     /// Keys held down.
     held_keys: Vec<KeyCode>,
+    /// Fingers down: the system's touch id, the finger number the log gives
+    /// it and where it last was.
+    held_touches: Vec<(u64, u8, Vec2)>,
 }
 
 /// The session recorder: whether a session is on, and the last result.
@@ -449,6 +468,8 @@ struct Cursors {
     wheel: MessageCursor<MouseWheel>,
     /// Keys.
     keys: MessageCursor<KeyboardInput>,
+    /// Fingers.
+    touches: MessageCursor<TouchInput>,
 }
 
 impl SessionRecorder {
@@ -783,8 +804,76 @@ fn primary_window(world: &mut World) -> Option<(Entity, Option<Vec2>)> {
 fn unread<M: Message + Clone>(world: &World, cursor: &mut MessageCursor<M>) -> Vec<M> {
     world
         .get_resource::<Messages<M>>()
-        .map(|messages| cursor.read(messages).cloned().collect())
-        .unwrap_or_default()
+        .map_or_default(|messages| cursor.read(messages).cloned().collect())
+}
+
+impl Active {
+    /// Logs one finger message of the primary window. Fingers are numbered
+    /// from 0 in the order they come down, the lowest number free; a finger
+    /// that came down before the session began is ignored, as is a second
+    /// touch down of one that is already down.
+    fn log_touch(&mut self, world: &World, frame: u32, touch: &TouchInput) {
+        let position = tidy(touch.position);
+        let held = self
+            .held_touches
+            .iter()
+            .position(|(id, ..)| *id == touch.id);
+        let finger = match (touch.phase, held) {
+            (TouchPhase::Started, None) => {
+                // Going back to touch is done with the name.
+                self.close_naming();
+                let Some(finger) = (0..=u8::MAX).find(|candidate| {
+                    self.held_touches
+                        .iter()
+                        .all(|(_, used, _)| used != candidate)
+                }) else {
+                    return;
+                };
+                self.held_touches.push((touch.id, finger, position));
+                finger
+            }
+            (TouchPhase::Moved, Some(at)) => {
+                let Some((_, finger, last)) = self.held_touches.get_mut(at) else {
+                    return;
+                };
+                *last = position;
+                let finger = *finger;
+                // Several moves in one frame are one move, to where it ended.
+                if let Some(RecordedEvent {
+                    frame: last_frame,
+                    kind:
+                        RecordedKind::Touch {
+                            finger: last_finger,
+                            phase: TouchPhase::Moved,
+                            position: last_position,
+                            target,
+                        },
+                }) = self.events.last_mut()
+                    && *last_frame == frame
+                    && *last_finger == finger
+                {
+                    *last_position = position;
+                    *target = target::classify(world, position);
+                    return;
+                }
+                finger
+            }
+            (TouchPhase::Ended | TouchPhase::Canceled, Some(at)) => {
+                let (_, finger, _) = self.held_touches.remove(at);
+                finger
+            }
+            _ => return,
+        };
+        self.events.push(RecordedEvent {
+            frame,
+            kind: RecordedKind::Touch {
+                finger,
+                phase: touch.phase,
+                position,
+                target: target::classify(world, position),
+            },
+        });
+    }
 }
 
 impl SessionRecorder {
@@ -794,6 +883,7 @@ impl SessionRecorder {
         let buttons = unread(world, &mut self.cursors.buttons);
         let wheel = unread(world, &mut self.cursors.wheel);
         let keys = unread(world, &mut self.cursors.keys);
+        let touches = unread(world, &mut self.cursors.touches);
         let delta = world
             .get_resource::<Time<Real>>()
             .map_or(FRAME_STEP, Time::delta);
@@ -860,6 +950,9 @@ impl SessionRecorder {
                 },
             });
         }
+        for touch in touches.iter().filter(|touch| touch.window == window) {
+            active.log_touch(world, frame, touch);
+        }
         // The operating system repeats a held key; a script holds it once.
         for key in keys
             .iter()
@@ -894,7 +987,8 @@ impl SessionRecorder {
         fs::create_dir_all(&config.dir).map_err(|error| {
             SessionError::new(format!("cannot create {}: {error}", config.dir.display()))
         })?;
-        let stem = free_stem(&config.dir, name);
+        let stem = free_stem(&config.dir, name)
+            .map_err(|error| SessionError::new(format!("no file name could be chosen: {error}")))?;
         let setup = capture_setup(world, &config.dir, &stem).map_err(|error| {
             SessionError::new(format!("the app's setup could not be captured: {error}"))
         })?;
@@ -915,6 +1009,7 @@ impl SessionRecorder {
         drop(unread(world, &mut self.cursors.buttons));
         drop(unread(world, &mut self.cursors.wheel));
         drop(unread(world, &mut self.cursors.keys));
+        drop(unread(world, &mut self.cursors.touches));
         self.active = Some(Active {
             name: name.to_owned(),
             stem,
@@ -931,6 +1026,7 @@ impl SessionRecorder {
             cursor: cursor.flatten(),
             held_buttons: Vec::new(),
             held_keys: Vec::new(),
+            held_touches: Vec::new(),
         });
         Ok(())
     }
@@ -1006,6 +1102,17 @@ impl SessionRecorder {
                 },
             });
         }
+        for (_, finger, position) in core::mem::take(&mut active.held_touches) {
+            active.events.push(RecordedEvent {
+                frame: end,
+                kind: RecordedKind::Touch {
+                    finger,
+                    phase: TouchPhase::Ended,
+                    position,
+                    target: crate::targets::Target::screen(position),
+                },
+            });
+        }
         // A name still being typed when the person stops is kept.
         active.close_naming();
         let logged = read_log(&active.events, end, &config.options);
@@ -1071,8 +1178,9 @@ const HEADER: &str = "\
 // named for; its name leads the report of every step in it.
 ";
 
-/// A file-name-safe version of `name` that no file in `dir` has yet.
-fn free_stem(dir: &std::path::Path, name: &str) -> String {
+/// A file-name-safe version of `name` that no file in `dir` starts with
+/// (`"{stem}."`), so an orphaned saved world or capture file is safe too.
+fn free_stem(dir: &std::path::Path, name: &str) -> Result<String, crate::save::SaveError> {
     let stem: String = name
         .chars()
         .map(|c| {
@@ -1088,13 +1196,7 @@ fn free_stem(dir: &std::path::Path, name: &str) -> String {
     } else {
         stem
     };
-    let mut candidate = stem.clone();
-    let mut number = 1_u32;
-    while dir.join(format!("{candidate}.ron")).exists() {
-        number += 1;
-        candidate = format!("{stem}-{number}");
-    }
-    candidate
+    crate::save::free_session_stem(dir, &stem)
 }
 
 impl Active {

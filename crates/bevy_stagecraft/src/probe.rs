@@ -1,4 +1,14 @@
 //! Reading state out of the world, for checks.
+//!
+//! A [`Probe`] is a read-only view of a `World`. Checks get one and cannot
+//! change anything. It offers generic helpers ([`Probe::count`],
+//! [`Probe::resource`], [`Probe::hovered`], [`Probe::has_text`]); an app adds
+//! its own by writing an extension trait on `Probe` that goes through
+//! [`Probe::world`], and uses them from its [`AppCheck`](crate::AppCheck)s.
+//!
+//! The crate-private functions of this module are shared by the player and
+//! the checks: the hovered entities, the hover check a pointer action makes
+//! on its widget, and the description of an entity for a failure message.
 
 use bevy::{
     ecs::{

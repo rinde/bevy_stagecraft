@@ -1,12 +1,31 @@
 //! Carrying out requests and pacing the script.
+//!
+//! The systems here take the requests queued on
+//! [`super::GalleryState`] and drive the player through
+//! `advance_world`. When the script is handed back, taken over, selected,
+//! cleared or a recording starts, `release_held` releases the buttons and keys
+//! the script holds and cancels every finger it still holds (a `touch_cancel`
+//! for each finger in Bevy's `Touches`), so the overlay marks it and the app
+//! sees a cancel. A picked check goes to [`crate::session::add_check`] while
+//! recording, and otherwise to the selected scenario's expect and the running
+//! player.
+//!
+//! **New** is [`GalleryAction::NewEmpty`] (the reset hook, nothing selected,
+//! then record) or [`GalleryAction::NewFromCurrent`] (the app as it is, then
+//! record).
+//!
+//! A jump ([`GalleryAction::JumpTo`]) restarts, calls `pause_before(Some(k))`
+//! on the player and plays one script frame per update until the step is due
+//! (`GalleryState::jumping_to`), then pauses. It is refused while recording.
 
 use std::fs;
 
 use bevy::{
     app::AppExit,
     ecs::world::World,
-    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton},
+    input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton, touch::Touches},
     log::{error, info, warn},
+    math::Vec2,
     picking::input::PointerInputSettings,
     text::RemSize,
     window::{PrimaryWindow, Window},
@@ -48,13 +67,20 @@ const SETTLE_UPDATES: u8 = 2;
 fn release_held(world: &mut World) {
     let buttons: Vec<MouseButton> = world
         .get_resource::<ButtonInput<MouseButton>>()
-        .map(|input| input.get_pressed().copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|input| input.get_pressed().copied().collect());
     let keys: Vec<KeyCode> = world
         .get_resource::<ButtonInput<KeyCode>>()
-        .map(|input| input.get_pressed().copied().collect())
-        .unwrap_or_default();
+        .map_or_default(|input| input.get_pressed().copied().collect());
+    let fingers: Vec<(u64, Vec2)> = world.get_resource::<Touches>().map_or_default(|touches| {
+        touches
+            .iter()
+            .map(|touch| (touch.id(), touch.position()))
+            .collect()
+    });
     if let Some(mut input) = world.get_resource_mut::<SyntheticInput>() {
+        for (finger, position) in fingers {
+            input.touch_cancel(finger, position);
+        }
         for button in buttons {
             input.release_button(button);
         }

@@ -18,6 +18,7 @@ use bevy::{
         ButtonState,
         keyboard::{Key, KeyCode, KeyboardInput},
         mouse::MouseButtonInput,
+        touch::{TouchInput, TouchPhase},
     },
     prelude::*,
     ui::{ComputedNode, UiGlobalTransform, px},
@@ -138,7 +139,8 @@ enum SessionTarget {
 impl AppTarget for SessionTarget {
     fn resolve(&self, _world: &World) -> Result<ResolvedTarget, String> {
         let Self::Cell(column, row) = self;
-        let centre = |cell: &i32| f32::from(i16::try_from(*cell).unwrap_or(0)) * 100.0 + 50.0;
+        let centre =
+            |cell: &i32| f32::mul_add(f32::from(i16::try_from(*cell).unwrap_or(0)), 100.0, 50.0);
         Ok(ResolvedTarget::at(Vec2::new(centre(column), centre(row))))
     }
 
@@ -407,6 +409,19 @@ fn a_second_recording_does_not_overwrite_the_first() {
 }
 
 #[test]
+fn a_session_does_not_reuse_a_stem_an_orphaned_sidecar_holds() {
+    let dir = dir("session-orphan-sidecar");
+    fs::create_dir_all(&dir).expect("directory");
+    let sidecar = dir.join("again.scene.ron");
+    fs::write(&sidecar, "kept").expect("sidecar");
+    let mut app = app(&dir);
+    session::start(app.world_mut(), "again").expect("starts");
+    let saved = session::stop(app.world_mut()).expect("saved");
+    assert_eq!(saved.path, dir.join("again-2.ron"));
+    assert_eq!(fs::read_to_string(&sidecar).expect("read"), "kept");
+}
+
+#[test]
 fn starting_twice_or_stopping_nothing_is_an_error_not_a_panic() {
     let dir = dir("session-errors");
     let mut app = app(&dir);
@@ -645,4 +660,45 @@ fn a_recorded_typing_session_exports_a_single_type_step() {
     );
     let text = fs::read_to_string(&saved.path).expect("written");
     assert!(text.contains("text: \"Hi5\","), "{text}");
+}
+
+/// What `bevy_winit` does for a finger.
+fn real_touch(app: &mut App, phase: TouchPhase, position: Vec2) {
+    let window = primary(app);
+    let input = TouchInput {
+        phase,
+        position,
+        window,
+        force: None,
+        id: 7,
+    };
+    app.world_mut().write_message(WindowEvent::from(input));
+    app.world_mut().write_message(input);
+    app.update();
+}
+
+#[test]
+fn a_recorded_real_tap_is_a_touch_tap_that_plays_back() {
+    let dir = dir("session-touch");
+    let mut app = app(&dir);
+    session::start(app.world_mut(), "Touch").expect("recording starts");
+    let button = centre_of(&mut app, "+1");
+    real_touch(&mut app, TouchPhase::Started, button);
+    real_touch(&mut app, TouchPhase::Ended, button);
+    for _ in 0..5 {
+        app.update();
+    }
+    let saved = session::stop(app.world_mut()).expect("the session is saved");
+    assert!(
+        saved
+            .script
+            .steps
+            .iter()
+            .any(|step| matches!(step, Step::TouchTap(Target::Role { .. }))),
+        "{:?}",
+        saved.script.steps
+    );
+    let (report, count) = play(&saved.path).expect("the file plays");
+    assert!(report.passed(), "{:?}", report.failures());
+    assert_eq!(count, 1, "playback taps the button once");
 }

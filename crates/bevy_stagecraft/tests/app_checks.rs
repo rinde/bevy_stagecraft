@@ -233,7 +233,7 @@ fn the_registry_lists_the_app_check_variants_and_their_field_types() {
         names,
         ["ActivatedOnce", "Activated", "Found", "ActivatedBetween"]
     );
-    assert!(found.variants[0].fields.is_empty());
+    assert_eq!(found.variants[0].fields.len(), 0);
     let found_target = &found.variants[2].fields[0];
     assert_eq!(found_target.name, None);
     assert_eq!(found_target.short_type_path, "Target");

@@ -381,7 +381,7 @@ fn a_scenario_restricted_to_the_default_variant_is_skipped_in_the_others() {
 fn a_scenario_that_names_no_variants_runs_in_every_one() {
     let scenario = Scenario::new("plain").step(Step::wait(1));
     assert!(!Variant::default().skips(&scenario));
-    assert!(scenario.variant_names().is_empty());
+    assert_eq!(scenario.variant_names().len(), 0);
 }
 
 #[test]

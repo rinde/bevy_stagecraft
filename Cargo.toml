@@ -6,20 +6,26 @@ members = ["crates/*"]
 
 edition = "2024"
 # Equal to the toolchain pinned in rust-toolchain.toml
-rust-version = "1.98.1"
+rust-version = "1.100.0"
 repository = "https://github.com/rinde/bevy_stagecraft"
 publish = false
 
 [workspace.dependencies]
-bevy = { version = "=0.20.0", default-features = false }
+bevy = { version = "=0.20.1", default-features = false }
 
 # Bevy is slow unoptimised, so dependencies get full optimisation
 # even in dev builds, while our own code stays quick to compile.
 [profile.dev]
 opt-level = 1
+# Full debuginfo made each test binary over a gigabyte and filled disks;
+# line tables keep backtraces and panic locations readable.
+# The test profile inherits this.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+# Dependencies keep symbol names for backtraces but no line tables.
+debug = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

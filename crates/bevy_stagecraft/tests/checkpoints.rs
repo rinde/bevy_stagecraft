@@ -533,7 +533,7 @@ fn the_overlay_flashes_and_names_a_checkpoint_then_fades() {
         strip.single(world).expect("one strip").display != Display::None
     };
     assert!(!flash_shown(&mut app));
-    assert!(caption(&mut app).is_empty());
+    assert_eq!(caption(&mut app), "");
     assert!(!strip_shown(&mut app), "nothing to say yet");
 
     write_key(&mut app, KeyCode::F8, Key::F8, ButtonState::Pressed);
