@@ -7,7 +7,9 @@ session, so what is read on every task must stay small.
 
 - What a type or module does, its invariants and edge cases: rustdoc (`//!` and
   `///`). `cargo doc -D warnings` checks its links, and it sits next to the code
-  it describes.
+  it describes. Kept short, as [the comment rules](../AGENTS.md#comments) say.
+- Why code is the way it is, and how it broke: the PR description, the commit
+  message or a test, not the source.
 - How to use the crate: `README.md` and `agent-docs/usage/`.
 - How to work on the repository (process, conventions, cross-module design):
   `agent-docs/`.

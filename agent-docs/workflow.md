@@ -18,7 +18,9 @@ for merging a PR.
 2. `just ci`.
 3. Update `README.md` if usage changed, and the docs your change touches, as
    [writing-docs.md](writing-docs.md) says.
-4. Create or update the PR, and check whether it needs a rebase.
+4. Check every comment the full diff adds, including ones from earlier
+   sessions, against [the comment rules](../AGENTS.md#comments).
+5. Create or update the PR, and check whether it needs a rebase.
 
 ## CI billing failures
 
