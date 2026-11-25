@@ -33,7 +33,7 @@ probes over the world.
   means split the file, not compress it.
 - American English everywhere: code, comments and docs (behavior, color,
   initialize).
-- `publish = false` stays. There is no licence file and no open-source framing.
+- `publish = false` stays. There is no license file and no open-source framing.
 - A CI job failing on billing or quota is not a failure of the change; say so
   in the PR.
 
@@ -75,4 +75,4 @@ Read the file when its trigger applies. Each file is under `agent-docs/`.
 | [modules.md](agent-docs/modules.md) | you look for the module that does something |
 | [architecture-tooling.md](agent-docs/architecture-tooling.md) | you change how the player, recorder, trace, session or gallery work together |
 | [writing-docs.md](agent-docs/writing-docs.md) | you write or move documentation |
-| [usage guides](README.md#guides) | you change behaviour a user can see: update the guide for it |
+| [usage guides](README.md#guides) | you change behavior a user can see: update the guide for it |

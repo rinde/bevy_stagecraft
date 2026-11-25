@@ -2,7 +2,7 @@
 
 ## Issue and pull request workflow
 
-Issues labelled `ready for agent` are available to be picked.
+Issues labeled `ready for agent` are available to be picked.
 
 A change here reaches `rinde/rin-bevy-ui` only through a `rev` bump there, and
 issues there may wait on issues here. Once the issue here is closed, update

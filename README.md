@@ -1,7 +1,7 @@
 # bevy_stagecraft
 
 A UI test driver for Bevy. It runs scripted pointer and keyboard scenarios
-against a Bevy UI, headless inside `cargo test`, so interface behaviour can be
+against a Bevy UI, headless inside `cargo test`, so interface behavior can be
 asserted like any other code.
 
 The same scenarios can be recorded offscreen for review and played back in a
