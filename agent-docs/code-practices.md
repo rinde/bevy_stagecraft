@@ -17,10 +17,8 @@ use `World::get_resource` and `Query::iter().next()` (or `get`) and handle the
 logging, not stdout.
 
 - `allow` is permitted only in tests, always with `reason = "..."`.
-- Every item is documented, private ones included (`missing_docs` is denied and
-  rustdoc runs with `--document-private-items`).
-- British spelling (behaviour, colour, initialise). Comments say *why*, not
-  what.
+- No item needs a doc; docs and comments follow
+  [the comment rules](../AGENTS.md#comments).
 - `#[must_use]` on accessors, `const fn` where it compiles, and
   `#[derive(Debug)]` on every type.
 - Named constants instead of magic numbers.

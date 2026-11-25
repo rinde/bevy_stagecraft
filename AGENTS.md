@@ -31,10 +31,32 @@ probes over the world.
 - Before you call it done: `just fmt`, then `just ci`, then update the docs
   your change touches (`agent-docs/writing-docs.md`). A docs budget failure
   means split the file, not compress it.
-- British spelling (behaviour, colour, initialise). Every item is documented.
+- American English everywhere: code, comments and docs (behavior, color,
+  initialize).
 - `publish = false` stays. There is no licence file and no open-source framing.
 - A CI job failing on billing or quota is not a failure of the change; say so
   in the PR.
+
+## Comments
+
+Default to none. Rationale, history and how-it-broke stories go in the PR
+description, the commit message or a test, not the source.
+
+- Add one only when (a) the code can't say it itself, (b) a maintainer would
+  make the wrong call without some history, or (c) the code is deliberately
+  weird for a reason.
+- One line, two at most. Imperative, stating the constraint, optionally naming
+  the tempting edit that breaks it.
+- Before writing one, check whether a nearby type or name already says it. If
+  so, it's redundant, even when it feels like a "why".
+- Never: doc that restates types, narration of what a branch does,
+  design-decision explainers, conditionals or code structure, ticket IDs or
+  provenance (`git blame` has it), doc on small self-describing helpers.
+- Match the comment density of the surrounding file.
+- On the fence? Bias to no comment or doc.
+- Apply this while writing, not as a cleanup pass. Before opening a PR, check
+  every added comment in the full diff, including ones from earlier sessions.
+- A plain `//` or `///` line that passes these rules is fine.
 
 ## Index
 
