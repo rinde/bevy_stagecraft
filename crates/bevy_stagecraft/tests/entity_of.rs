@@ -1,6 +1,3 @@
-//! `entity_of`: the entity a target names, for an app check or target that
-//! must reach one with no `Node`, such as a selection shared between widgets.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -13,17 +10,14 @@
 use bevy::{prelude::*, ui_widgets::Button};
 use bevy_stagecraft::{HeadlessPlugins, NotUnderTest, Target, WidgetRole, entity_of, resolve};
 
-/// The marker of the bare selection entity.
 #[derive(Component, Reflect, Debug, Default)]
 #[reflect(Component)]
 struct SharedSelection;
 
-/// Marks both bare entities holding a value, so it names neither.
 #[derive(Component, Reflect, Debug, Default)]
 #[reflect(Component)]
 struct Holder;
 
-/// A headless app with nothing spawned.
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default());
@@ -67,7 +61,6 @@ fn entity_of_returns_the_entity_itself_not_the_button_around_it() {
 #[test]
 fn nth_and_within_pick_between_bare_entities() {
     let mut app = app();
-    // Matches are counted in hierarchy order, so the holders are siblings.
     let list = app.world_mut().spawn_empty().id();
     let first = app.world_mut().spawn((Holder, ChildOf(list))).id();
     let second = app.world_mut().spawn((Holder, ChildOf(list))).id();

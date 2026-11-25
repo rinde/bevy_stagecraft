@@ -1,6 +1,3 @@
-//! Scripted touch steps over a plain Bevy UI: the messages each step writes,
-//! and what the widgets and the pointer do with them.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -19,51 +16,37 @@ use bevy::{
 };
 use bevy_stagecraft::{Scenario, ScenarioReport, Step, Target};
 
-/// How many times the button was activated.
 #[derive(Resource, Default)]
 struct Activations(u32);
 
-/// How many clicks the pad got.
 #[derive(Resource, Default)]
 struct Clicks(u32);
 
-/// The pad's presses.
 #[derive(Resource, Default)]
 struct Presses(u32);
 
-/// The horizontal distance the pad was dragged.
 #[derive(Resource, Default)]
 struct DraggedRight(f32);
 
-/// How a cancelled finger reached the pad, and what `Touches` said.
 #[derive(Resource, Default)]
 struct CancelLog {
-    /// `Pointer<Out>` events the pad got.
     outs: u32,
-    /// `Pointer<Cancel>` events the pad got.
     cancels: u32,
-    /// Whether `Touches::any_just_canceled` held in any frame.
     touches_saw_cancel: bool,
-    /// Whether `Touches::just_canceled(0)` held in any frame.
     finger_0_just_canceled: bool,
 }
 
-/// Records, each frame, whether `Touches` reports a cancelled finger.
 fn record_cancel(touches: Res<Touches>, mut log: ResMut<CancelLog>) {
     log.touches_saw_cancel |= touches.any_just_canceled();
     log.finger_0_just_canceled |= touches.just_canceled(0);
 }
 
-/// Every touch message, with the frame it arrived on.
 #[derive(Resource, Default)]
 struct TouchLog {
-    /// The frame the app is on.
     frame: u32,
-    /// Frame, finger, phase and position of each message.
     seen: Vec<(u32, u64, TouchPhase, Vec2)>,
 }
 
-/// Writes every touch message into the [`TouchLog`].
 fn record_touches(mut log: ResMut<TouchLog>, mut touches: MessageReader<TouchInput>) {
     log.frame += 1;
     let frame = log.frame;
@@ -73,12 +56,9 @@ fn record_touches(mut log: ResMut<TouchLog>, mut touches: MessageReader<TouchInp
     }
 }
 
-/// The button's middle.
 const BUTTON: Vec2 = Vec2::new(150.0, 50.0);
-/// The pad's middle.
 const PAD: Vec2 = Vec2::new(400.0, 200.0);
 
-/// A camera, the "Pause" button and a "Pad" to click and drag.
 fn spawn_ui(world: &mut World) {
     world.init_resource::<Activations>();
     world.init_resource::<Clicks>();
@@ -119,12 +99,10 @@ fn spawn_ui(world: &mut World) {
         .observe(|_: On<PointerCancel>, mut log: ResMut<CancelLog>| log.cancels += 1);
 }
 
-/// A scenario over the test UI with these steps.
 fn scenario(steps: impl IntoIterator<Item = Step>) -> Scenario {
     Scenario::new("touch").setup(spawn_ui).steps(steps)
 }
 
-/// Plays the scenario, returning the app and the report.
 fn play(scenario: &Scenario) -> (App, ScenarioReport) {
     let mut app = scenario.headless_app();
     app.init_resource::<TouchLog>();
@@ -133,7 +111,6 @@ fn play(scenario: &Scenario) -> (App, ScenarioReport) {
     (app, report)
 }
 
-/// The touch messages seen, as (finger, phase) pairs.
 fn phases(app: &App) -> Vec<(u64, TouchPhase)> {
     let log = app.world().resource::<TouchLog>();
     log.seen
@@ -324,21 +301,6 @@ fn a_cancelled_finger_gives_no_click() {
     assert_eq!(app.world().resource::<Clicks>().0, 0);
 }
 
-/// Pins what Bevy 0.20 does with a cancelled touch, as a device does.
-///
-/// `TouchCancel` writes `PointerAction::Cancel` for the touch pointer, as
-/// Bevy's own `touch_pick_events` does for a real cancelled touch. But
-/// `bevy_picking::hover::generate_hovermap` builds the hover map with
-/// `build_over_map`, which drops the hits of every pointer that has a `Cancel`
-/// input this frame, so that pointer's `HoverMap` entry is empty.
-/// `pointer_events` sends `Pointer<Cancel>` to the entities in that entry,
-/// which is none, and still sends `Pointer<Out>` from the previous hover map.
-/// So no widget ever sees `Pointer<Cancel>` for a touch, on a device either.
-/// The tester must not send one of its own, or a scenario would pass where the
-/// gesture fails on a device; apps read `Touches` instead (see the next test).
-///
-/// This test is meant to fail once Bevy delivers `Pointer<Cancel>` for a
-/// cancelled touch. It should then be inverted.
 #[test]
 fn a_cancelled_finger_gives_out_and_no_pointer_cancel_on_bevy_0_20() {
     let (app, report) = play(&scenario([

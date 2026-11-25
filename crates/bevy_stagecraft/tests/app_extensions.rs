@@ -1,6 +1,3 @@
-//! The app's own setups, views and targets: one reflected enum each, found
-//! by Bevy's type registry with no registration call.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -18,12 +15,9 @@ use bevy_stagecraft::{
 };
 use common::{Activations, Arranged, UiCheck, UiSetup, UiTarget, UiView};
 
-/// A second setup type. It opts out of automatic registration, so only the
-/// tests that register it by hand see two setup types.
 #[derive(Reflect, Debug, Clone)]
 #[reflect(AppSetup, no_auto_register)]
 enum OtherSetup {
-    /// Builds nothing.
     Nothing,
 }
 
@@ -33,11 +27,9 @@ impl AppSetup for OtherSetup {
     }
 }
 
-/// A second view type, registered by hand only.
 #[derive(Reflect, Debug, Clone)]
 #[reflect(AppView, no_auto_register)]
 enum OtherView {
-    /// Arranges nothing.
     Nothing,
 }
 
@@ -45,11 +37,9 @@ impl AppView for OtherView {
     fn arrange(&self, _world: &mut World) {}
 }
 
-/// A second target type, registered by hand only.
 #[derive(Reflect, Debug, Clone)]
 #[reflect(AppTarget, no_auto_register)]
 enum OtherTarget {
-    /// The top left corner.
     Corner,
 }
 
@@ -59,7 +49,6 @@ impl AppTarget for OtherTarget {
     }
 }
 
-/// A file using the app's setup, view and target, and checking through them.
 const FILE: &str = "(
     format_version: 3,
     name: \"from a save\",
@@ -76,12 +65,10 @@ const FILE: &str = "(
 
 #[test]
 fn the_apps_setup_view_and_targets_in_a_file_work_with_no_registration_call() {
-    // A default registry: nothing about the app's types is registered by hand.
     let scenario = Scenario::from_ron(FILE).unwrap();
     let report = scenario.run_headless();
     assert!(report.passed(), "{:?}", report.failures());
 
-    // Headless runs arrange no view; the recorder and the gallery call this.
     let mut world = World::new();
     assert_eq!(scenario.run_view(&mut world), Ok(true));
     assert_eq!(

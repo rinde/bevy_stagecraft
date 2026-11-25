@@ -1,9 +1,3 @@
-//! Checks suggested from a world diff when a recording stops, on a plain
-//! Bevy UI: a counter button, a label showing the count, a state and the
-//! app's own checks with facts.
-//!
-//! Real input is imitated by writing the messages `bevy_winit` would.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -27,38 +21,29 @@ use bevy_stagecraft::{
     suggest_checks,
 };
 
-/// What the "+1" button counts.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Counter(u32);
 
-/// One per click, so the count of tallies changes.
 #[derive(Component, Default, Reflect)]
 #[reflect(Component)]
 struct Tally;
 
-/// Whether anything has been counted yet.
 #[derive(States, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[reflect(State)]
 enum Mode {
-    /// Nothing counted.
     #[default]
     Idle,
-    /// Counted at least once.
     Counting,
 }
 
-/// The label that shows the count.
 #[derive(Component)]
 struct CountLabel;
 
-/// The app's own checks, with the facts a recording may suggest.
 #[derive(Reflect, Debug, Clone, PartialEq)]
 #[reflect(AppCheck)]
 enum CounterCheck {
-    /// The counter is at exactly this.
     CounterIs(u32),
-    /// Something has been counted.
     Counted,
 }
 
@@ -83,7 +68,6 @@ impl AppCheck for CounterCheck {
     }
 }
 
-/// Spawns the counter's UI and its camera.
 fn spawn_ui(world: &mut World) {
     world.init_resource::<Counter>();
     world.spawn(Camera2d);
@@ -123,7 +107,6 @@ fn spawn_ui(world: &mut World) {
     ));
 }
 
-/// Keeps the label in step with the counter.
 fn show_count(counter: Res<Counter>, mut labels: Query<&mut Text, With<CountLabel>>) {
     for mut text in &mut labels {
         let wanted = counter.0.to_string();
@@ -133,7 +116,6 @@ fn show_count(counter: Res<Counter>, mut labels: Query<&mut Text, With<CountLabe
     }
 }
 
-/// A finished headless app with the counter, before its UI is spawned.
 fn bare_app() -> App {
     let mut app = App::new();
     app.add_plugins((
@@ -145,7 +127,6 @@ fn bare_app() -> App {
     app
 }
 
-/// The app with a session plugin writing into `dir`, its UI up and laid out.
 fn recording_app(dir: &std::path::Path, hooks: SessionHooks) -> App {
     let mut app = bare_app();
     app.add_plugins(SessionPlugin::new(dir).with_hooks(hooks));
@@ -158,7 +139,6 @@ fn recording_app(dir: &std::path::Path, hooks: SessionHooks) -> App {
     app
 }
 
-/// A fresh directory for one test's files.
 fn dir(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     drop(fs::remove_dir_all(&dir));
@@ -172,7 +152,6 @@ fn primary(app: &mut App) -> Entity {
         .expect("a primary window")
 }
 
-/// What `bevy_winit` does for a moved real mouse.
 fn real_move(app: &mut App, position: Vec2) {
     let window = primary(app);
     if let Some(mut window) = app.world_mut().get_mut::<Window>(window) {
@@ -189,7 +168,6 @@ fn real_move(app: &mut App, position: Vec2) {
     app.update();
 }
 
-/// A real press and release, one update apart.
 fn real_click(app: &mut App) {
     let window = primary(app);
     for state in [ButtonState::Pressed, ButtonState::Released] {
@@ -204,7 +182,6 @@ fn real_click(app: &mut App) {
     }
 }
 
-/// The middle of the button labelled "+1", in logical pixels.
 fn button_centre(app: &mut App) -> Vec2 {
     let world = app.world_mut();
     let label = world
@@ -219,7 +196,6 @@ fn button_centre(app: &mut App) -> Vec2 {
     transform.affine().translation * node.inverse_scale_factor
 }
 
-/// Records one click on "+1" and returns what was saved.
 fn record_one_click(name: &str, hooks: SessionHooks) -> session::SavedSession {
     let dir = dir(name);
     let mut app = recording_app(&dir, hooks);
@@ -235,7 +211,6 @@ fn record_one_click(name: &str, hooks: SessionHooks) -> session::SavedSession {
     session::stop(app.world_mut()).expect("the session is saved")
 }
 
-/// Plays the recording's file in a fresh app with the same start.
 fn play(path: &std::path::Path) -> ScenarioReport {
     let text = fs::read_to_string(path).expect("the file was written");
     let script = Script::from_ron(&text).expect("the file reads back");
@@ -345,7 +320,6 @@ fn the_candidates_come_out_in_the_same_order_on_every_run() {
         let again = record_one_click(&format!("suggest-order-{run}"), SessionHooks::new());
         assert_eq!(again.candidates, first, "run {run}");
     }
-    // Resources, counts, states, texts, widgets, then the app's facts.
     let position = |check: &Check| {
         first
             .iter()

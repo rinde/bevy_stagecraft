@@ -1,5 +1,3 @@
-//! `Capture` steps and checks that compare with what they took.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -18,43 +16,31 @@ use bevy_stagecraft::{
     ScenarioReport, Step, Target, Value,
 };
 
-/// A ghost, to be counted.
 #[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Ghost;
 
-/// The tool the editor uses.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 enum Tool {
-    /// Lays track.
     Lay,
-    /// Draws.
     Draw,
 }
 
-/// The editor's settings.
 #[derive(Resource, Reflect, Debug)]
 #[reflect(Resource)]
 struct Editor {
-    /// The current tool.
     tool: Tool,
-    /// The zoom factor.
     zoom: f32,
-    /// How many times it was used.
     uses: u32,
-    /// A number an `f64` cannot hold exactly.
     big: u64,
 }
 
-/// A gauge with a value, on a node with a "Speed" label inside it.
 #[derive(Component, Reflect, Debug)]
 #[reflect(Component)]
 struct Gauge {
-    /// The value, from 0 to 1.
     value: f32,
 }
 
-/// A headless app with the test types registered.
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default())
@@ -66,12 +52,10 @@ fn app() -> App {
     app
 }
 
-/// A registry that knows every type the app registered.
 fn registry() -> Registry {
     Registry::default().with_types_of(app().world())
 }
 
-/// A button showing `label`.
 fn button(label: &str) -> impl Bundle {
     (
         Button,
@@ -84,8 +68,6 @@ fn button(label: &str) -> impl Bundle {
     )
 }
 
-/// Two ghosts, the editor, a gauge, and buttons that add a ghost, raise the
-/// gauge and use the editor.
 fn spawn(world: &mut World) {
     world.insert_resource(Editor {
         tool: Tool::Draw,
@@ -127,12 +109,10 @@ fn spawn(world: &mut World) {
     ));
 }
 
-/// Plays `scenario` in a fresh [`app`].
 fn run(scenario: &Scenario) -> ScenarioReport {
     scenario.run_in(&mut app())
 }
 
-/// The outcome of every step, in order.
 fn outcomes(report: &ScenarioReport) -> Vec<Outcome> {
     report
         .steps
@@ -141,7 +121,6 @@ fn outcomes(report: &ScenarioReport) -> Vec<Outcome> {
         .collect()
 }
 
-/// Clicks the button showing `label` and lets one frame pass.
 fn click(label: &str) -> [Step; 3] {
     [
         Step::move_to(Target::text(label)),
@@ -150,17 +129,14 @@ fn click(label: &str) -> [Step; 3] {
     ]
 }
 
-/// A script of format version 3 with this body.
 fn file(body: &str) -> String {
     format!("(format_version: 3, name: \"x\", {body})")
 }
 
-/// Loads a script with this body.
 fn load(body: &str) -> Result<Scenario, LoadError> {
     Scenario::from_ron_with(&file(body), &registry())
 }
 
-/// `ghosts` captured, then compared with the count again.
 fn ghosts_after(steps: impl IntoIterator<Item = Step>) -> Scenario {
     let mut all = vec![Step::capture("ghosts", Measure::count::<Ghost>())];
     all.extend(steps);
@@ -331,7 +307,6 @@ fn a_whole_number_cannot_take_a_fractional_offset() {
 fn the_expect_list_may_use_a_name_captured_anywhere_in_the_steps() {
     let report = run(&ghosts_after(click("Haunt"))
         .expect_check(Check::count::<Ghost>().is(Comparison::Gt(Value::captured("ghosts")))));
-    // The last step compares with the capture and fails; the expectation holds.
     assert!(
         report
             .checks
@@ -488,8 +463,8 @@ fn a_captured_value_with_an_offset_reads_in_the_long_form_only() {
         r#"steps: [Capture(name: "n", value: Resource(path: "Editor.uses")), Check(Resource(path: "Editor.uses", is: Eq(Captured("n", plus: 3))))]"#,
     )
     .unwrap_err();
-    // `Captured("n", plus: 3)` mixes a positional and a named field, which
-    // is not RON at all, so the file does not parse.
+    // Mixes a positional and a named field, which is not RON, so the file
+    // does not parse.
     assert!(error.to_string().contains("invalid script"), "{error}");
 }
 

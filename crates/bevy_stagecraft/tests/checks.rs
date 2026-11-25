@@ -1,6 +1,3 @@
-//! Checks spelled out as data: text, hover, state, negation and the app's
-//! own checks, as steps and as expectations.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -17,7 +14,6 @@ use bevy_stagecraft::{
 };
 use common::{Activations, UiCheck, UiSetup, UiTarget, registry, spawn_ui};
 
-/// The outcome of every step, in order.
 fn step_outcomes(report: &ScenarioReport) -> Vec<Outcome> {
     report
         .steps
@@ -26,7 +22,6 @@ fn step_outcomes(report: &ScenarioReport) -> Vec<Outcome> {
         .collect()
 }
 
-/// The "Pause" button, by its label.
 fn pause() -> Target {
     Target::text("Pause")
 }
@@ -164,7 +159,6 @@ fn expectations_run_at_the_end_in_order_and_are_named_in_words() {
     );
 }
 
-/// A scenario using every kind of check, with names the registry knows.
 fn every_kind() -> Scenario {
     Scenario::new("every kind")
         .app_setup(UiSetup::PlainUi)
@@ -300,8 +294,8 @@ fn a_misspelt_check_inside_another_is_reported_on_its_line() {
 
 #[test]
 fn a_mistake_inside_a_check_over_several_lines_is_reported_where_the_check_ends() {
-    // The check is read whole and then parsed on its own, so the position
-    // is that of the end of the check, not of the misspelt `Showz` (line 5).
+    // Parse the check whole: the position reported is its end, not the
+    // misspelled `Showz` (line 5).
     let error = Scenario::from_ron(
         "(format_version: 3, name: \"x\", steps: [\n    Wait(1),\n    Check(All([\n        Shows(\"a\"),\n        Not(Showz(\"b\")),\n    ])),\n])",
     )

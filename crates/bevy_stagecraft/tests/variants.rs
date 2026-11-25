@@ -1,5 +1,3 @@
-//! Scenarios run once per variant: window size, scale factor, theme.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -18,27 +16,20 @@ use bevy_stagecraft::{
     Scenario, ScenarioReport, Step, Target, Variant, run_ron_variants,
 };
 
-/// How many times the button was activated.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Activations(u32);
 
-/// The theme the UI was built in.
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
 struct Theme(String);
 
-/// The width of the panel in front of the button, in logical pixels.
 const PANEL_WIDTH: i32 = 700;
 
-/// The test UI: a row that does not wrap, a wide panel and then the "Pause"
-/// button, so the button ends at 800 px and lies outside any narrower window.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq)]
 #[reflect(AppSetup)]
 enum RowUi {
-    /// The light theme.
     Light,
-    /// The dark theme.
     Dark,
 }
 
@@ -91,7 +82,6 @@ impl AppSetup for RowUi {
     }
 }
 
-/// Presses the "Pause" button and expects one activation.
 fn press_pause() -> Scenario {
     Scenario::new("wrap")
         .app_setup(RowUi::Light)
@@ -101,7 +91,6 @@ fn press_pause() -> Scenario {
         .expect_check(Check::resource::<Activations>(".0").eq(1_u32))
 }
 
-/// The two window sizes of the acceptance case.
 fn wide_and_narrow() -> [Variant; 2] {
     [
         Variant::new("wide").window_size(1280, 720),
@@ -109,7 +98,6 @@ fn wide_and_narrow() -> [Variant; 2] {
     ]
 }
 
-/// Plays `scenario` in `variant`, or the error that it cannot run there.
 fn play(scenario: &Scenario, variant: &Variant) -> Result<ScenarioReport, LoadError> {
     variant.apply(scenario).map(|varied| varied.run_headless())
 }
@@ -329,11 +317,10 @@ fn a_group_without_a_screen_position_is_fine_in_another_variant() {
 
 #[test]
 fn a_screen_position_in_a_scale_factor_only_variant_runs() {
-    // The position is logical, so a scale factor leaves it just as valid as
-    // at 1.0: only a window-size change makes it ambiguous.
+    // The position is logical: a scale factor leaves it valid, only a
+    // window-size change makes it ambiguous.
     let scenario = Scenario::new("fixed")
         .app_setup(RowUi::Light)
-        // The middle of the "Pause" button, which is logical at any scale.
         .step(Step::move_to(Target::screen(Vec2::new(750.0, 25.0))))
         .step(Step::click())
         .expect_check(Check::resource::<Activations>(".0").eq(1_u32));
@@ -349,7 +336,6 @@ fn a_screen_position_in_a_scale_factor_only_variant_runs() {
 
 #[test]
 fn a_screen_position_in_a_setup_only_variant_runs() {
-    // A theme changes how things look, not where logical positions are.
     let scenario = Scenario::new("fixed")
         .app_setup(RowUi::Light)
         .step(Step::move_to(Target::screen(Vec2::new(750.0, 25.0))))
@@ -434,8 +420,6 @@ fn run_ron_variants_names_each_file_and_variant_and_filters_by_that_name() {
     );
 }
 
-/// A finished headless app at the given logical window size, built without
-/// any help from the scenario.
 fn app_with_window(width: u32, height: u32) -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default().with_window_size(width, height));
@@ -444,8 +428,6 @@ fn app_with_window(width: u32, height: u32) -> App {
     app
 }
 
-/// The primary window's resolution as `(logical width, logical height,
-/// scale factor, physical width)`.
 fn primary_window(app: &mut App) -> (f32, f32, f32, u32) {
     let world = app.world_mut();
     let window = world
@@ -463,7 +445,7 @@ fn primary_window(app: &mut App) -> (f32, f32, f32, u32) {
 #[test]
 fn run_in_applies_the_scenarios_window_size_and_scale_factor_to_the_app_it_is_given() {
     // The button lies outside a 640 px wide window, so this passes only if
-    // the scenario's own size reaches the app it is played in.
+    // the scenario's own size reaches the app.
     let scenario = press_pause().window_size(1280, 720).scale_factor(2.0);
     let mut app = app_with_window(640, 480);
 

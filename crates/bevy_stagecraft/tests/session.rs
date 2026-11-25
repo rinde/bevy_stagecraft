@@ -1,9 +1,3 @@
-//! Recording a session in a headless app: real input in, a `.ron` file out,
-//! and the file played back to the same end state.
-//!
-//! Real input is imitated by writing the messages `bevy_winit` would: the
-//! typed ones and the `WindowEvent` wrapper Bevy's own mouse picking reads.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -33,13 +27,10 @@ use bevy_stagecraft::{
     session::{self, SessionConfig},
 };
 
-/// How often the "+1" button was activated.
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
 struct Count(u32);
 
-/// Spawns the app: a "+1" button that counts, and a button of the same size
-/// elsewhere that does not.
 fn spawn_ui(world: &mut World) {
     world.init_resource::<Count>();
     for (label, left) in [("+1", 100), ("Other", 400)] {
@@ -65,16 +56,12 @@ fn spawn_ui(world: &mut World) {
     }
 }
 
-/// Where a recording of this app starts from, found by Bevy with no
-/// registration call.
 #[derive(Reflect, Debug, Clone, PartialEq)]
 #[reflect(AppSetup)]
 enum SessionSetup {
-    /// The count saved in this file, by its full path.
     Saved(String),
 }
 
-/// Present when this app cannot save its state.
 #[derive(Resource)]
 struct SaveFails;
 
@@ -92,7 +79,6 @@ impl AppSetup for SessionSetup {
         Ok(())
     }
 
-    /// Writes the count next to the script.
     fn capture(
         world: &mut World,
         dir: &std::path::Path,
@@ -108,11 +94,9 @@ impl AppSetup for SessionSetup {
     }
 }
 
-/// How this app is shown; it only ever has the one view.
 #[derive(Reflect, Debug, Clone, PartialEq)]
 #[reflect(AppView)]
 enum SessionView {
-    /// Everything at once.
     Overview,
 }
 
@@ -124,15 +108,12 @@ impl AppView for SessionView {
     }
 }
 
-/// Present when the ground of this app is a lattice of 100 pixel cells.
 #[derive(Resource)]
 struct Lattice;
 
-/// This app's own targets, found by Bevy with no registration call.
 #[derive(Reflect, Debug, Clone, PartialEq)]
 #[reflect(AppTarget)]
 enum SessionTarget {
-    /// A cell of the lattice, by column and row.
     Cell(i32, i32),
 }
 
@@ -144,7 +125,6 @@ impl AppTarget for SessionTarget {
         Ok(ResolvedTarget::at(Vec2::new(centre(column), centre(row))))
     }
 
-    /// The cell under a click, where the ground is a lattice.
     fn at(world: &World, position: Vec2) -> Option<Self> {
         #[expect(
             clippy::cast_possible_truncation,
@@ -157,14 +137,12 @@ impl AppTarget for SessionTarget {
     }
 }
 
-/// A fresh directory for one test's files.
 fn dir(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     drop(fs::remove_dir_all(&dir));
     dir
 }
 
-/// The app, with a session plugin that writes into `dir`.
 fn app(dir: &std::path::Path) -> App {
     let mut app = App::new();
     app.add_plugins((
@@ -188,7 +166,6 @@ fn primary(app: &mut App) -> Entity {
         .expect("a primary window")
 }
 
-/// What `bevy_winit` does for a moved real mouse.
 fn real_move(app: &mut App, position: Vec2) {
     let window = primary(app);
     if let Some(mut window) = app.world_mut().get_mut::<Window>(window) {
@@ -205,7 +182,6 @@ fn real_move(app: &mut App, position: Vec2) {
     app.update();
 }
 
-/// A real press and release, one update apart.
 fn real_click(app: &mut App) {
     let window = primary(app);
     for state in [ButtonState::Pressed, ButtonState::Released] {
@@ -220,7 +196,6 @@ fn real_click(app: &mut App) {
     }
 }
 
-/// The middle of the button showing `text`, in logical pixels.
 fn centre_of(app: &mut App, text: &str) -> Vec2 {
     let world = app.world_mut();
     let label = world
@@ -235,7 +210,6 @@ fn centre_of(app: &mut App, text: &str) -> Vec2 {
     transform.affine().translation * node.inverse_scale_factor
 }
 
-/// Moves the real mouse in a curve to `to`, one sample per update.
 fn real_glide(app: &mut App, from: Vec2, to: Vec2) {
     for frame in 1..=12_u8 {
         let t = f32::from(frame) / 12.0;
@@ -244,7 +218,6 @@ fn real_glide(app: &mut App, from: Vec2, to: Vec2) {
     }
 }
 
-/// What a person does: three clicks on "+1", a pause between them.
 fn use_the_app(app: &mut App) {
     let button = centre_of(app, "+1");
     real_glide(app, Vec2::new(10.0, 10.0), button);
@@ -256,8 +229,6 @@ fn use_the_app(app: &mut App) {
     }
 }
 
-/// Plays a recorded file the way an app would: it loads against the app's
-/// types, and its setup reads the file the recording wrote.
 fn play(path: &std::path::Path) -> Result<(bevy_stagecraft::ScenarioReport, u32), String> {
     let text = fs::read_to_string(path).expect("the file was written");
     let script = Script::from_ron(&text).expect("the file reads back");
@@ -326,7 +297,6 @@ fn the_recorded_file_reads_as_a_few_labelled_steps() {
         "the path ends on the button by its role and label: {:?}",
         script.steps
     );
-    // Twelve curved samples collapse into a handful of glides.
     let glides = script
         .steps
         .iter()
@@ -348,8 +318,6 @@ fn the_recorded_file_reads_as_a_few_labelled_steps() {
 
 #[test]
 fn a_session_is_the_same_whatever_frame_rate_it_ran_at() {
-    // Updates of 1/60 s, but the app was slow: the same input took twice as
-    // many frames. The log is in frames of real time, so the pauses double.
     let steps_for = |extra_updates: usize| {
         let dir = dir(&format!("session-rate-{extra_updates}"));
         let mut app = app(&dir);
@@ -511,13 +479,10 @@ fn the_apps_own_target_is_offered_clicks_that_hit_no_label() {
     );
 }
 
-/// The test id of a button the recorder names by it.
 #[derive(Component, Reflect, Debug, Default)]
 #[reflect(Component)]
 struct Tagged;
 
-/// Records one click at `position` in `app` and returns the target the
-/// pointer was moved to for it.
 fn recorded_target(app: &mut App, name: &str, position: Vec2) -> Target {
     session::start(app.world_mut(), name).expect("starts");
     real_move(app, position);
@@ -599,7 +564,6 @@ fn a_recorded_click_names_a_test_id_then_role_and_label_then_text_then_the_posit
     );
 }
 
-/// A real key press or release, as `bevy_winit` reports it, one update apart.
 fn real_key(app: &mut App, key_code: KeyCode, logical_key: Key, state: ButtonState) {
     let window = primary(app);
     let text = match (&logical_key, state) {
@@ -620,7 +584,6 @@ fn real_key(app: &mut App, key_code: KeyCode, logical_key: Key, state: ButtonSta
     app.update();
 }
 
-/// A person types "Hi 5" with Shift for the capital, a few updates per key.
 fn type_hi(app: &mut App) {
     let character = |text: &str| Key::Character(text.into());
     real_key(app, KeyCode::ShiftLeft, Key::Shift, ButtonState::Pressed);
@@ -662,7 +625,6 @@ fn a_recorded_typing_session_exports_a_single_type_step() {
     assert!(text.contains("text: \"Hi5\","), "{text}");
 }
 
-/// What `bevy_winit` does for a finger.
 fn real_touch(app: &mut App, phase: TouchPhase, position: Vec2) {
     let window = primary(app);
     let input = TouchInput {

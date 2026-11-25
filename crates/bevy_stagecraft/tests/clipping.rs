@@ -1,7 +1,3 @@
-//! Actionability, `OnTop` and picking where Bevy 0.20 changes what is
-//! visible and under the pointer: clips that are transformed or fully
-//! clipped, and `FixedNode`, which ignores its parent's clip and transform.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -19,22 +15,16 @@ use bevy_stagecraft::{
     Check, HeadlessPlugins, Outcome, Scenario, ScenarioReport, Step, Target, node_at,
 };
 
-/// How many frames the UI gets to be laid out and stacked before a check.
 const SETTLE_FRAMES: u16 = 3;
-/// How many frames a step waits for a target that is not actionable.
 const SHORT_TIMEOUT: u16 = 5;
 
-/// How many times a button was activated.
 #[derive(Resource, Default)]
 struct Activations(u32);
 
-/// Counts an activation of the button it observes.
 fn count(_: On<Activate>, mut activations: ResMut<Activations>) {
     activations.0 += 1;
 }
 
-/// A 200 by 100 clipping panel at (50, 50), turned a quarter turn about its
-/// middle, so it covers x 100 to 200 and y 0 to 200 on screen.
 fn rotated_panel() -> impl Bundle {
     (
         Node {
@@ -50,7 +40,6 @@ fn rotated_panel() -> impl Bundle {
     )
 }
 
-/// A button labelled `label` at local (`left`, 10) in its parent, 40 by 30.
 fn small_button(left: i32, label: &str) -> impl Bundle {
     (
         Button,
@@ -67,13 +56,11 @@ fn small_button(left: i32, label: &str) -> impl Bundle {
     )
 }
 
-/// Spawns a camera and the activation counter.
 fn spawn_camera(world: &mut World) {
     world.init_resource::<Activations>();
     world.spawn(Camera2d);
 }
 
-/// Plays `scenario` and returns the report and the activations.
 fn play(scenario: &Scenario) -> (ScenarioReport, u32) {
     let mut app = scenario.headless_app();
     let report = scenario.run_in(&mut app);
@@ -81,7 +68,6 @@ fn play(scenario: &Scenario) -> (ScenarioReport, u32) {
     (report, activations)
 }
 
-/// The failure message of the step at `index`.
 fn failure(report: &ScenarioReport, index: usize) -> String {
     match &report.steps[index].outcome {
         Outcome::Fail(message) => message.clone(),
@@ -89,7 +75,6 @@ fn failure(report: &ScenarioReport, index: usize) -> String {
     }
 }
 
-/// A laid-out headless app running `setup`.
 fn app_with(setup: impl FnOnce(&mut World)) -> App {
     let mut app = App::new();
     app.add_plugins(HeadlessPlugins::default());
@@ -102,7 +87,6 @@ fn app_with(setup: impl FnOnce(&mut World)) -> App {
     app
 }
 
-/// The node showing `text`.
 fn text_node(app: &mut App, text: &str) -> Entity {
     let world = app.world_mut();
     world
@@ -113,7 +97,6 @@ fn text_node(app: &mut App, text: &str) -> Entity {
         .0
 }
 
-/// The middle of `entity`, in logical pixels.
 fn centre(app: &App, entity: Entity) -> Vec2 {
     let world = app.world();
     let node = world.get::<ComputedNode>(entity).expect("laid out");
@@ -121,7 +104,6 @@ fn centre(app: &App, entity: Entity) -> Vec2 {
     transform.affine().translation * node.inverse_scale_factor
 }
 
-/// Whether `hit` is `label` or the button the label sits in.
 fn is_label_or_button(app: &App, hit: Entity, label: Entity) -> bool {
     hit == label
         || app
@@ -130,9 +112,6 @@ fn is_label_or_button(app: &App, hit: Entity, label: Entity) -> bool {
             .is_some_and(|parent| parent.parent() == hit)
 }
 
-/// A rotated panel with a button that shows (middle at world (175, 170),
-/// below the unrotated panel's bottom edge at 150) and one whose middle is
-/// clipped away (world (175, 240)).
 fn rotated_clip(world: &mut World) {
     spawn_camera(world);
     world.spawn(rotated_panel()).with_children(|panel| {
@@ -175,8 +154,6 @@ fn picking_at_a_rotated_clip_finds_what_shows_and_nothing_where_it_is_clipped() 
     assert_eq!(node_at(app.world(), centre(&app, away)), None);
 }
 
-/// A scaled-to-nothing clipping panel with a button in it: the clip is
-/// `FullyClipped` for the button.
 fn fully_clipped(world: &mut World) {
     spawn_camera(world);
     world
@@ -220,8 +197,6 @@ fn a_fully_clipped_button_is_never_picked() {
     assert_eq!(node_at(world, Vec2::new(100.0, 75.0)), None);
 }
 
-/// A small clipping container at (50, 50), 100 by 100, with a `FixedNode`
-/// child placed at (300, 200) on the screen, far outside the container.
 fn fixed_in_clip(world: &mut World) {
     spawn_camera(world);
     world
@@ -303,7 +278,6 @@ fn a_fixed_node_ignores_the_transform_of_its_parent() {
     assert!(node_at(app.world(), middle).is_some());
 }
 
-/// "Go" in a clipping container and a fixed, painted node over it, at `z`.
 fn fixed_over_button(world: &mut World, z: i32, pickable: Pickable) {
     spawn_camera(world);
     world
@@ -338,7 +312,6 @@ fn fixed_over_button(world: &mut World, z: i32, pickable: Pickable) {
 
 #[test]
 fn a_fixed_node_painted_over_a_button_covers_it_for_on_top_and_the_pointer() {
-    // The button's middle is at (90, 75), under the cover.
     let scenario = Scenario::new("fixed covers")
         .setup(|world| fixed_over_button(world, 10, Pickable::default()))
         .steps([

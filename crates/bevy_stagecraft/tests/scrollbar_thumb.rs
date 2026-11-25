@@ -1,6 +1,3 @@
-//! A `bevy_ui_widgets` scroll bar thumb, which has a `ComputedNode` and a
-//! `UiGlobalTransform` but no `Node`, is a UI node steps can act on.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -16,20 +13,14 @@ use bevy::{
 };
 use bevy_stagecraft::{Check, Outcome, Scenario, ScenarioReport, Step, Target};
 
-/// The height of the visible scroll area, and of its bar, in logical pixels.
 const VISIBLE: f32 = 100.0;
 
-/// How many rows the scroll area holds.
 const ROWS: usize = 8;
 
-/// The height of one row: the content is four times the visible height.
 const ROW: f32 = 50.0;
 
-/// The player frame on which the scroll area appears.
 const APPEARS_AT: u32 = 10;
 
-/// The scroll area, then its vertical `Scrollbar` at its right with a thumb
-/// named `ScrollThumb`.
 fn spawn_scroll_area(world: &mut World) {
     let area = world
         .spawn((
@@ -79,7 +70,6 @@ fn spawn_scroll_area(world: &mut World) {
     ));
 }
 
-/// Spawns the scroll area on the player frame [`APPEARS_AT`].
 fn spawn_late(world: &mut World) {
     let due = world
         .get_resource::<ScenarioReport>()
@@ -89,8 +79,6 @@ fn spawn_late(world: &mut World) {
     }
 }
 
-/// Plays `scenario` with the scroll area appearing late, and returns the
-/// report and the area's scroll position, if it has appeared.
 fn play(scenario: &Scenario) -> (ScenarioReport, Option<Vec2>) {
     let mut app = scenario.headless_app();
     app.init_resource::<ScenarioReport>();
@@ -105,15 +93,12 @@ fn play(scenario: &Scenario) -> (ScenarioReport, Option<Vec2>) {
     (report, position)
 }
 
-/// A camera and nothing else, until the scroll area appears.
 fn camera(world: &mut World) {
     world.spawn(Camera2d);
 }
 
 #[test]
 fn dragging_a_scrollbar_thumb_by_name_waits_for_it_and_scrolls_the_area() {
-    // The thumb is 25 pixels tall at the top of the 100-pixel track; 50
-    // pixels down the track is half of the 400 pixels of content.
     let scenario = Scenario::new("thumb drag").setup(camera).steps([
         Step::drag(
             Target::name("ScrollThumb"),

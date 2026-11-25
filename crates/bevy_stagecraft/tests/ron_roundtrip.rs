@@ -1,5 +1,3 @@
-//! Scenarios written in Rust and as RON are one value.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -17,8 +15,6 @@ use bevy_stagecraft::{
 };
 use common::{Activations, UiCheck, UiSetup, UiTarget, UiView, registry};
 
-/// A scenario written in Rust, with the app's own setup, view, targets and
-/// checks as values.
 fn in_rust() -> Scenario {
     Scenario::new("click pause")
         .window_size(800, 600)
@@ -60,8 +56,6 @@ fn modifiers_read_as_a_list_in_ron() {
     assert!(!ron.contains("Some("), "{ron}");
 }
 
-/// The same scenario as [`in_rust`] without the drag step, played straight
-/// from Rust with no registry.
 fn in_rust_playable() -> Scenario {
     Scenario::new("click pause")
         .window_size(800, 600)
@@ -79,9 +73,7 @@ fn in_rust_playable() -> Scenario {
 
 #[test]
 fn both_spellings_play_identically() {
-    // Played directly, as written in Rust.
     let from_rust = in_rust_playable().run_headless();
-    // Exported to RON and loaded back through the registry.
     let ron = in_rust_playable().to_ron().unwrap();
     let from_file = Scenario::from_ron_with(&ron, &registry())
         .unwrap()
@@ -113,7 +105,6 @@ fn the_apps_setup_view_and_targets_are_written_inside_app() {
     }
 }
 
-/// Loads a script of format version 3 with this body.
 fn load(body: &str) -> Result<Scenario, LoadError> {
     Scenario::from_ron_with(
         &format!("(format_version: 3, name: \"x\", {body})"),
@@ -382,7 +373,6 @@ fn a_scale_factor_of_zero_in_a_file_is_a_load_error_naming_it() {
     assert!(error.to_string().contains("scale factor"), "{error}");
 }
 
-/// A scenario with groups inside groups.
 fn grouped() -> Scenario {
     Scenario::new("grouped").app_setup(UiSetup::PlainUi).steps([
         Step::wait(1),

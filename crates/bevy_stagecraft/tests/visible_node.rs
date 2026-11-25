@@ -1,6 +1,3 @@
-//! `Visible` is about the named node, not the widget above it: a hidden list
-//! inside a visible selectable row is hidden.
-
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -14,11 +11,8 @@ use bevy::{
 };
 use bevy_stagecraft::{Check, Scenario, Step, Target};
 
-/// Frames for layout and visibility propagation.
 const SETTLE_FRAMES: u16 = 3;
 
-/// A visible `Selectable` row holding a non-widget node called "list",
-/// hidden or shown.
 fn row_with_list(name: &str, list: Visibility) -> Scenario {
     Scenario::new(name)
         .setup(move |world| {

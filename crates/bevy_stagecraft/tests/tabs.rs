@@ -1,6 +1,3 @@
-//! Tabs of `bevy_ui_widgets`: the `Tab` and `TabList` roles, and `Selected`
-//! holding for the tab a `SelectedTab` names.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -15,11 +12,8 @@ use bevy::{
 };
 use bevy_stagecraft::{Check, HeadlessPlugins, Scenario, Step, Target, WidgetRole, tree_snapshot};
 
-/// The labels of the tabs, in order.
 const LABELS: [&str; 3] = ["Rendering", "Audio", "Input"];
 
-/// Spawns a camera and a tab list of three tabs, the first selected, that
-/// updates its own selection.
 fn spawn_tabs(world: &mut World) {
     world.spawn(Camera2d);
     let list = world
@@ -55,7 +49,6 @@ fn spawn_tabs(world: &mut World) {
         .insert(SelectedTab(tabs.first().copied()));
 }
 
-/// The tab with this label.
 fn tab(label: &str) -> Target {
     Target::role(WidgetRole::Tab, label)
 }
