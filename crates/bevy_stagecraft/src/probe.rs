@@ -1,14 +1,4 @@
 //! Reading state out of the world, for checks.
-//!
-//! A [`Probe`] is a read-only view of a `World`. Checks get one and cannot
-//! change anything. It offers generic helpers ([`Probe::count`],
-//! [`Probe::resource`], [`Probe::hovered`], [`Probe::has_text`]); an app adds
-//! its own by writing an extension trait on `Probe` that goes through
-//! [`Probe::world`], and uses them from its [`AppCheck`](crate::AppCheck)s.
-//!
-//! The crate-private functions of this module are shared by the player and
-//! the checks: the hovered entities, the hover check a pointer action makes
-//! on its widget, and the description of an entity for a failure message.
 
 use bevy::{
     ecs::{
@@ -25,29 +15,22 @@ use bevy::{
 };
 
 /// A read-only view of the world handed to checks.
-///
-/// It offers a few generic helpers. An app adds its own by writing an
-/// extension trait on `Probe` that goes through [`Probe::world`].
 #[derive(Debug, Clone, Copy)]
 pub struct Probe<'w> {
-    /// The world being inspected.
     world: &'w World,
 }
 
 impl<'w> Probe<'w> {
-    /// Wraps `world`.
     #[must_use]
     pub const fn new(world: &'w World) -> Self {
         Self { world }
     }
 
-    /// The world, for helpers that need more than the generic ones.
     #[must_use]
     pub const fn world(&self) -> &'w World {
         self.world
     }
 
-    /// How many entities have component `C`.
     #[must_use]
     pub fn count<C: Component>(&self) -> usize {
         // A component nobody has registered cannot be on any entity.
@@ -56,13 +39,11 @@ impl<'w> Probe<'w> {
             .map_or(0, |query| query.iter_manual(self.world).count())
     }
 
-    /// The resource `R`, if it exists.
     #[must_use]
     pub fn resource<R: Resource>(&self) -> Option<&'w R> {
         self.world.get_resource::<R>()
     }
 
-    /// The entities under the mouse pointer, nearest first.
     #[must_use]
     pub fn hovered(&self) -> Vec<Entity> {
         hovered_entities(self.world)
@@ -92,7 +73,6 @@ impl<'w> Probe<'w> {
     }
 }
 
-/// The entities the mouse pointer hovers, nearest first, ties by entity.
 pub(crate) fn hovered_entities(world: &World) -> Vec<Entity> {
     let Some(map) = world.get_resource::<HoverMap>() else {
         return Vec::new();
@@ -104,14 +84,11 @@ pub(crate) fn hovered_entities(world: &World) -> Vec<Entity> {
         .iter()
         .map(|(entity, hit)| (*entity, hit.depth))
         .collect();
-    // Backends report depth as the distance from the camera, so smaller is
-    // nearer. Ties break by entity so the order never depends on hashing.
+    // Smaller depth is nearer; ties break by entity so order never depends on hashing.
     hits.sort_by(|(a, depth_a), (b, depth_b)| depth_a.total_cmp(depth_b).then(a.cmp(b)));
     hits.into_iter().map(|(entity, _)| entity).collect()
 }
 
-/// Fails unless `widget`, or something below it, is under the pointer.
-/// `label` is how the script named the widget, for the message.
 pub(crate) fn check_hover(world: &World, widget: Entity, label: &str) -> Result<(), String> {
     let hovered = hovered_entities(world);
     if hovered
@@ -132,7 +109,6 @@ pub(crate) fn check_hover(world: &World, widget: Entity, label: &str) -> Result<
     ))
 }
 
-/// A short human description of `entity`, for failure messages.
 pub(crate) fn describe_entity(world: &World, entity: Entity) -> String {
     if let Some(name) = world.get::<Name>(entity) {
         return format!("`{name}`");
@@ -143,7 +119,6 @@ pub(crate) fn describe_entity(world: &World, entity: Entity) -> String {
     format!("an unnamed node ({entity})")
 }
 
-/// The text of `entity` or of its first descendant that has any.
 fn text_within(world: &World, entity: Entity) -> Option<String> {
     if let Some(text) = world.get::<Text>(entity) {
         return Some(text.0.clone());
@@ -152,7 +127,6 @@ fn text_within(world: &World, entity: Entity) -> Option<String> {
     children.iter().find_map(|child| text_within(world, *child))
 }
 
-/// Whether `entity` is `ancestor` or lies below it.
 pub(crate) fn is_within(world: &World, entity: Entity, ancestor: Entity) -> bool {
     let mut current = entity;
     loop {

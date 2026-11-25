@@ -1,52 +1,12 @@
-//! The app's own setups, views, targets and checks, each one reflected enum.
+//! The app's own setups, views, targets and checks: one reflected enum each, marked with
+//! `#[reflect(AppSetup)]`, `AppView`, `AppTarget` or `AppCheck`.
 //!
-//! An app extends the crate at four points. For each it declares one enum
-//! that derives `Reflect`, marks it with the matching attribute and
-//! implements the matching trait:
+//! Bevy's type registry finds each enum: no registration call, no name. A second type for
+//! one extension point is a load error naming both.
 //!
-//! | Attribute                | Trait                       | What a value does                       |
-//! | ------------------------ | --------------------------- | --------------------------------------- |
-//! | `#[reflect(AppSetup)]`   | [`AppSetup`]                | builds the world a scenario starts from |
-//! | `#[reflect(AppView)]`    | [`AppView`]                 | arranges how the world is shown         |
-//! | `#[reflect(AppTarget)]`  | [`AppTarget`]               | finds where a step acts                 |
-//! | `#[reflect(AppCheck)]`   | [`AppCheck`](crate::AppCheck) | asks something of the world           |
-//!
-//! Bevy's type registry finds each enum by itself: there is no registration
-//! call, no name and no generic parameter. A script writes a value inside
-//! `App(..)`:
-//!
-//! ```ron
-//! setup: App(SavedWorld("two_stops_and_a_train.ron")),
-//! view: App(TopDown),
-//! steps: [
-//!     MoveTo(App(Station("Alpha"))),
-//!     Check(App(StationNamed("Alpha"))),
-//! ],
-//! ```
-//!
-//! The value is kept as the RON text written there (an [`AppValue`]) until
-//! the script loads against a [`Registry`](crate::Registry), which reads it
-//! as the app's type with Bevy's `TypedReflectDeserializer`. So a misspelt
-//! variant or a wrong argument is a load error naming where it is and listing
-//! the variants, not a failure part way through a run. Written back, a value
-//! is the RON text `TypedReflectSerializer` gives.
-//!
-//! One type per extension point and app: a second type with the same
-//! attribute is a load error naming both.
-//!
-//! Each trait has its own optional hooks for recordings: [`AppSetup`] may
-//! `capture` the app's state as a setup, [`AppView`] may name the `current`
-//! view, and [`AppTarget`] may say what it is `at` a position (for a
-//! recording and for pick mode). The type data for each (`ReflectAppSetup`,
-//! `ReflectAppView`, `ReflectAppTarget`) holds the cast and a function
-//! pointer to the associated function, as `ReflectAppCheck` does. A value
-//! built from RON in Rust is typed against the world's registry when used.
-//!
-//! The script's own `setup` is [`Setup`]: `App(..)` or the built-in
-//! `Scene("x.scene.ron")`, a world saved by [`crate::save`]; any other form
-//! is refused with a hint. `view` is [`View`]: `App(..)`. An `AppSetup` that
-//! queues BSN scenes needs no wait of its own: the player holds the first
-//! step until they are loaded (see [`crate::player`]).
+//! A script writes a value inside `App(..)`. It is kept as RON text (an [`AppValue`]) until
+//! the script loads against a [`Registry`](crate::Registry), so a misspelled variant is a
+//! load error, not a failure part way through a run.
 
 mod setup;
 mod target;
@@ -81,23 +41,16 @@ use crate::{
     targets::Target,
 };
 
-/// One of the four places an app extends the crate with an enum of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Extension {
-    /// The world a scenario starts from: [`AppSetup`].
     Setup,
-    /// How the world is shown: [`AppView`].
     View,
-    /// Where a step acts: [`AppTarget`].
     Target,
-    /// What a check asks: [`AppCheck`](crate::AppCheck).
     Check,
 }
 
 impl Extension {
-    /// The trait the app implements, which is also the attribute's name:
-    /// `AppSetup` for `#[reflect(AppSetup)]`.
     #[must_use]
     pub const fn trait_name(self) -> &'static str {
         match self {
@@ -108,7 +61,6 @@ impl Extension {
         }
     }
 
-    /// What one value is called in a message, such as `app setup`.
     #[must_use]
     pub const fn noun(self) -> &'static str {
         match self {
@@ -120,23 +72,17 @@ impl Extension {
     }
 }
 
-/// The extension point in words, such as `app setup`.
 impl fmt::Display for Extension {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.noun())
     }
 }
 
-/// A marker for one extension point, as the type parameter of [`AppValue`]:
-/// [`SetupPoint`], [`ViewPoint`], [`TargetPoint`] or [`CheckPoint`].
 pub trait ExtensionPoint: TypePath + Send + Sync + 'static {
-    /// The type data the attribute registers, such as [`ReflectAppSetup`].
     type Data: TypeData + Clone;
-    /// Which extension point this is.
     const EXTENSION: Extension;
 }
 
-/// The marker of [`AppSetup`] values.
 #[derive(Debug, Clone, Copy, TypePath)]
 pub struct SetupPoint;
 
@@ -145,7 +91,6 @@ impl ExtensionPoint for SetupPoint {
     const EXTENSION: Extension = Extension::Setup;
 }
 
-/// The marker of [`AppView`] values.
 #[derive(Debug, Clone, Copy, TypePath)]
 pub struct ViewPoint;
 
@@ -154,7 +99,6 @@ impl ExtensionPoint for ViewPoint {
     const EXTENSION: Extension = Extension::View;
 }
 
-/// The marker of [`AppTarget`] values.
 #[derive(Debug, Clone, Copy, TypePath)]
 pub struct TargetPoint;
 
@@ -163,7 +107,6 @@ impl ExtensionPoint for TargetPoint {
     const EXTENSION: Extension = Extension::Target;
 }
 
-/// The marker of [`AppCheck`](crate::AppCheck) values.
 #[derive(Debug, Clone, Copy, TypePath)]
 pub struct CheckPoint;
 
@@ -172,43 +115,23 @@ impl ExtensionPoint for CheckPoint {
     const EXTENSION: Extension = Extension::Check;
 }
 
-/// The value inside a [`Setup::App`]: one of the app's setups.
 pub type AppSetupValue = AppValue<SetupPoint>;
-/// The value inside a [`View::App`]: one of the app's views.
 pub type AppViewValue = AppValue<ViewPoint>;
-/// The value inside a [`Target::App`]: one of the app's targets.
 pub type AppTargetValue = AppValue<TargetPoint>;
-/// The value inside a [`Check::App`](crate::Check::App): one of the app's
-/// checks.
 pub type AppCheckValue = AppValue<CheckPoint>;
 
-/// A value of the app's own type for one extension point `K`.
-///
-/// Read from a file, it is kept as the RON text written there until the
-/// script loads against a [`Registry`](crate::Registry), which reads it as
-/// the app's type with [`TypedReflectDeserializer`]. Written to a file, it is
-/// the RON text [`TypedReflectSerializer`] gives. Two values are equal when
-/// their RON text is.
-///
-/// It is `Reflect` (as an opaque value, read and written through its RON
-/// text), so a variant of the app's check type can take a [`Target`] that
-/// holds one.
+/// A value of the app's own type for one extension point `K`, kept as RON text until the
+/// script loads.
 #[derive(Reflect)]
 #[reflect(opaque)]
 #[reflect(Clone, Debug, Serialize, Deserialize)]
 pub struct AppValue<K: ExtensionPoint> {
-    /// The value as RON: as written in the file until it is typed, then as
-    /// its type writes it; or why it could not be written.
     ron: Result<String, String>,
-    /// The value itself, once its type is known.
     typed: Option<Typed<K>>,
 }
 
-/// A value of a known type.
 struct Typed<K: ExtensionPoint> {
-    /// The value, of the app's own type.
     value: Arc<dyn Reflect>,
-    /// The type data that sees it as the extension point's trait.
     data: K::Data,
 }
 
@@ -231,17 +154,13 @@ impl<K: ExtensionPoint> Clone for AppValue<K> {
     }
 }
 
-/// The RON text, as a file writes it, so a target in a message reads
-/// `App(Station("Alpha"))`.
 impl<K: ExtensionPoint> fmt::Debug for AppValue<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
 }
 
-// The RON text alone decides equality: an app has one type per extension
-// point, so two values with the same text are the same value of it, typed
-// or not yet typed.
+// The RON text alone decides equality: an app has one type per extension point.
 impl<K: ExtensionPoint> PartialEq for AppValue<K> {
     fn eq(&self, other: &Self) -> bool {
         self.ron == other.ron
@@ -249,11 +168,8 @@ impl<K: ExtensionPoint> PartialEq for AppValue<K> {
 }
 
 impl<K: ExtensionPoint> AppValue<K> {
-    /// `value`, written as RON through its reflected form: the form a file
-    /// holds and is read back with.
-    ///
-    /// A value reflection cannot write (a field whose type lacks
-    /// serialisation) still works, but exporting it is an error.
+    /// A value reflection cannot write (a field whose type lacks serialization) still works,
+    /// but exporting it is an error.
     #[must_use]
     pub fn of<T>(value: T) -> Self
     where
@@ -273,8 +189,7 @@ impl<K: ExtensionPoint> AppValue<K> {
         }
     }
 
-    /// The value written in `text`, which must be one RON value, not yet
-    /// read as any type. Whitespace and comments around it are dropped.
+    /// `text` must be one RON value; whitespace and comments around it are dropped.
     ///
     /// # Errors
     ///
@@ -284,7 +199,6 @@ impl<K: ExtensionPoint> AppValue<K> {
         Ok(Self::raw(raw))
     }
 
-    /// The value as `raw` holds it, untyped.
     fn raw(raw: &RawValue) -> Self {
         Self {
             ron: Ok(raw.trim().get_ron().to_owned()),
@@ -292,8 +206,6 @@ impl<K: ExtensionPoint> AppValue<K> {
         }
     }
 
-    /// The RON text, or why the value could not be written.
-    ///
     /// # Errors
     ///
     /// Why [`AppValue::of`] could not write the value.
@@ -301,23 +213,17 @@ impl<K: ExtensionPoint> AppValue<K> {
         self.ron.as_deref().map_err(String::as_str)
     }
 
-    /// The value, once it is of the app's type: always for a value made in
-    /// Rust, and for a value from a file once the script has loaded.
     #[must_use]
     pub fn value(&self) -> Option<&dyn Reflect> {
         self.typed.as_ref().map(|typed| &*typed.value)
     }
 
-    /// The value and the type data that sees it as the extension point's
-    /// trait, once it is typed.
     pub(crate) fn typed_parts(&self) -> Option<(&dyn Reflect, &K::Data)> {
         self.typed
             .as_ref()
             .map(|typed| (&*typed.value, &typed.data))
     }
 
-    /// A value of the app's type, already built, written as RON through
-    /// `types`.
     pub(crate) fn from_typed(types: &TypeRegistry, value: Box<dyn Reflect>, data: K::Data) -> Self {
         let ron = write(types, value.as_partial_reflect())
             .map_err(|error| format!("cannot write {}: {error}", value.reflect_short_type_path()));
@@ -330,9 +236,6 @@ impl<K: ExtensionPoint> AppValue<K> {
         }
     }
 
-    /// This value, typed against the type registry of `world`'s app unless
-    /// it is typed already. A value from a script that loaded is typed; one
-    /// made with [`AppValue::from_ron`] is typed here, when it is used.
     pub(crate) fn typed_in(&self, world: &World) -> Result<Cow<'_, Self>, String> {
         if self.typed.is_some() {
             return Ok(Cow::Borrowed(self));
@@ -350,9 +253,6 @@ impl<K: ExtensionPoint> AppValue<K> {
         Ok(Cow::Owned(typed))
     }
 
-    /// Reads the value as the app's type for this extension point in
-    /// `types`, unless it is of a type already, and every [`Target`] inside
-    /// it as the app's target type.
     pub(crate) fn type_against(&mut self, types: &TypeRegistry) -> Result<(), Problem> {
         if self.typed.is_some() {
             return Ok(());
@@ -383,7 +283,7 @@ impl<K: ExtensionPoint> AppValue<K> {
                 "`{type_name}` cannot be built from reflection; keep `FromReflect`, which `#[derive(Reflect)]` gives"
             ))
         })?;
-        // What the deserialiser accepts may still leave a field out.
+        // What the deserializer accepts may still leave a field out.
         let mut value = from
             .from_reflect(read.as_ref())
             .ok_or_else(|| bad("a field is missing or does not fit".to_owned()))?;
@@ -404,7 +304,6 @@ impl<K: ExtensionPoint> AppValue<K> {
     }
 }
 
-/// The RON text, or the reason it could not be written in angle brackets.
 impl<K: ExtensionPoint> fmt::Display for AppValue<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.ron {
@@ -414,7 +313,6 @@ impl<K: ExtensionPoint> fmt::Display for AppValue<K> {
     }
 }
 
-/// Written as the bare RON value, so a file reads `App(Station("Alpha"))`.
 impl<K: ExtensionPoint> Serialize for AppValue<K> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let text = self.ron().map_err(serde::ser::Error::custom)?;
@@ -424,8 +322,6 @@ impl<K: ExtensionPoint> Serialize for AppValue<K> {
     }
 }
 
-/// Read as whatever RON value stands there, untouched; only RON can provide
-/// one. It is typed when the script loads.
 impl<'de, K: ExtensionPoint> Deserialize<'de> for AppValue<K> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = Box::<RawValue>::deserialize(deserializer)?;
@@ -433,9 +329,6 @@ impl<'de, K: ExtensionPoint> Deserialize<'de> for AppValue<K> {
     }
 }
 
-/// Reads every [`Target`] at or inside `value` (a field of an app check, say)
-/// as the app's target type, so a misspelt app target there is a load error
-/// too.
 fn type_targets_within(
     value: &mut dyn PartialReflect,
     types: &TypeRegistry,
@@ -492,8 +385,7 @@ fn type_targets_within(
     Ok(())
 }
 
-/// `message` without the ``(stack: `..`)`` Bevy's reflection adds in debug
-/// builds, which names only the type the message names already.
+/// Drops the ``(stack: `..`)`` Bevy's reflection adds in debug builds.
 fn without_stack(message: &str) -> &str {
     message
         .rfind(" (stack: ")
@@ -501,12 +393,10 @@ fn without_stack(message: &str) -> &str {
         .unwrap_or(message)
 }
 
-/// `value` as compact RON, through reflection.
 fn write(types: &TypeRegistry, value: &dyn PartialReflect) -> Result<String, ron::Error> {
     ron::to_string(&TypedReflectSerializer::new(value, types))
 }
 
-/// The one registered type for the extension point `K`.
 pub(crate) fn registration<K: ExtensionPoint>(
     types: &TypeRegistry,
 ) -> Result<&TypeRegistration, Problem> {
@@ -529,9 +419,6 @@ pub(crate) fn registration<K: ExtensionPoint>(
     }
 }
 
-/// The type data of the one registered type for the extension point `K` in
-/// `world`'s app, if there is one.
-///
 /// # Errors
 ///
 /// When more than one type is registered for it, naming them.
@@ -547,15 +434,10 @@ pub(crate) fn data_in<K: ExtensionPoint>(world: &World) -> Result<Option<K::Data
     }
 }
 
-/// What a file with a custom target by resolver name, as format versions 1
-/// to 3 could hold, is told.
 pub(crate) const NO_CUSTOM_TARGET: &str = "custom targets are no longer looked up by \
     resolver name: declare the app's targets as one enum with `#[derive(Reflect)]` and \
     `#[reflect(AppTarget)]`, and write one as `App(..)`, such as `MoveTo(App(Station(\"Alpha\")))`";
 
-/// The setup the app's [`AppSetup::capture`] makes of `world` now, for a
-/// recording that writes into `dir` under `stem`; `None` when no type is the
-/// app's setup type or the app captures none.
 pub(crate) fn capture_setup(
     world: &mut World,
     dir: &Path,
@@ -574,8 +456,6 @@ pub(crate) fn capture_setup(
     Ok(Some(Setup::App(value)))
 }
 
-/// The view the app's [`AppView::current`] names for `world` now; `None`
-/// when no type is the app's view type or the app names none.
 pub(crate) fn current_view(world: &World) -> Result<Option<View>, String> {
     let Some(data) = data_in::<ViewPoint>(world)? else {
         return Ok(None);
@@ -589,9 +469,6 @@ pub(crate) fn current_view(world: &World) -> Result<Option<View>, String> {
     Ok(Some(View::App(value)))
 }
 
-/// What the app's [`AppTarget::at`] makes of `position` in `world`; `None`
-/// when no type, or more than one, is the app's target type, or the app has
-/// no target there.
 pub(crate) fn app_target_at(world: &World, position: Vec2) -> Option<Target> {
     let data = data_in::<TargetPoint>(world).ok()??;
     let found = data.at(world, position)?;
@@ -600,8 +477,6 @@ pub(crate) fn app_target_at(world: &World, position: Vec2) -> Option<Target> {
     Some(Target::App(value))
 }
 
-/// What a value that cannot be read as the app's type is told when no type
-/// is registered for the extension point: how to declare one.
 pub(crate) fn no_app_type(extension: Extension) -> String {
     let name = extension.trait_name();
     format!(
@@ -610,7 +485,6 @@ pub(crate) fn no_app_type(extension: Extension) -> String {
     )
 }
 
-/// Why several types for one extension point are a mistake, naming them.
 pub(crate) fn several_message(extension: Extension, types: &[String]) -> String {
     let names: Vec<String> = types.iter().map(|name| format!("`{name}`")).collect();
     format!(
@@ -620,7 +494,6 @@ pub(crate) fn several_message(extension: Extension, types: &[String]) -> String 
     )
 }
 
-/// Why a value does not read as the app's type, with the forms it can take.
 pub(crate) fn bad_app_value(
     written: &str,
     type_name: &str,
@@ -634,37 +507,23 @@ pub(crate) fn bad_app_value(
     )
 }
 
-/// The app's type for one extension point, its variants and their fields,
-/// as the gallery needs them to offer values with a form: see [`app_type`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct AppType {
-    /// The full type path, such as `rails::checks::RailCheck`.
     pub type_path: String,
-    /// The short type path, such as `RailCheck`.
     pub short_type_path: String,
-    /// The variants, in declaration order. Empty when the type is not an
-    /// enum.
     pub variants: Vec<AppVariant>,
 }
 
-/// One variant of an app's type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct AppVariant {
-    /// The variant's name, as a file writes it.
     pub name: String,
-    /// Whether the fields have names (`Joined(from: String, to: String)`)
-    /// rather than positions (`StationNamed(String)`).
     pub named_fields: bool,
-    /// The fields, in order; none for a unit variant.
     pub fields: Vec<AppField>,
 }
 
 impl AppVariant {
-    /// The variant with the short types of its fields, as a file would
-    /// write it: `TrackRaisedOnBridge`, `StationNamed(String)`,
-    /// `Joined(from: String, to: String)`.
     #[must_use]
     pub fn form(&self) -> String {
         if self.fields.is_empty() {
@@ -682,25 +541,17 @@ impl AppVariant {
     }
 }
 
-/// One field of a variant of an app's type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct AppField {
-    /// The field's name; `None` for a field known by its position.
     pub name: Option<String>,
-    /// The field type's full type path, such as `alloc::string::String`.
     pub type_path: String,
-    /// The field type's short type path, such as `String`.
     pub short_type_path: String,
 }
 
-/// More than one registered type is the app's type for one extension point;
-/// the paths name them all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeveralAppTypes {
-    /// The extension point.
     pub extension: Extension,
-    /// The full type paths, in order.
     pub types: Vec<String>,
 }
 
@@ -712,9 +563,6 @@ impl fmt::Display for SeveralAppTypes {
 
 impl core::error::Error for SeveralAppTypes {}
 
-/// The app's type for `extension` in `types`, with its variants and their
-/// field types, or `None` when no type carries the attribute.
-///
 /// # Errors
 ///
 /// [`SeveralAppTypes`] when more than one type does.
@@ -722,7 +570,6 @@ pub fn app_type(
     types: &TypeRegistry,
     extension: Extension,
 ) -> Result<Option<AppType>, SeveralAppTypes> {
-    /// The same for one marker.
     fn of<K: ExtensionPoint>(types: &TypeRegistry) -> Result<Option<AppType>, SeveralAppTypes> {
         match registration::<K>(types) {
             Ok(registration) => Ok(Some(describe(registration))),
@@ -740,7 +587,6 @@ pub fn app_type(
     }
 }
 
-/// The type `registration` describes, as an [`AppType`].
 fn describe(registration: &TypeRegistration) -> AppType {
     let info = registration.type_info();
     let variants = match info {
@@ -754,7 +600,6 @@ fn describe(registration: &TypeRegistration) -> AppType {
     }
 }
 
-/// One variant, with its fields.
 fn describe_variant(variant: &VariantInfo) -> AppVariant {
     let (named_fields, fields) = match variant {
         VariantInfo::Struct(fields) => (

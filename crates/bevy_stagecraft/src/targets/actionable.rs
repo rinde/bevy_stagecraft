@@ -1,23 +1,7 @@
-//! Actionability: whether a target can be acted on right now, as
-//! Playwright's auto-waiting decides it.
+//! Actionability, as Playwright's auto-waiting decides it: a target must exist, be visible,
+//! be stable, be enabled (for a press) and receive the pointer.
 //!
-//! Before a step acts on a target that names a widget, the player waits
-//! until, in this order, the target
-//!
-//! 1. exists: it names exactly one widget;
-//! 2. is visible: not hidden, with a size, and with its middle neither
-//!    clipped away nor outside the window;
-//! 3. is stable: neither its layout nor its transform changed during the
-//!    last frame;
-//! 4. is enabled, for a step that presses: neither it nor anything above it
-//!    carries `InteractionDisabled`;
-//! 5. receives the pointer: at the point the step aims at, the topmost UI
-//!    node that takes the pointer is the widget or lies below it, not
-//!    something covering it.
-//!
-//! Positions (`Screen`, `World`, and app targets that report no widget) name
-//! no widget, so none of this applies to them. Everything here reads the
-//! world only, and stability counts frames, never time.
+//! Positions name no widget, so none of this applies. Stability counts frames, never time.
 
 use bevy::{
     camera::visibility::InheritedVisibility,
@@ -39,12 +23,9 @@ use super::{
 };
 use crate::probe::{describe_entity, is_within};
 
-/// How many frames a step waits for its target to become actionable unless
-/// the scenario or the step says otherwise: one second at 1/60 s.
+/// One second at 60 frames per second.
 pub const DEFAULT_ACTION_TIMEOUT: u16 = 60;
 
-/// Works `target` out to a position and checks every condition `action`
-/// needs, the first one that fails saying why.
 pub(super) fn actionable(
     world: &World,
     target: &Target,
@@ -64,9 +45,6 @@ pub(super) fn actionable(
     Ok(resolved)
 }
 
-/// Whether a press at `at`, where an earlier step sent the pointer to
-/// `widget`, reaches it: the widget is still there, enabled, and takes the
-/// pointer at `at`. `label` is how the script named it.
 pub(super) fn pressable(
     world: &World,
     widget: Entity,
@@ -82,15 +60,11 @@ pub(super) fn pressable(
     receives_pointer(world, widget, at, label)
 }
 
-/// Condition 1: the target resolves to one widget, or to a position.
 fn find(world: &World, target: &Target) -> Result<ResolvedTarget, NotActionable> {
     match target {
-        // A position names no widget; a failure to project one is as final
-        // as it always was.
         Target::Screen(_) | Target::World(_) => {
             resolve(world, target).map_err(NotActionable::Never)
         }
-        // The app's own target says itself whether it is there yet.
         Target::App(value) => value.resolve(world).map_err(NotActionable::Yet),
         Target::Text(_)
         | Target::Component(_)
@@ -116,8 +90,6 @@ fn find(world: &World, target: &Target) -> Result<ResolvedTarget, NotActionable>
     }
 }
 
-/// Condition 2: `widget` is drawn, has a size, and its point `at` is
-/// neither clipped away nor outside the window.
 fn visible(world: &World, widget: Entity, at: Vec2, label: &str) -> Result<(), NotActionable> {
     let not_visible = |why: &str| NotActionable::Yet(format!("{label} is not visible: {why}"));
     if world
@@ -151,13 +123,8 @@ fn visible(world: &World, widget: Entity, at: Vec2, label: &str) -> Result<(), N
     Ok(())
 }
 
-/// Condition 3: neither the layout nor the transform of `widget` changed
-/// during the last frame, so its position is the same over two frames.
-///
-/// Bevy's layout only marks these components changed when their values
-/// change, so change detection says whether the widget moved. "The last
-/// frame" is everything since the player's own system last ran, which the
-/// world reports as its last change tick while that system runs.
+/// Change detection says whether the widget moved. The last frame is everything since the
+/// player's own system last ran.
 fn stable(world: &World, widget: Entity, label: &str) -> Result<(), NotActionable> {
     let Ok(entity) = world.get_entity(widget) else {
         return Err(NotActionable::Yet(format!("{label} is gone")));
@@ -178,10 +145,7 @@ fn stable(world: &World, widget: Entity, label: &str) -> Result<(), NotActionabl
     }
 }
 
-/// Condition 4: neither `widget` nor anything above it carries
-/// `InteractionDisabled`. Bevy's widgets read the marker on the widget
-/// itself; an app that disables a whole panel means everything in it, as a
-/// disabled fieldset does in HTML, so the ancestors count too.
+/// Ancestors count: an app that disables a whole panel means everything in it.
 fn enabled(world: &World, widget: Entity, label: &str) -> Result<(), NotActionable> {
     let mut current = widget;
     loop {
@@ -202,14 +166,8 @@ fn enabled(world: &World, widget: Entity, label: &str) -> Result<(), NotActionab
     }
 }
 
-/// Condition 5: at `at`, the pointer reaches `widget`.
-///
-/// This walks the UI stack from the front as Bevy's UI picking does: a node
-/// is hit when it is drawn, has a size, holds the point and is not clipped
-/// there; the first hit that is the widget or lies below it and is hoverable
-/// receives the pointer, unless a hit before it blocks what lies below
-/// (`Pickable::should_block_lower`, which nodes without `Pickable` do). Only
-/// nodes on the widget's camera count, and never the tooling's.
+/// Walks the UI stack front to back as Bevy's UI picking does, honoring
+/// `Pickable::should_block_lower`.
 fn receives_pointer(
     world: &World,
     widget: Entity,
@@ -248,23 +206,9 @@ fn receives_pointer(
     )))
 }
 
-/// Whether the middle of `widget` is painted topmost: walking the UI stack
-/// from the front, the first node that holds the point and is the widget or
-/// lies below it, or paints something, must be the widget's.
-///
-/// This is condition 5 without `Pickable`: it asks what the person sees,
-/// not what the pointer reaches. A popup that lets the pointer through
-/// (`should_block_lower: false`) still covers what is below it here. Nodes
-/// that paint nothing (no background colour that shows, no background
-/// gradient, no image, no text; see `paints`) cover nothing, or an empty
-/// full-window container would cover the whole UI; the widget's own nodes
-/// count whether they paint or not. Only nodes on the widget's camera count,
-/// and never the tooling's.
-///
-/// # Errors
-///
-/// A message saying what covers the widget, or why nothing is painted at its
-/// middle.
+/// Asks what the person sees, not what the pointer reaches: a popup that lets the pointer
+/// through still covers. Nodes that paint nothing cover nothing, or an empty full-window
+/// container would cover the whole UI.
 pub(super) fn painted_topmost(world: &World, widget: Entity) -> Result<(), String> {
     let (Some(computed), Some(transform)) = (
         world.get::<ComputedNode>(widget),
@@ -293,17 +237,8 @@ pub(super) fn painted_topmost(world: &World, widget: Entity) -> Result<(), Strin
     Err("nothing is drawn at its middle (it is hidden, clipped or outside the window)".into())
 }
 
-/// The entity that stands for `widget` in the UI stack: `widget` itself
-/// when the stack holds it, else the nearest entity above it that the stack
-/// holds, else `widget`.
-///
-/// Bevy builds the stack by walking `UiChildren`. Without its `ghost_nodes`
-/// feature that walk reaches every child with a `ComputedStackIndex`, so a
-/// UI node without a `Node` (a `ScrollbarThumb`) is in it; with the feature
-/// it follows only `Node` and `GhostNode` entities and leaves such a node
-/// out. Then the pointer can only reach what is above it, and that is the
-/// right thing to ask about: a `Scrollbar` observes the pointer on its track
-/// and works out itself whether a press is on the thumb.
+/// Without Bevy's `ghost_nodes` feature the UI stack holds nodes without a `Node` (a
+/// `ScrollbarThumb`); with it, ask about the nearest entity above that the stack holds.
 fn stacked(world: &World, stack: &UiStack, widget: Entity) -> Entity {
     let mut current = widget;
     loop {
@@ -317,11 +252,8 @@ fn stacked(world: &World, stack: &UiStack, widget: Entity) -> Entity {
     }
 }
 
-/// Whether `node` draws something of its own over its whole box: a
-/// background colour that shows, a background gradient, an image or text.
-/// A gradient with no stops, or with only transparent ones, still counts as
-/// covering: only its presence is looked at, not what it draws. Borders and shadows are left out: they paint the edge or outside of the
-/// box, not what lies under its middle.
+/// A gradient counts however transparent: only its presence is looked at. Borders and
+/// shadows are left out.
 fn paints(world: &World, node: Entity) -> bool {
     world
         .get::<BackgroundColor>(node)
@@ -333,14 +265,12 @@ fn paints(world: &World, node: Entity) -> bool {
         || world.get::<Text>(node).is_some()
 }
 
-/// The camera `node` is drawn by, if layout has said.
 fn camera_of(world: &World, node: Entity) -> Option<Entity> {
     world
         .get::<ComputedUiTargetCamera>(node)
         .and_then(ComputedUiTargetCamera::get)
 }
 
-/// Whether `node` is a node of the app that `at` (logical pixels) is on.
 fn is_hit(world: &World, node: Entity, at: Vec2) -> bool {
     let (Some(computed), Some(transform)) = (
         world.get::<ComputedNode>(node),
