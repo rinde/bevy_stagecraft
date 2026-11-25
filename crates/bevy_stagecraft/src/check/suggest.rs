@@ -1,33 +1,14 @@
 //! Checks suggested from what changed in the world while a session was
 //! recorded.
 //!
-//! The person recording knows what should have changed; the world can say
-//! what did. [`WorldSnapshot::take`] reads, through reflection:
+//! [`WorldSnapshot::take`] reads resources, component counts, texts, widget
+//! states, Bevy `State`s and the app's facts; [`suggest_checks`] turns the
+//! difference of two snapshots into built-in checks, each kept only if it holds
+//! in the world it came from.
 //!
-//! * the fields of every reflected resource;
-//! * how many entities have each reflected component;
-//! * the texts the app's UI nodes show, and the states of the widgets they
-//!   label (disabled, checked, selected, pressed, focused, visible);
-//! * the current value of every reflected Bevy `State`;
-//! * the app's own facts, from [`AppCheck::facts`](crate::AppCheck::facts).
-//!
-//! [`suggest_checks`] turns the difference between a snapshot from the start
-//! of a recording and one from its end into built-in checks: a changed field
-//! becomes `Resource(path: "Counter.0", is: Eq(1))`, a changed count
-//! `Count(with: ["Ghost"], is: Eq(2))`, new text `Shows("Saved")` and text
-//! that went away `Not(Shows("Saving"))`, a changed state `InState(..)`, a
-//! widget that changed state `Disabled(Text("Save"))` or `Not(..)` of it, and
-//! a fact that holds now and did not before `App(..)`. Every suggestion is run
-//! against the world it came from and kept only if it holds there.
-//!
-//! The order is fixed: resources, counts, states, texts, widgets, then the
-//! app's facts; within each, by type name, field order, text or label, never
-//! hash order.
-//!
-//! A [`NoiseFilter`] leaves out what moves without meaning anything: by
-//! default every type of Bevy's own crates (layout, transforms, picking,
-//! rendering, input, time) and of this crate. The UI those crates draw still
-//! counts, through its texts and widget states.
+//! The order is fixed (resources, counts, states, texts, widgets, app facts;
+//! within each by name, never hash order). A [`NoiseFilter`] leaves out what
+//! moves without meaning: by default the types of Bevy's crates and this one.
 
 use alloc::collections::BTreeMap;
 use core::fmt::Write as _;
@@ -54,15 +35,10 @@ use crate::{
     targets::{Target, is_tooling},
 };
 
-/// The types a [`NoiseFilter`] leaves out unless told otherwise: Bevy's own
-/// crates and this one.
 pub const DEFAULT_IGNORED: [&str; 2] = ["bevy_*", "bevy_stagecraft::*"];
 
-/// How deep a snapshot looks into a resource's fields before it takes what
-/// is there as one value.
 const MAX_FIELD_DEPTH: usize = 8;
 
-/// The widget states a snapshot records, in the order suggestions name them.
 const WIDGET_STATES: [WidgetState; 6] = [
     WidgetState::Disabled,
     WidgetState::Checked,
@@ -72,13 +48,12 @@ const WIDGET_STATES: [WidgetState; 6] = [
     WidgetState::Visible,
 ];
 
-/// Which reflected types a [`WorldSnapshot`] leaves out.
+/// Leaves types out of a suggestion.
 ///
 /// A pattern names a type by its short type path (`Transform`, `Time<Real>`),
-/// its full type path, or its name without generics (`Time`); a pattern that
-/// ends in `*` is a prefix of the full type path (`bevy_*`,
-/// `my_game::debug::*`). A type is left out when an `ignore` pattern matches
-/// it and no `keep` pattern does.
+/// its full type path, or its name without generics; a trailing `*` makes it a
+/// prefix of the full path (`bevy_*`). An `ignore` pattern leaves a type out
+/// unless a `keep` pattern matches it too.
 ///
 /// ```
 /// use bevy_stagecraft::NoiseFilter;
@@ -91,15 +66,11 @@ const WIDGET_STATES: [WidgetState; 6] = [
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoiseFilter {
-    /// Patterns of types to leave out.
     ignore: Vec<String>,
-    /// Patterns of types to keep even so.
     keep: Vec<String>,
 }
 
 impl Default for NoiseFilter {
-    /// Leaves out [`DEFAULT_IGNORED`]: Bevy's layout, transform, picking and
-    /// render internals, and the rest of Bevy's types with them.
     fn default() -> Self {
         Self {
             ignore: DEFAULT_IGNORED
@@ -112,7 +83,6 @@ impl Default for NoiseFilter {
 }
 
 impl NoiseFilter {
-    /// A filter that leaves nothing out.
     #[must_use]
     pub const fn nothing() -> Self {
         Self {
@@ -121,38 +91,30 @@ impl NoiseFilter {
         }
     }
 
-    /// Also leaves out the types `pattern` names.
     #[must_use]
     pub fn ignore(mut self, pattern: impl Into<String>) -> Self {
         self.ignore.push(pattern.into());
         self
     }
 
-    /// Keeps the types `pattern` names, even where an ignore pattern names
-    /// them too.
     #[must_use]
     pub fn keep(mut self, pattern: impl Into<String>) -> Self {
         self.keep.push(pattern.into());
         self
     }
 
-    /// The patterns of types left out.
     #[must_use]
     pub fn ignored(&self) -> &[String] {
         &self.ignore
     }
 
-    /// The patterns of types kept even so.
     #[must_use]
     pub fn kept(&self) -> &[String] {
         &self.keep
     }
 
-    /// Leaves out the type with this full type path, as a person hiding it
-    /// would want: drops the `keep` patterns that name it exactly, then adds
-    /// an `ignore` pattern for it unless it is left out already (by
-    /// `bevy_*`, say). Returns whether the type is left out afterwards, which
-    /// it is not where a broader `keep` pattern still matches it.
+    /// Returns whether the type is left out afterwards: not so where a broader
+    /// `keep` pattern still matches it.
     pub fn hide(&mut self, type_path: &str) -> bool {
         self.keep.retain(|pattern| pattern != type_path);
         if !self.ignores_path(type_path) {
@@ -161,9 +123,8 @@ impl NoiseFilter {
         self.ignores_path(type_path)
     }
 
-    /// Stops leaving out the type with this full type path: drops the
-    /// `ignore` patterns that name it exactly, then adds a `keep` pattern for
-    /// it if a broader `ignore` pattern (such as `bevy_*`) still matches it.
+    /// Adds a `keep` pattern only where a broader `ignore` (such as `bevy_*`)
+    /// still matches.
     pub fn reveal(&mut self, type_path: &str) {
         self.ignore.retain(|pattern| pattern != type_path);
         if self.ignores_path(type_path) {
@@ -171,13 +132,9 @@ impl NoiseFilter {
         }
     }
 
-    /// The filter as the Rust expression that builds it, for pasting into
+    /// The Rust expression that builds the filter, for pasting into
     /// [`SessionHooks::noise_filter`](crate::SessionHooks::noise_filter).
     ///
-    /// A filter that begins with [`DEFAULT_IGNORED`] is
-    /// `NoiseFilter::default()` followed by the other patterns; any other is
-    /// `NoiseFilter::nothing()` followed by all of them. Ignore patterns come
-    /// before keep patterns, each in its order.
     ///
     /// ```
     /// use bevy_stagecraft::NoiseFilter;
@@ -209,9 +166,8 @@ impl NoiseFilter {
         code
     }
 
-    /// Whether the type with this full type path is left out. Patterns
-    /// without `*` are compared with the full path and with its last
-    /// segment, with and without generics.
+    /// Patterns without `*` compare with the full path and its last segment,
+    /// with and without generics.
     #[must_use]
     pub fn ignores_path(&self, type_path: &str) -> bool {
         let short = last_segment(type_path);
@@ -219,15 +175,12 @@ impl NoiseFilter {
         self.ignores_names(type_path, short, ident)
     }
 
-    /// Whether the type `table` describes is left out.
     pub(super) fn ignores(&self, table: &TypePathTable) -> bool {
         let short = table.short_path();
         let ident = table.ident().unwrap_or(short);
         self.ignores_names(table.path(), short, ident)
     }
 
-    /// Whether the type with these names is left out: its full type path,
-    /// its short one, and its name without generics.
     fn ignores_names(&self, path: &str, short: &str, ident: &str) -> bool {
         let matches = |pattern: &String| {
             pattern.strip_suffix('*').map_or_else(
@@ -239,8 +192,7 @@ impl NoiseFilter {
     }
 }
 
-/// `b::C<d::E>` of `a::b::C<d::E>`: the path after the last `::` outside
-/// generics.
+/// The path after the last `::` outside generics.
 fn last_segment(type_path: &str) -> &str {
     let mut depth = 0_usize;
     let mut start = 0;
@@ -257,32 +209,19 @@ fn last_segment(type_path: &str) -> &str {
     type_path.get(start..).unwrap_or(type_path)
 }
 
-/// What the world looked like at one moment, as far as checks can tell:
-/// see the [module documentation](self).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorldSnapshot {
-    /// Each reflected resource's fields, by the resource's name: the path of
-    /// every field (`Counter.0`) with its value as RON, in declaration order.
     resources: BTreeMap<String, Vec<(String, String)>>,
-    /// How many entities have each reflected component, by its name.
     counts: BTreeMap<String, usize>,
-    /// How many of the app's UI nodes show each text.
     texts: BTreeMap<String, usize>,
-    /// The states of each widget a unique text labels, by that text.
     widgets: BTreeMap<String, Vec<WidgetState>>,
-    /// The value of each reflected state, as RON, by the state's name.
     states: BTreeMap<String, String>,
-    /// The app's facts, in the order it lists them.
     facts: Vec<AppCheckValue>,
-    /// The full type path of each reflected type the maps above are keyed by
-    /// name for (resources, counted components, states), by that name.
     type_paths: BTreeMap<String, String>,
 }
 
 impl WorldSnapshot {
-    /// Reads `world` now, leaving out the types `filter` ignores. Types are
-    /// found in the world's `AppTypeRegistry`; without one, only texts and
-    /// widgets are read.
+    /// Without an `AppTypeRegistry`, only texts and widgets are read.
     #[must_use]
     pub fn take(world: &World, filter: &NoiseFilter) -> Self {
         let mut snapshot = Self::default();
@@ -303,8 +242,6 @@ impl WorldSnapshot {
         snapshot
     }
 
-    /// Records one field of a resource as `take` would, for tests of what
-    /// is built from snapshots.
     #[cfg(test)]
     pub(crate) fn set_resource(&mut self, name: &str, type_path: &str, field: &str, ron: &str) {
         self.resources
@@ -313,7 +250,6 @@ impl WorldSnapshot {
             .insert(name.to_owned(), type_path.to_owned());
     }
 
-    /// Reads what the world holds of the type `registration` describes.
     fn read_type(&mut self, world: &World, types: &TypeRegistry, registration: &TypeRegistration) {
         let name = name_of(types, registration);
         let type_path = registration.type_info().type_path_table().path();
@@ -340,8 +276,6 @@ impl WorldSnapshot {
         }
     }
 
-    /// Reads the texts the app's UI shows and the states of the widgets
-    /// they label.
     fn read_ui(&mut self, world: &World) {
         let mut labels: Vec<(String, Entity)> = world
             .try_query::<(Entity, &Text)>()
@@ -353,8 +287,7 @@ impl WorldSnapshot {
                     .collect()
             });
         labels.sort();
-        // What a text input holds is shown too; it names no widget, so it
-        // only counts as a text, for `Shows` and its `Not`.
+        // A text input's value counts as a text only, for `Shows` and its `Not`.
         let values: Vec<String> =
             world
                 .try_query::<(Entity, &EditableText)>()
@@ -390,29 +323,16 @@ impl WorldSnapshot {
     }
 }
 
-/// One line of a [`WorldSnapshot`] that is not the same in another.
-///
-/// It says what it is about (`resource Counter.0`, `text`, `widget "Save"`)
-/// and the value it had before and has after, `None` where it was or is
-/// absent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotChange {
-    /// What the line is about.
     pub key: String,
-    /// Its value in the earlier snapshot.
     pub before: Option<String>,
-    /// Its value in the later one.
     pub after: Option<String>,
-    /// The full type path of the reflected type the line is about (a
-    /// resource, a counted component or a state); `None` for texts, widgets
-    /// and the app's facts, which belong to the UI or the app and not to a
-    /// type.
+    /// `None` for texts, widgets and app facts, which belong to no type.
     pub type_path: Option<String>,
 }
 
 impl WorldSnapshot {
-    /// Everything the snapshot holds as `(what, value)` lines in a fixed
-    /// order, for showing it to a person and for [`WorldSnapshot::changes_from`].
     #[must_use]
     pub fn entries(&self) -> BTreeMap<String, String> {
         self.lines()
@@ -421,8 +341,6 @@ impl WorldSnapshot {
             .collect()
     }
 
-    /// [`Self::entries`] with, for the lines about a reflected type, the
-    /// type's full path.
     fn lines(&self) -> BTreeMap<String, (String, Option<String>)> {
         let mut out = BTreeMap::new();
         let type_path = |name: &String| self.type_paths.get(name).cloned();
@@ -456,8 +374,6 @@ impl WorldSnapshot {
         out
     }
 
-    /// What differs between `before` and this snapshot, by line, in the
-    /// order of [`WorldSnapshot::entries`].
     #[must_use]
     pub fn changes_from(&self, before: &Self) -> Vec<SnapshotChange> {
         let was = before.lines();
@@ -481,7 +397,6 @@ impl WorldSnapshot {
     }
 }
 
-/// The words of the states `widget` is in, as a snapshot records them.
 pub(crate) fn state_names(world: &World, widget: Entity) -> Vec<String> {
     if !widget::is_widget(world, widget) {
         return Vec::new();
@@ -493,8 +408,7 @@ pub(crate) fn state_names(world: &World, widget: Entity) -> Vec<String> {
         .collect()
 }
 
-/// The name a check writes for the type `registration` describes: its short
-/// type path, or the full one where the short one names more than one type.
+/// The short type path, or the full one where it names more than one type.
 pub(super) fn name_of(types: &TypeRegistry, registration: &TypeRegistration) -> String {
     let table = registration.type_info().type_path_table();
     if types.is_ambiguous(table.short_path()) {
@@ -504,15 +418,11 @@ pub(super) fn name_of(types: &TypeRegistry, registration: &TypeRegistration) -> 
     }
 }
 
-/// `value` as compact RON through reflection, the form a check's value is
-/// read back from; `None` when reflection cannot write it.
 pub(super) fn ron_of(types: &TypeRegistry, value: &dyn PartialReflect) -> Option<String> {
     ron::to_string(&TypedReflectSerializer::new(value, types)).ok()
 }
 
-/// Adds every field of `value`, which sits at `path`, to `out`: structs and
-/// tuples are opened, anything else (numbers, text, enums, lists, maps) is
-/// one value.
+/// Opens structs and tuples; anything else is one value.
 pub(super) fn flatten(
     types: &TypeRegistry,
     path: &str,
@@ -547,9 +457,7 @@ pub(super) fn flatten(
     }
 }
 
-/// The checks that say what changed from `before` to `after`, in a fixed
-/// order, each of which holds in `world`: see the [module
-/// documentation](self). `world` is the world `after` was taken of.
+/// Each suggestion holds in `world`, the world `after` was taken of.
 #[must_use]
 pub fn suggest_checks(before: &WorldSnapshot, after: &WorldSnapshot, world: &World) -> Vec<Check> {
     let mut candidates = Vec::new();
@@ -568,7 +476,6 @@ pub fn suggest_checks(before: &WorldSnapshot, after: &WorldSnapshot, world: &Wor
     kept
 }
 
-/// `Resource(path, is: Eq(value))` for every field whose value changed.
 fn resource_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Check>) {
     for (name, fields) in &after.resources {
         let old = before.resources.get(name);
@@ -592,7 +499,6 @@ fn resource_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec
     }
 }
 
-/// `Count(with: [T], is: Eq(n))` for every component whose count changed.
 fn count_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Check>) {
     for (name, count) in &after.counts {
         if before.counts.get(name).copied().unwrap_or(0) != *count {
@@ -601,7 +507,6 @@ fn count_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Ch
     }
 }
 
-/// `InState(state, value)` for every state whose value changed.
 fn state_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Check>) {
     for (name, ron) in &after.states {
         if before.states.get(name) != Some(ron)
@@ -615,8 +520,6 @@ fn state_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Ch
     }
 }
 
-/// `Shows(text)` for text shown now and not before, then `Not(Shows(text))`
-/// for text shown before and not now.
 fn text_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Check>) {
     for text in after.texts.keys() {
         if !before.texts.contains_key(text) {
@@ -630,9 +533,7 @@ fn text_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Che
     }
 }
 
-/// For a widget there before and after, each state it went into or out of;
-/// for a widget new since, each state it is in other than being visible,
-/// which its text already says.
+/// A new widget gets each state but visible, which its text already says.
 fn widget_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Check>) {
     for (label, states) in &after.widgets {
         let old = before.widgets.get(label);
@@ -647,7 +548,6 @@ fn widget_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<C
     }
 }
 
-/// The check that the target's widget is in `state`.
 pub(super) const fn widget_check(state: WidgetState, target: Target) -> Check {
     match state {
         WidgetState::Disabled => Check::Disabled(target),
@@ -661,8 +561,6 @@ pub(super) const fn widget_check(state: WidgetState, target: Target) -> Check {
     }
 }
 
-/// `App(fact)` for every fact listed now and not before, then
-/// `Not(App(fact))` for every fact listed before and not now.
 fn fact_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Check>) {
     for fact in &after.facts {
         if !before.facts.contains(fact) {
@@ -676,7 +574,6 @@ fn fact_changes(before: &WorldSnapshot, after: &WorldSnapshot, out: &mut Vec<Che
     }
 }
 
-/// Whether `check` would load from a file and holds in `world` now.
 pub(super) fn holds(world: &World, check: &Check) -> bool {
     let loads = world
         .get_resource::<AppTypeRegistry>()
@@ -687,7 +584,7 @@ pub(super) fn holds(world: &World, check: &Check) -> bool {
                     && !matches!(part, Check::App(value) if value.ron().is_err())
             })
         });
-    // The lock is let go first: running the check takes it again.
+    // Release the lock first: running the check takes it again.
     loads
         && matches!(
             check.poll(world, &CapturedValues::default(), 0),
@@ -836,8 +733,6 @@ mod tests {
         );
     }
 
-    /// A snapshot holding a game resource and a Bevy one, a count, a text and
-    /// a widget, as `take` would key them.
     fn snapshot(score: &str, time: &str, ghosts: usize, text: Option<&str>) -> WorldSnapshot {
         let mut snapshot = WorldSnapshot::default();
         snapshot

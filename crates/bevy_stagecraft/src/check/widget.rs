@@ -1,9 +1,5 @@
-//! What a target's widget is doing: disabled, checked, selected, pressed,
-//! focused, visible, and the text it shows.
-//!
-//! These read the components Bevy's own widgets keep (`bevy_ui_widgets`) and
-//! `bevy_ui`'s layout and interaction components, so they work for any toolkit that
-//! uses them.
+//! What a target's widget is doing, and the text it shows, read from the
+//! components Bevy's own widgets and `bevy_ui` keep.
 
 use crate::{
     probe::{describe_entity, is_within},
@@ -21,35 +17,23 @@ use bevy::{
     ui_widgets::{Button, MenuButton, MenuItem, SelectedTab, Slider, Tab, TextInput},
 };
 
-/// A state a widget can be in, as Bevy's widgets record it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WidgetState {
-    /// Carries `InteractionDisabled`.
     Disabled,
-    /// Carries `Checked`.
     Checked,
-    /// Carries `Selected`.
     Selected,
-    /// Carries `Pressed`.
     Pressed,
-    /// Has input focus, or something below it has.
     Focused,
-    /// Visible in the hierarchy and taking up room on screen.
     Visible,
-    /// Painted topmost at its middle, whatever covers it lets through.
     OnTop,
-    /// Can be found at all.
     Exists,
 }
 
 impl WidgetState {
-    /// Whether the state is about the named node (its own visibility), not the
-    /// widget it belongs to.
     pub(super) const fn is_about_the_node(self) -> bool {
         matches!(self, Self::Visible)
     }
 
-    /// The state in words, after the target: `is disabled`.
     pub(super) const fn words(self) -> &'static str {
         match self {
             Self::Disabled => "is disabled",
@@ -64,15 +48,10 @@ impl WidgetState {
     }
 }
 
-/// The node `target` names, found strictly: for a text target, the node
-/// showing the text; for one of the app's own, the widget its
-/// [`AppTarget`](crate::AppTarget) reports.
 pub(super) fn node(world: &World, target: &Target) -> Lookup {
     locate(world, target)
 }
 
-/// The widget `node` belongs to: the nearest widget that is `node` or above
-/// it, as a label belongs to its button; otherwise `node` itself.
 pub(super) fn widget(world: &World, node: Entity) -> Entity {
     let mut current = node;
     loop {
@@ -86,9 +65,7 @@ pub(super) fn widget(world: &World, node: Entity) -> Entity {
     }
 }
 
-/// What an `OnTop` check judges for `node`: a text label stands for the
-/// widget it belongs to (a button is named by its label), any other node is
-/// judged itself, so a plain popup root inside a widget is not mistaken for it.
+/// A text label stands for its widget; any other node is judged itself.
 pub(super) fn painted_subject(world: &World, node: Entity) -> Entity {
     if world.get::<Text>(node).is_some() {
         widget(world, node)
@@ -97,8 +74,6 @@ pub(super) fn painted_subject(world: &World, node: Entity) -> Entity {
     }
 }
 
-/// Whether `entity` is a widget of `bevy_ui_widgets`, or a `bevy_ui` node
-/// that tracks interaction.
 pub(super) fn is_widget(world: &World, entity: Entity) -> bool {
     let Ok(entity) = world.get_entity(entity) else {
         return false;
@@ -113,7 +88,6 @@ pub(super) fn is_widget(world: &World, entity: Entity) -> bool {
         || entity.contains::<TextInput>()
 }
 
-/// Whether `widget` is in `state`; the error says what it is instead.
 pub(super) fn in_state(
     world: &World,
     widget: Entity,
@@ -151,8 +125,7 @@ pub(super) fn in_state(
     }
 }
 
-/// Whether `widget` carries `Selected`, or is the tab its list's
-/// `SelectedTab` names (Bevy derives `Selected` from it only in `PostUpdate`).
+/// Bevy derives `Selected` from `SelectedTab` only in `PostUpdate`.
 fn is_selected(world: &World, widget: Entity) -> bool {
     world.get::<Selected>(widget).is_some()
         || (world.get::<Tab>(widget).is_some()
@@ -163,7 +136,6 @@ fn is_selected(world: &World, widget: Entity) -> bool {
             }))
 }
 
-/// Whether `widget` is visible in the hierarchy and has a size.
 fn visible(world: &World, widget: Entity, label: &str) -> Result<(), String> {
     if world
         .get::<InheritedVisibility>(widget)
@@ -180,16 +152,11 @@ fn visible(world: &World, widget: Entity, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether nothing painted later covers the middle of `widget`.
 fn on_top(world: &World, widget: Entity, label: &str) -> Result<(), String> {
     painted_topmost(world, widget).map_err(|why| format!("{label} is not on top: {why}"))
 }
 
-/// The text `widget` shows: each text node at or below it, in hierarchy
-/// order, with its spans, joined by single spaces.
-///
-/// The text of a text input is the value it holds, what was typed, and
-/// nothing else: its label is [`label_of`].
+/// A text input's text is the value typed; its label is [`label_of`].
 pub(super) fn text_of(world: &World, widget: Entity) -> String {
     if let Some(field) = world.get::<EditableText>(widget) {
         return field.value().to_string();
@@ -199,9 +166,7 @@ pub(super) fn text_of(world: &World, widget: Entity) -> String {
     blocks.join(" ")
 }
 
-/// What names `widget`: its text as [`text_of`] reads it, except that a text
-/// input's own value is left out, as it changes with every key and is what a
-/// check reads, not what a target finds the field by.
+/// Leaves out a text input's own value, which checks read.
 pub(super) fn label_of(world: &World, widget: Entity) -> String {
     let mut blocks: Vec<String> = Vec::new();
     if world.get::<EditableText>(widget).is_some() {
@@ -212,7 +177,6 @@ pub(super) fn label_of(world: &World, widget: Entity) -> String {
     blocks.join(" ")
 }
 
-/// Adds the text of everything below `entity`, not of `entity` itself.
 fn collect_below(world: &World, entity: Entity, blocks: &mut Vec<String>) {
     if let Some(children) = world.get::<Children>(entity) {
         for child in children {
@@ -221,11 +185,9 @@ fn collect_below(world: &World, entity: Entity, blocks: &mut Vec<String>) {
     }
 }
 
-/// Adds the text of `entity` and of everything below it to `blocks`.
 fn collect_text(world: &World, entity: Entity, blocks: &mut Vec<String>) {
     if world.get::<InlineBox>(entity).is_some() {
-        // An inline box is room in the text, not text, and Bevy lays out
-        // nothing below it.
+        // Room in the text, not text; Bevy lays out nothing below it.
         return;
     }
     if let Some(text) = world.get::<Text>(entity) {
@@ -236,7 +198,6 @@ fn collect_text(world: &World, entity: Entity, blocks: &mut Vec<String>) {
             blocks.push(value);
         }
     } else if let Some(span) = world.get::<TextSpan>(entity) {
-        // A span continues the text it sits below.
         match blocks.last_mut() {
             Some(last) => last.push_str(&span.0),
             None => blocks.push(span.0.clone()),

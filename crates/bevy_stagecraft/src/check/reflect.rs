@@ -1,9 +1,5 @@
-//! Finding types, fields and values through Bevy's type registry.
-//!
-//! A script names types by their short type path (`Editor`, `State<Mode>`)
-//! and fields by a reflect path after it (`Editor.tool`). The same lookups
-//! serve two moments: loading, where only type information is at hand and a
-//! mistake is a load error, and running, where the world supplies the values.
+//! Finding types, fields and values through Bevy's type registry, both at
+//! load (type information only) and at run (with values).
 
 use core::{any::TypeId, cmp::Ordering, fmt};
 
@@ -35,32 +31,21 @@ use super::{
 };
 use crate::targets::is_tooling;
 
-/// At most this many close names are suggested for a misspelt one.
 const MAX_SUGGESTIONS: usize = 3;
 
-/// A name this many edits or fewer from the one written counts as close,
-/// however short the name.
 const MIN_CLOSE_EDITS: usize = 2;
 
-/// Beyond [`MIN_CLOSE_EDITS`], one edit per this many characters counts as
-/// close, so longer names may be further off.
 const CHARACTERS_PER_EDIT: usize = 3;
 
-/// What a check needs a type for, which decides the type data it must have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Role {
-    /// Any registered type: a component to count.
     Counted,
-    /// A reflected resource (`#[reflect(Resource)]`).
     Resource,
-    /// A reflected component (`#[reflect(Component)]`).
     Component,
-    /// A reflected state (`register_type_state`).
     State,
 }
 
 impl Role {
-    /// Whether `registration` can play this role.
     pub(super) fn fits(self, registration: &TypeRegistration) -> bool {
         match self {
             Self::Counted => true,
@@ -73,7 +58,6 @@ impl Role {
         }
     }
 
-    /// Why a registered type cannot play this role, and how to fix it.
     fn mismatch(self, name: &str) -> String {
         match self {
             Self::Counted => format!("`{name}` cannot be counted"),
@@ -90,8 +74,6 @@ impl Role {
     }
 }
 
-/// The registered type called `name` (its short type path, or its full one)
-/// that can play `role`.
 pub(super) fn find_type<'r>(
     types: &'r TypeRegistry,
     name: &str,
@@ -130,8 +112,7 @@ pub(super) fn find_type<'r>(
     }
 }
 
-/// The candidates closest to `wanted`, closest first, ties by name: never
-/// hash order.
+/// Closest first, ties by name: never hash order.
 pub(super) fn close_names<'a>(
     wanted: &str,
     candidates: impl IntoIterator<Item = &'a str>,
@@ -157,8 +138,6 @@ pub(super) fn close_names<'a>(
         .collect()
 }
 
-/// How many single-character insertions, deletions and substitutions turn
-/// `a` into `b`.
 fn edit_distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut previous: Vec<usize> = (0..=b.len()).collect();
@@ -176,8 +155,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
     previous.last().copied().unwrap_or(0)
 }
 
-/// Splits `Editor.tool` into the type, `Editor`, and the reflect path after
-/// it, `.tool`. Dots inside generics (`State<Mode>`) belong to the type.
+/// Dots inside generics (`State<Mode>`) belong to the type.
 pub(super) fn split_path(full: &str) -> (&str, &str) {
     let mut depth = 0_usize;
     for (at, character) in full.char_indices() {
@@ -193,8 +171,6 @@ pub(super) fn split_path(full: &str) -> (&str, &str) {
     (full, "")
 }
 
-/// The type that `path` leads to from `root`, found from type information
-/// alone, so it works before any value exists.
 pub(super) fn field_type<'r>(
     types: &'r TypeRegistry,
     root: &'r TypeRegistration,
@@ -257,7 +233,6 @@ pub(super) fn field_type<'r>(
     Ok(current)
 }
 
-/// The type of the field `access` names in `variant`, if it has one.
 fn variant_field(variant: &VariantInfo, access: &Access<'_>) -> Option<TypeId> {
     match (access, variant) {
         (Access::Field(field), VariantInfo::Struct(fields)) => {
@@ -273,9 +248,6 @@ fn variant_field(variant: &VariantInfo, access: &Access<'_>) -> Option<TypeId> {
     }
 }
 
-/// Reads `value` as a value of the type `registration` describes, the way
-/// Bevy reads scenes: with [`TypedReflectDeserializer`]. The result is the
-/// concrete type where the type can be built from reflection.
 pub(super) fn read_value(
     types: &TypeRegistry,
     registration: &TypeRegistration,
@@ -301,15 +273,13 @@ pub(super) fn read_value(
         .map_or(read, |concrete| concrete.into_partial_reflect()))
 }
 
-/// Checks, before anything runs, that `comparison`'s values fit the type
-/// `registration` describes and, if it orders them, that they have an order.
 pub(super) fn check_comparison(
     types: &TypeRegistry,
     registration: &TypeRegistration,
     comparison: &Comparison,
 ) -> Result<(), Problem> {
     for value in comparison.values() {
-        // A captured value is only known once the scenario has run so far.
+        // A captured value is known only once the scenario has run.
         if value.captured_name().is_some() {
             continue;
         }
@@ -324,7 +294,6 @@ pub(super) fn check_comparison(
     Ok(())
 }
 
-/// Checks a count's values before anything runs.
 pub(super) fn check_count(comparison: &Comparison) -> Result<(), Problem> {
     for value in comparison.values() {
         if value.captured_name().is_some() {
@@ -338,13 +307,6 @@ pub(super) fn check_count(comparison: &Comparison) -> Result<(), Problem> {
     Ok(())
 }
 
-/// The field at `field` in `root`, the reflect path after the type; `path` is
-/// the whole path, for the message.
-///
-/// # Errors
-///
-/// Says why the field cannot be read now, such as a field of another enum
-/// variant than the current one.
 pub(super) fn field_value<'a>(
     root: &'a dyn Reflect,
     path: &str,
@@ -357,13 +319,6 @@ pub(super) fn field_value<'a>(
         .map_err(|error| format!("`{path}` cannot be read now: {error}"))
 }
 
-/// What the field at `field` in `root` holds, written as RON with the name
-/// of its type, for a capture. With `unit: Logical` a physical number is
-/// written as the logical one.
-///
-/// # Errors
-///
-/// Says why the field cannot be read now or written.
 pub(super) fn capture_field(
     world: &World,
     types: &TypeRegistry,
@@ -386,13 +341,7 @@ pub(super) fn capture_field(
     Ok(CapturedValue::new(ron, type_name.to_owned()))
 }
 
-/// `value`, a reflected number in physical pixels, as logical pixels: divided
-/// by the primary window's scale factor. The type is kept, so it reads as the
-/// same type and can be compared or written as RON.
-///
-/// # Errors
-///
-/// Why the value is not a number, and so cannot be read as logical pixels.
+/// The type is kept, so the value still compares and writes as RON.
 pub(super) fn to_logical(
     world: &World,
     value: &dyn PartialReflect,
@@ -416,11 +365,6 @@ pub(super) fn to_logical(
     ))
 }
 
-/// Checks, before anything runs, that a field read as logical is a number.
-///
-/// # Errors
-///
-/// Why `unit: Logical` does not apply to the type `registration` describes.
 pub(super) fn check_logical(registration: &TypeRegistration) -> Result<(), Problem> {
     if is_logical_number(registration.type_id()) {
         return Ok(());
@@ -431,7 +375,6 @@ pub(super) fn check_logical(registration: &TypeRegistration) -> Result<(), Probl
     )))
 }
 
-/// Whether a type read as logical is a number: a float or a vector of floats.
 fn is_logical_number(id: TypeId) -> bool {
     [
         TypeId::of::<f32>(),
@@ -442,9 +385,7 @@ fn is_logical_number(id: TypeId) -> bool {
     .contains(&id)
 }
 
-/// The scale factor of the primary window: physical pixels per logical pixel,
-/// [`DEFAULT_SCALE_FACTOR`] when there is none. A physical value divided by
-/// it is logical.
+/// Falls back to [`DEFAULT_SCALE_FACTOR`] when there is no window.
 fn primary_scale_factor(world: &World) -> f32 {
     world
         .iter_entities()
@@ -459,10 +400,7 @@ fn primary_scale_factor(world: &World) -> f32 {
         })
 }
 
-/// How two reflected values order, for the types that have one: numbers and
-/// text.
 fn order(a: &dyn PartialReflect, b: &dyn PartialReflect) -> Option<Ordering> {
-    /// Tries each type in turn; the first both values are decides.
     macro_rules! order_as {
         ($($kind:ty),* $(,)?) => {
             $(
@@ -479,18 +417,12 @@ fn order(a: &dyn PartialReflect, b: &dyn PartialReflect) -> Option<Ordering> {
     None
 }
 
-/// A reflected field, measured against values read as its own type.
 pub(super) struct Reflected<'a> {
-    /// The field.
     pub(super) value: &'a dyn PartialReflect,
-    /// The field's type.
     pub(super) registration: &'a TypeRegistration,
-    /// Where the field's type and its parts are registered.
     pub(super) types: &'a TypeRegistry,
 }
 
-// By hand: `TypeRegistry` is not `Debug`, and listing every type in it would
-// say nothing about the field.
 impl fmt::Debug for Reflected<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Reflected")
@@ -501,12 +433,10 @@ impl fmt::Debug for Reflected<'_> {
 }
 
 impl Reflected<'_> {
-    /// Reads `value` as the field's type.
     fn read(&self, value: &Value) -> Result<Box<dyn PartialReflect>, String> {
         read_value(self.types, self.registration, value).map_err(|problem| problem.message())
     }
 
-    /// The field's value as RON, for messages.
     pub(super) fn describe(&self) -> String {
         describe(self.types, self.value)
     }
@@ -536,20 +466,17 @@ impl Comparable for Reflected<'_> {
     }
 }
 
-/// `value` as RON, or as Rust's debug form when it cannot be written.
 pub(super) fn describe(types: &TypeRegistry, value: &dyn PartialReflect) -> String {
     ron::to_string(&TypedReflectSerializer::new(value, types))
         .unwrap_or_else(|_| format!("{value:?}"))
 }
 
-/// The world's type registry, which every reflected check reads through.
 pub(super) fn app_types(world: &World) -> Result<&AppTypeRegistry, String> {
     world
         .get_resource::<AppTypeRegistry>()
         .ok_or_else(|| "the world has no type registry (`AppTypeRegistry`)".to_owned())
 }
 
-/// The resource `registration` describes, if the world has one.
 pub(super) fn resource<'w>(
     world: &'w World,
     registration: &TypeRegistration,
@@ -561,7 +488,6 @@ pub(super) fn resource<'w>(
     reflect.reflect(world.get_entity(entity).ok()?)
 }
 
-/// The component `registration` describes on `entity`, if it has one.
 pub(super) fn component<'w>(
     world: &'w World,
     registration: &TypeRegistration,
@@ -572,8 +498,6 @@ pub(super) fn component<'w>(
         .reflect(world.get_entity(entity).ok()?)
 }
 
-/// The current value of the state `registration` describes, if the app is in
-/// one.
 pub(super) fn state<'w>(
     world: &'w World,
     registration: &TypeRegistration,
@@ -581,12 +505,10 @@ pub(super) fn state<'w>(
     registration.data::<ReflectState>()?.reflect(world)
 }
 
-/// How many entities of the app have every component in `types`, leaving out
-/// disabled entities, as queries do, and the tooling's own.
+/// Leaves out disabled entities, as queries do, and the tooling's own.
 pub(super) fn count(world: &World, types: &[&TypeRegistration]) -> usize {
     let mut ids: Vec<ComponentId> = Vec::with_capacity(types.len());
     for registration in types {
-        // A type never used as a component is on no entity.
         let Some(id) = world.components().get_id(registration.type_id()) else {
             return 0;
         };

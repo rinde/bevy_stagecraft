@@ -1,10 +1,5 @@
-//! Values taken while a scenario runs, to compare against later: what a
-//! `Capture` step measures, and where the measurements are kept.
-//!
-//! A [`Measure`] is written like the check that reads the same thing, without
-//! its `is`. What it reads is kept as RON text and the name of its type, which
-//! is all a comparison needs: it reads the text against the type of what it is
-//! compared with, as it does for a literal.
+//! Values a `Capture` step measures, to compare against later. Kept as RON
+//! text and a type name; a comparison reads the text against the other side.
 
 use core::fmt;
 
@@ -19,17 +14,13 @@ use super::{
 };
 use crate::targets::Target;
 
-/// What a `Capture` step reads from the world, to give a name to.
-///
-/// In a script it is spelled like the check that reads the same thing:
+/// What a `Capture` step reads from the world, named for later comparison.
 ///
 /// ```ron
 /// Capture(name: "views", value: Count(with: ["ItemView"])),
 /// Capture(name: "score", value: Resource(path: "Score.0")),
 /// Capture(name: "x", value: Component(target: Name("popup"), path: "UiGlobalTransform.0.translation.x")),
 /// ```
-///
-/// In Rust the builders take the types:
 ///
 /// ```
 /// use bevy_stagecraft::{Measure, Step, Target};
@@ -43,38 +34,23 @@ use crate::targets::Target;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Measure {
-    /// How many entities of the app have every one of these components, as
-    /// [`Check::Count`](super::Check::Count) counts them.
     Count {
-        /// The components, by registered type path.
         with: Vec<String>,
     },
-    /// A field of a reflected resource, as [`Check::Resource`](super::Check::Resource)
-    /// reads it: the resource's type path, then a reflect path into it, or the
-    /// type alone for the whole resource.
     Resource {
-        /// The type and the field.
         path: String,
-        /// Whether a physical value is read as logical. See [`Unit`].
         #[serde(default, skip_serializing_if = "Unit::is_physical")]
         unit: Unit,
     },
-    /// A field of a reflected component on the target's node or, failing
-    /// that, on the nearest node above it that has the component, as
-    /// [`Check::Component`](super::Check::Component) reads it.
     Component {
-        /// Where the component is.
         target: Target,
-        /// The component's type path, then a reflect path into it.
         path: String,
-        /// Whether a physical value is read as logical. See [`Unit`].
         #[serde(default, skip_serializing_if = "Unit::is_physical")]
         unit: Unit,
     },
 }
 
 impl Measure {
-    /// How many entities have `C`, for example `Measure::count::<Ghost>()`.
     #[must_use]
     pub fn count<C: Component + TypePath>() -> Self {
         Self::Count {
@@ -82,7 +58,6 @@ impl Measure {
         }
     }
 
-    /// How many entities have every component named in `with`, by type path.
     #[must_use]
     pub fn count_of(with: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self::Count {
@@ -90,8 +65,6 @@ impl Measure {
         }
     }
 
-    /// The field `path` of the resource `R`; an empty path is the whole
-    /// resource.
     #[must_use]
     pub fn resource<R: Resource + TypePath>(path: &str) -> Self {
         Self::Resource {
@@ -100,8 +73,6 @@ impl Measure {
         }
     }
 
-    /// The field `path` of the component `C` on `target`'s node, or on the
-    /// nearest node above it that has one.
     #[must_use]
     pub fn component<C: Component + TypePath>(target: Target, path: &str) -> Self {
         Self::Component {
@@ -111,9 +82,8 @@ impl Measure {
         }
     }
 
-    /// Reads the measurement as logical pixels: a physical value is divided
-    /// by the primary window's scale factor. See [`Unit`]. A count has no
-    /// unit, so this leaves it as it is.
+    /// Divides physical values by the primary window's scale factor; a count
+    /// is unchanged.
     #[must_use]
     pub const fn logical(mut self) -> Self {
         match &mut self {
@@ -123,7 +93,6 @@ impl Measure {
         self
     }
 
-    /// The target this measurement looks at, if it looks at one.
     pub(crate) const fn target_mut(&mut self) -> Option<&mut Target> {
         match self {
             Self::Component { target, .. } => Some(target),
@@ -131,8 +100,6 @@ impl Measure {
         }
     }
 
-    /// Checks, from type information alone, that the types and fields this
-    /// measurement names are there.
     pub(crate) fn problem(&self, types: &TypeRegistry) -> Result<(), Problem> {
         match self {
             Self::Count { with } => {
@@ -161,13 +128,6 @@ impl Measure {
         }
     }
 
-    /// Reads the measurement now.
-    ///
-    /// # Errors
-    ///
-    /// Why it cannot be read: a target that is missing or ambiguous, a
-    /// resource or component that is not there, a field of another variant, a
-    /// value that cannot be written.
     pub(crate) fn read(&self, world: &World) -> Result<CapturedValue, String> {
         let types = reflect::app_types(world)?;
         let types = types.read();
@@ -200,8 +160,6 @@ impl Measure {
     }
 }
 
-/// What is measured, in words: ``count of `Ghost` ``, `` `Score.0` ``, or
-/// `` `UiGlobalTransform.0.translation.x` of Name("popup") ``.
 impl fmt::Display for Measure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
