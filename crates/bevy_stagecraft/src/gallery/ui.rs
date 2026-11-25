@@ -1,10 +1,5 @@
-//! The Scenarios window: its camera, catalog, controls and details panel.
-//!
-//! The Trace tab redraws on a cheap `TraceKey` and the gallery's `revision`,
-//! not every frame. The gallery traces with
-//! [`NoiseFilter::nothing`](crate::NoiseFilter::nothing) and the tab filters
-//! when drawing ([`StepView::new`](crate::StepView::new)), so the filter can
-//! change without playing again.
+//! The Trace tab redraws on `TraceKey` and the gallery's `revision`, not every
+//! frame. The gallery traces unfiltered and the tab filters when drawing.
 
 use bevy::{
     camera::{Camera2d, RenderTarget},
@@ -444,9 +439,8 @@ pub(super) fn spawn_window(
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                // Bevy puts a root node in an implicit grid whose auto row grows
-                // to its content (taffy follows CSS since 0.20): fix it or a long
-                // catalog stretches the root instead of scrolling.
+                // The implicit grid's auto row grows to its content (taffy, Bevy
+                // 0.20): fix it or a long catalog stretches the root.
                 min_height: px(0),
                 flex_direction: FlexDirection::Column,
                 row_gap: px(GAP),
@@ -1041,7 +1035,6 @@ pub(super) fn update_details(
         redraw(&mut commands, &details, |panel| {
             spawn_trace_panel(panel, &titles, view.as_ref(), &state, &theme);
         });
-        // The buttons just drawn name their type by index in this list.
         if state.noise_types != types {
             state.noise_types = types;
         }
@@ -1181,7 +1174,6 @@ fn spawn_trace_panel(
     spawn_trace_tree(panel, view, state.trace_world());
 }
 
-/// A button's [`Control::NoiseType`] index is its place in this list.
 fn noise_types(view: Option<&StepView<'_>>, show_hidden: bool) -> Vec<String> {
     let Some(view) = view else {
         return Vec::new();
@@ -1271,7 +1263,6 @@ fn spawn_trace_changes(
     label(panel, format!("As code: {}", state.noise().to_code()), DIM);
 }
 
-/// `next` counts the hide and show buttons, as [`noise_types`] does.
 fn spawn_change(
     panel: &mut ChildSpawnerCommands<'_>,
     change: &SnapshotChange,
@@ -1330,8 +1321,6 @@ fn check_lines(
     report: &ScenarioReport,
     theme: &OverlayTheme,
 ) -> Vec<(String, Color)> {
-    // Slots in the order the player records them: step checks as the script
-    // reaches them, then the expectations.
     let step_checks = flatten(scenario.script())
         .into_iter()
         .filter_map(|flat| match flat.step {

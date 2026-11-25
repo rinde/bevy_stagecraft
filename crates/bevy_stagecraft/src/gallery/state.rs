@@ -1,16 +1,5 @@
-//! What the gallery is doing, and what can be asked of it.
-//!
-//! Everything that changes [`GalleryState`] goes through
-//! [`GalleryState::request`] with a [`GalleryAction`], which buttons, keys and
-//! code all use. It is carried out before the script next advances.
-//!
-//! **Save as setup** ([`GalleryAction::SaveAsSetup`]) is refused while a script
-//! plays ([`GalleryState::can_save_as_setup`]).
-//!
-//! Results are kept per entry and variant. A run of everything plays every
-//! entry in every variant and reports an entry whose scenario does not name the
-//! variant as `SKIP`, not as a failure. Export and the pick checks use the
-//! catalog's scenario as written.
+//! Everything that changes [`GalleryState`] goes through [`GalleryState::request`]
+//! and is carried out before the script next advances.
 
 use alloc::collections::BTreeMap;
 use std::path::PathBuf;
@@ -97,11 +86,8 @@ impl TraceWorld {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum NoisePreset {
-    /// The filter the app set ([`SessionHooks::noise_filter`]).
-    ///
-    /// [`SessionHooks::noise_filter`]: crate::SessionHooks::noise_filter
     App,
-    /// [`NoiseFilter::nothing`]: includes the gallery's own changes.
+    /// Includes the gallery's own changes ([`NoiseFilter::nothing`]).
     Everything,
 }
 
@@ -139,11 +125,9 @@ pub enum GalleryAction {
     Select(usize),
     /// Plays again in the new variant when an entry is selected.
     SelectVariant(usize),
-    /// `None` shows all. A run of everything skips the filtered-out entries; an
-    /// index with no tag shows everything.
+    /// A run of everything skips the filtered-out entries.
     SelectTag(Option<usize>),
-    /// Plays to the start of step `n` (from 0) and pauses, one frame per update
-    /// at any speed. Nothing is stored: runs are deterministic.
+    /// Plays one frame per update at any speed.
     JumpTo(usize),
     TogglePlay,
     StepFrame,
@@ -155,20 +139,17 @@ pub enum GalleryAction {
     TakeOver,
     Resume,
     Export,
-    /// Refused with a status line while a script plays: the saved moment would
-    /// be arbitrary ([`GalleryState::is_script_playing`]).
+    /// Refused while a script plays ([`GalleryState::is_script_playing`]).
     SaveAsSetup,
     Record,
     NewEmpty,
     NewFromCurrent,
     StopRecording,
-    /// Index among the checks suggested at the end.
     ToggleSuggestion(usize),
     ToggleCheckpointSuggestion {
         checkpoint: usize,
         index: usize,
     },
-    /// Only while recording or with a scenario selected, which it pauses.
     TogglePick,
     PickTarget(usize),
     AddPickedCheck(usize),
@@ -223,10 +204,7 @@ pub enum Picking {
     On,
 }
 
-/// The checks the last recording suggested, all ticked to begin with.
-///
-/// One checklist per checkpoint, then one for the end. [`Self::entries`],
-/// [`Self::len`] and the like are about the end's list; the `checkpoint_`
+/// [`Self::entries`] and the like are about the end's list; the `checkpoint_`
 /// methods about a checkpoint's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Suggestions {
@@ -449,7 +427,6 @@ impl GalleryRunReport {
     }
 }
 
-/// The gallery's controls and what it remembers. Ask with [`Self::request`].
 #[derive(Resource, Debug, Clone)]
 pub struct GalleryState {
     pub(crate) selected: Option<usize>,
@@ -764,7 +741,6 @@ impl GalleryState {
     }
 }
 
-/// Shortens `Time<bevy_time::virt::Virtual>` to `Time<Virtual>`.
 fn short_type_name(type_path: &str) -> String {
     const DELIMITERS: [char; 6] = ['<', '>', ',', ' ', '(', ')'];
     let mut name = String::with_capacity(type_path.len());

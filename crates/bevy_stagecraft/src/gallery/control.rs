@@ -1,10 +1,5 @@
-//! Carries out requests and paces the script.
-//!
-//! `release_held` cancels every finger the script holds (`touch_cancel`) so the
-//! overlay marks it and the app sees a cancel.
-//!
-//! A jump ([`GalleryAction::JumpTo`]) plays one script frame per update until
-//! the step is due, then pauses. It is refused while recording.
+//! `release_held` cancels every finger the script holds so the app sees a cancel.
+//! A jump pauses at its step and is refused while recording.
 
 use std::fs;
 
@@ -157,7 +152,6 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         input.forget_cursor();
     }
     fit_window(world, state, &scenario);
-    // A scenario that does not name this variant is skipped, not failed.
     let disabled = entry.scenario.disabled();
     if variant.skips(&entry.scenario) || disabled.is_some() {
         world.insert_resource(ScenarioReport {
@@ -181,7 +175,6 @@ fn select(world: &mut World, state: &mut GalleryState, index: usize) {
         );
         return;
     }
-    // A variant the scenario cannot run in fails setup, as in the recorder.
     let setup = refused.map_or_else(
         || scenario.run_setup(world),
         |problem| Err(problem.to_string()),
@@ -820,7 +813,6 @@ fn run_frames(world: &mut World, state: &mut GalleryState) {
             .get_resource::<ScenarioReport>()
             .is_some_and(ScenarioReport::passed);
         if let Some(index) = state.selected {
-            // A scenario that is expected to fail passes by failing.
             let flipped = world
                 .get_resource::<Gallery>()
                 .and_then(|gallery| gallery.get(index))
@@ -872,7 +864,6 @@ fn record_outcome(world: &World, state: &mut GalleryState) {
     if failures.is_empty() && !report.passed() {
         failures.push("the scenario did not finish".into());
     }
-    // A scenario expected to fail passes by failing.
     let should_fail = state
         .selected
         .and_then(|index| world.get_resource::<Gallery>()?.get(index))
@@ -917,7 +908,6 @@ fn run_next(world: &mut World, state: &mut GalleryState) {
         else {
             break;
         };
-        // A file that never loaded fails the run.
         if let Some(error) = broken {
             let name = variant.label(scenario.name());
             if let Some(run) = state.run_all.as_mut() {
@@ -929,7 +919,6 @@ fn run_next(world: &mut World, state: &mut GalleryState) {
             }
             continue;
         }
-        // A scenario that does not name this variant is skipped, not failed.
         let hidden = world
             .get_resource::<Gallery>()
             .is_some_and(|gallery| hidden_by_tag(gallery, state, &scenario));

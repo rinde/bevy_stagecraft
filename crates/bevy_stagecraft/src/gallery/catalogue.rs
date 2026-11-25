@@ -1,9 +1,5 @@
-//! The scenarios a gallery offers, grouped.
-//!
-//! A directory of `.ron` files ([`Gallery::directory`]) is watched by polling
-//! modification time and length every [`WATCH_INTERVAL`] updates. An entry that
-//! never loaded ([`GalleryEntry::is_unloaded`]) is refused when selected and
-//! counts as a failure in a run of everything.
+//! Watched directories are polled every [`WATCH_INTERVAL`] updates by
+//! modification time and length.
 
 use alloc::sync::Arc;
 use std::{
@@ -22,7 +18,6 @@ use crate::{
     variant::Variant,
 };
 
-/// Updates between looks at the watched files.
 pub const WATCH_INTERVAL: u32 = 30;
 
 type FileStamp = (Option<SystemTime>, u64);
@@ -47,12 +42,9 @@ struct WatchedDir {
     dir: PathBuf,
 }
 
-/// One scenario in the catalog, with the sentence shown beside it.
 #[derive(Debug, Clone)]
 pub struct GalleryEntry {
-    /// The scenario.
     pub scenario: Scenario,
-    /// What it shows, in a sentence.
     pub description: String,
     source: Option<PathBuf>,
     error: Option<String>,
@@ -138,12 +130,9 @@ impl From<Scenario> for GalleryEntry {
     }
 }
 
-/// A named run of entries.
 #[derive(Debug, Clone)]
 pub struct GalleryGroup {
-    /// The group's heading.
     pub name: String,
-    /// The entries, in the order shown.
     pub entries: Vec<GalleryEntry>,
 }
 
@@ -174,10 +163,8 @@ impl Gallery {
         }
     }
 
-    /// Adds a group of the `.ron` scenarios in `dir` (not `*.scene.ron`) and
-    /// watches it: saved files replace their entries, new files are added, and
-    /// a deleted file or failed scan keeps its entries, marked with the error.
-    /// Call [`Gallery::prepare_files`] first.
+    /// Watches `dir` (not `*.scene.ron`); a deleted file or failed scan keeps
+    /// its entries, marked. Call [`Gallery::prepare_files`] first.
     #[must_use]
     pub fn directory(
         mut self,
@@ -305,9 +292,8 @@ impl Gallery {
         self
     }
 
-    /// The first is chosen to begin with. List [`Variant::default`] to keep
-    /// the entries as written. Name variants differently ([`Variant::new`]):
-    /// equal names give indistinguishable rows.
+    /// List [`Variant::default`] to keep the entries as written. Name variants
+    /// differently ([`Variant::new`]): equal names give identical rows.
     #[must_use]
     pub fn variants(mut self, variants: impl IntoIterator<Item = Variant>) -> Self {
         self.variants = variants.into_iter().collect();

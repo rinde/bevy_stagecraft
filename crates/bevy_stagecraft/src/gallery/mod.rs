@@ -1,90 +1,7 @@
-//! The gallery: the app under test in one window, a list of scenarios in a
-//! second one (feature `gallery`).
+//! The gallery: the app under test in one window, the scenario list in a second.
 //!
-//! # Two windows
-//!
-//! The Scenarios window has its own UI camera ([`ScenariosCamera`]), which is
-//! never the default UI camera: the app's UI and the overlay stay on the
-//! primary window's. Name the overlay's camera with [`crate::OverlayCamera`]
-//! when a scenario renders somewhere unusual. Everything the gallery spawns
-//! carries [`crate::NotUnderTest`].
-//!
-//! # Real input while a scenario plays
-//!
-//! The script owns the primary window until **Take over**:
-//!
-//! * real mouse, keyboard and touch messages aimed at it are removed before
-//!   `InputSystems`, and `PointerInputSettings::is_mouse_enabled` is off;
-//! * the synthetic cursor position is put on the window each update and the
-//!   real one restored before `bevy_winit` compares them. An app that reads
-//!   `Window::cursor_position` in `First`, `Last` or after `PostUpdate` sees
-//!   the real position;
-//! * the Scenarios window's mouse drives its own pointer
-//!   ([`scenarios_pointer`]); its touch input does not work during playback.
-//!
-//! Space plays or pauses, Right steps one frame, Down steps to the next step,
-//! Left restarts. Those keys are read from the Scenarios window only and
-//! removed afterwards.
-//!
-//! # Jumping to a step
-//!
-//! [`GalleryAction::JumpTo`] restarts the scenario and plays it up to the start
-//! of the step, where it pauses. No snapshot is stored: the world is the one a
-//! straight run has there ([`crate::ScenarioTrace::before`]).
-//!
-//! # The Trace tab
-//!
-//! [`GalleryTab::Trace`] shows what the run did, as the recorder's
-//! `trace.html` does ([`crate::StepView`]). Runs are traced except **Run all**.
-//! **Follow** ([`GalleryAction::ToggleTraceFollow`]) shows the step being
-//! played, then the first that failed; [`GalleryAction::InspectStep`] shows
-//! another and turns it off. The trace survives a jump and a loop; selecting
-//! or restarting drops it.
-//!
-//! The changes list is filtered when drawn ([`GalleryState::noise`]), starting
-//! from [`crate::SessionHooks::noise_filter`]. [`GalleryAction::ToggleType`]
-//! hides or shows a type and [`GalleryAction::UseNoise`] switches the whole
-//! filter ([`NoisePreset`]). Hiding a type that a broader `keep` pattern
-//! matches does nothing. The filter lasts for the gallery session and affects
-//! the Trace tab only.
-//!
-//! # Running everything
-//!
-//! [`GalleryPlugin::with_run_all`] plays the whole catalog once, passing or
-//! not, logs one `PASS` or `FAIL` line per scenario, keeps a
-//! [`GalleryRunReport`] and exits with an error code if anything failed.
-//!
-//! # Recording
-//!
-//! **Record** starts a [session recording](crate::session) from what is on
-//! screen and logs the primary window's real mouse and keyboard until **Stop
-//! recording**, which writes a `.ron` file into the export directory. Nothing
-//! in the Scenarios window is recorded. [`GalleryAction::NewEmpty`] starts from
-//! the reset app, [`GalleryAction::NewFromCurrent`] from the app as it is.
-//!
-//! The checkpoint key (F8 by default) takes a [checkpoint](crate::session#checkpoints)
-//! and is hidden from the app. When recording stops, the checks
-//! [`crate::check::suggest`] finds are listed, all ticked; toggling one writes
-//! the file again ([`GalleryAction::ToggleCheckpointSuggestion`],
-//! [`GalleryAction::ToggleSuggestion`]). Selecting, restarting, playing and
-//! stepping are refused while recording.
-//!
-//! # Pick mode
-//!
-//! [`GalleryAction::TogglePick`] works while recording or with a scenario
-//! selected, which it pauses. The app window's input then goes to the gallery:
-//! the overlay outlines the node under the pointer
-//! ([`crate::overlay::PickHighlight`]) and a click picks it. Escape in the app
-//! window, playing on, stepping, restarting, selecting, taking over and
-//! starting or stopping a recording end it.
-//!
-//! The Scenarios window lists what [`crate::check::pick`] finds for the node;
-//! clicking a check adds a `Check` step to the recording
-//! ([`crate::session::add_check`]) or else an expectation of the selected
-//! scenario.
-//!
-//! The app's reset hook must not despawn the gallery's, the overlay's or the
-//! Scenarios window's cameras.
+//! The script owns the primary window's real input until **Take over**, and the
+//! app's reset hook must not despawn the gallery's, overlay's or Scenarios cameras.
 
 use alloc::sync::Arc;
 use std::path::PathBuf;
@@ -125,11 +42,9 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Reload {
     Changed(usize),
-    /// Shifts every later entry up by one.
     Added(usize),
 }
 
-/// Updates a loop waits before starting again, unless configured.
 pub const DEFAULT_LOOP_PAUSE: u16 = 60;
 
 type ResetFn = dyn Fn(&mut World) + Send + Sync;
@@ -153,9 +68,8 @@ pub enum GallerySystems {
 
 /// Plays a catalog of scenarios in a second window, in a loop.
 ///
-/// Needs the app's windowing and rendering plugins (for example
-/// `DefaultPlugins`). Adds [`SyntheticInputPlugin`], [`ScenarioPlayerPlugin`]
-/// and [`CursorOverlayPlugin`] unless present.
+/// Needs windowing and rendering plugins. Adds [`SyntheticInputPlugin`],
+/// [`ScenarioPlayerPlugin`] and [`CursorOverlayPlugin`] unless present.
 ///
 /// ```no_run
 /// use bevy::prelude::*;
@@ -331,8 +245,7 @@ impl Plugin for GalleryPlugin {
     }
 }
 
-/// Runs before winit creates the first window, or "Prefer tabs: Always" hides
-/// the app under test behind a tab. The setting is process-wide.
+/// Runs before winit creates the first window; the setting is process-wide.
 #[cfg(target_os = "macos")]
 fn disable_window_tabbing() {
     let Some(main_thread) = objc2::MainThreadMarker::new() else {

@@ -1,11 +1,5 @@
-//! Keeps the real mouse and keyboard out of the app while a scenario plays and
-//! routes what the Scenarios window gets.
-//!
-//! While the script has the primary window ([`GalleryState::input_is_scripted`])
-//! its real mouse, keyboard and touch messages are removed, Bevy's mouse picking
-//! is off, and the synthetic cursor position is put back before the window
-//! system sees it. Pick mode ([`GalleryState::is_picking`]) does the same for
-//! the app's mouse and keyboard and hides the cursor from the app.
+//! Removes the real mouse, keyboard and touch input aimed at the primary window
+//! while the script or pick mode has it, and routes the Scenarios window's.
 
 use bevy::camera::NormalizedRenderTarget;
 use bevy::{
