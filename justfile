@@ -34,7 +34,7 @@ fmt-check:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --document-private-items
 
-# Remove build artefacts.
+# Remove build artifacts.
 clean:
     cargo clean
 
@@ -42,7 +42,7 @@ clean:
 unused-deps:
     cargo machete --with-metadata
 
-# Check licences, advisories and bans (see deny.toml).
+# Check licenses, advisories and bans (see deny.toml).
 deny:
     cargo deny check
 
@@ -53,18 +53,15 @@ features:
     cargo check --workspace --all-targets --no-default-features --features gallery
     cargo check --workspace --all-targets --all-features
 
-# Run the tests that need a GPU (the recorder's) on whatever backend wgpu picks
-# (Metal on macOS). Needs a display.
+# Run the GPU tests on whatever backend wgpu picks. Needs a display.
 test-gpu:
     cargo test --quiet --workspace --features record gpu -- --include-ignored
 
-# The same on a software GPU (lavapipe), forcing Vulkan: for CI and machines
-# without a GPU.
+# The same on a software GPU (lavapipe), forcing Vulkan.
 test-gpu-headless:
     WGPU_BACKEND=vulkan cargo test --quiet --workspace --features record gpu -- --include-ignored --test-threads=1
 
-# Play every gallery scenario in a real window, one by one, and close the
-# window when done. Exits non-zero, naming what failed, if any scenario failed.
+# Play every gallery scenario in a real window; exits non-zero if any failed.
 # Needs a display.
 gallery-test:
     cargo run --quiet --example gallery --features gallery -- --run-all

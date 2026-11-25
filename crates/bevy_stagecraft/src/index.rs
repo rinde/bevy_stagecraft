@@ -1,33 +1,3 @@
-//! What the recorder writes for each scenario, and the page that lists them
-//! (feature `record`).
-//!
-//! A scenario's folder in the output directory holds:
-//!
-//! * a PNG per picture, named by [`picture_file`], a filmstrip
-//!   ([`FILMSTRIP_FILE`]: the pictures as thumbnails, each marked passed or
-//!   failed and numbered by its frame) and a GIF ([`GIF_FILE`]) that shows
-//!   each picture for as long as the frames between it and the next took;
-//! * for a scenario with a trace, [`TRACE_FILE`], made by [`trace_html`]. It
-//!   renders one [`StepView`] per step as a `<details id="step-k">`: why it
-//!   failed, the targets it looked up, the checks it ran, the pictures before
-//!   and after, how the snapshot changed, and the UI tree and snapshot
-//!   afterwards. The same views are what the gallery's Trace tab shows;
-//! * for a screenshot check that created its baseline or did not match, copies
-//!   of its baseline, actual and diff pictures in [`SNAPSHOT_DIR`], so the page
-//!   links to files that sit beside it.
-//!
-//! [`index_html`] writes the page over all scenarios: a card each, in groups
-//! as the gallery's catalogue has them, groups with a failure first and
-//! failures first within a group. A skipped scenario's card says `SKIPPED`
-//! and a fixme one `FIXME`. A failed card lists its steps, each linking to its
-//! `<details>` in the trace; a step in a group is titled with the group's
-//! path (see [`step_title`]), so the card, the trace and the gallery name a
-//! step in the same words, and the links to the screenshot pictures are
-//! there too.
-//!
-//! The functions that write these are driven by [`crate::Recorder`]; nothing
-//! here needs a renderer except the pictures it is given.
-
 use core::fmt::Write as _;
 use std::{fs, path::Path};
 
@@ -41,45 +11,30 @@ use crate::{
     trace::{ScenarioTrace, StepView, TracePoint, step_title},
 };
 
-/// Width of a thumbnail in a filmstrip, in pixels.
 pub const FILMSTRIP_THUMB_WIDTH: u32 = 320;
-/// How many thumbnails a filmstrip puts in a row.
 pub const FILMSTRIP_COLUMNS: usize = 4;
-/// Width of the frames of a GIF, in pixels.
 pub const GIF_WIDTH: u32 = 640;
-/// Milliseconds in one 1/60 s frame, times 1000 over 60; see [`delay_ms`].
 const FRAME_MS_NUMERATOR: u32 = 1000;
-/// Frames a second.
 const FRAMES_PER_SECOND: u32 = 60;
-/// How long the last frame of a GIF stays up, in milliseconds.
 const LAST_FRAME_MS: u32 = 1500;
-/// The shortest a GIF frame is shown; browsers treat shorter as 100 ms.
+/// Browsers treat shorter delays as 100 ms.
 const MIN_FRAME_MS: u32 = 20;
-/// File name of a scenario's filmstrip.
 pub const FILMSTRIP_FILE: &str = "filmstrip.png";
-/// File name of a scenario's GIF.
 pub const GIF_FILE: &str = "scenario.gif";
-/// File name of a scenario's per-step trace.
 pub const TRACE_FILE: &str = "trace.html";
-/// The folder of a scenario's folder that holds copies of the pictures its
-/// screenshot checks wrote, so the page links to files that sit beside it.
 pub const SNAPSHOT_DIR: &str = "snapshots";
 
-/// How long a GIF shows a picture taken at `frame` before the one at `next`.
 fn delay_ms(frame: u32, next: Option<u32>) -> u32 {
     next.map_or(LAST_FRAME_MS, |next| {
         (next.saturating_sub(frame) * FRAME_MS_NUMERATOR / FRAMES_PER_SECOND).max(MIN_FRAME_MS)
     })
 }
 
-/// The file name of the picture of `frame`.
 #[must_use]
 pub fn picture_file(frame: u32) -> String {
     format!("frame-{frame:05}.png")
 }
 
-/// Writes a scenario's pictures, filmstrip, GIF and, where it has a trace,
-/// `trace.html` into `folder`.
 pub(crate) fn write_scenario(
     folder: &Path,
     pictures: &[Capture],
@@ -136,9 +91,6 @@ pub(crate) fn write_scenario(
     Ok(())
 }
 
-/// The files of a screenshot check worth looking at: its baseline and, after a
-/// mismatch, the picture taken and the one of what differs. Each is named
-/// `<check>.<role>.png` in the scenario's [`SNAPSHOT_DIR`].
 fn snapshot_files(record: &ScreenshotRecord) -> Vec<(String, &Path)> {
     let mut files = Vec::new();
     match &record.result {
@@ -161,9 +113,7 @@ fn snapshot_files(record: &ScreenshotRecord) -> Vec<(String, &Path)> {
     files
 }
 
-/// Copies the pictures screenshot checks wrote into the scenario's folder.
-/// A baseline that is not there (a mismatch in size has one, a failed write
-/// does not) is left out.
+/// A baseline that is not there is left out: a size mismatch has one, a failed write does not.
 fn copy_snapshots(folder: &Path, records: &[ScreenshotRecord]) -> Result<(), RecordError> {
     let files: Vec<_> = records.iter().flat_map(snapshot_files).collect();
     if files.is_empty() {
@@ -180,8 +130,6 @@ fn copy_snapshots(folder: &Path, records: &[ScreenshotRecord]) -> Result<(), Rec
     Ok(())
 }
 
-/// Links, on a scenario's card, to the pictures screenshot checks left to look
-/// at.
 fn snapshot_links(out: &mut String, slug: &str, records: &[ScreenshotRecord]) {
     for record in records {
         let links: Vec<String> = snapshot_files(record)
@@ -205,10 +153,7 @@ fn snapshot_links(out: &mut String, slug: &str, records: &[ScreenshotRecord]) {
     }
 }
 
-/// Encodes one URL path segment: everything but the unreserved ASCII
-/// characters becomes `%XX` per UTF-8 byte, so `#`, `?`, `%`, spaces and
-/// non-ASCII text stay part of the file name instead of ending the path or
-/// starting a fragment.
+/// Everything but unreserved ASCII becomes `%XX`, so `#`, `?`, `%` and spaces stay in the file name.
 fn percent_encode(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for &byte in segment.as_bytes() {
@@ -224,7 +169,6 @@ fn percent_encode(segment: &str) -> String {
     out
 }
 
-/// Escapes text for HTML.
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -239,7 +183,6 @@ fn escape(text: &str) -> String {
     out
 }
 
-/// One scenario's card in the contact sheet.
 fn card(out: &mut String, scenario: &ScenarioRecording) {
     let (class, verdict) = match &scenario.disabled {
         Some(Disabled::Fixme(_)) => ("fixme", "FIXME"),
@@ -327,12 +270,10 @@ fn card(out: &mut String, scenario: &ScenarioRecording) {
     );
 }
 
-/// What a step is called in a list: its number and its words.
 fn title(index: usize, steps: &[StepRecord]) -> String {
     step_title(index, steps, &TargetDescriptions::default()).unwrap_or_default()
 }
 
-/// The mark and class a step's outcome is shown with.
 const fn outcome_mark(outcome: &Outcome) -> (&'static str, &'static str) {
     match outcome {
         Outcome::Pass => ("\u{2714}", "pass"),
@@ -341,7 +282,6 @@ const fn outcome_mark(outcome: &Outcome) -> (&'static str, &'static str) {
     }
 }
 
-/// The steps of a failed scenario, each linking to its part of the trace.
 fn card_steps(out: &mut String, scenario: &ScenarioRecording, slug: &str) {
     out.push_str("<ol class=\"steps\">");
     for (index, record) in scenario.report.steps.iter().enumerate() {
@@ -355,11 +295,6 @@ fn card_steps(out: &mut String, scenario: &ScenarioRecording, slug: &str) {
     out.push_str("</ol>");
 }
 
-/// The page that shows, per step, the world around it.
-///
-/// Each step has what it found, the checks it ran, the pictures before and
-/// after, how the snapshot changed, and the snapshot and UI tree afterwards.
-/// `frames` are the frames that have a picture in the folder next to the page.
 #[must_use]
 pub fn trace_html(recording: &ScenarioRecording, trace: &ScenarioTrace, frames: &[u32]) -> String {
     let mut out = String::from(
@@ -403,7 +338,6 @@ pub fn trace_html(recording: &ScenarioRecording, trace: &ScenarioTrace, frames: 
     out
 }
 
-/// One step's `<details>`; a step that failed is open.
 fn step_section(out: &mut String, view: &StepView<'_>, frames: &[u32]) {
     let (mark, class) = outcome_mark(&view.outcome);
     let open = if view.failure().is_some() {
@@ -470,7 +404,6 @@ fn step_section(out: &mut String, view: &StepView<'_>, frames: &[u32]) {
     out.push_str("</details>");
 }
 
-/// The pictures before and after a step, where the recorder took them.
 fn pictures(
     out: &mut String,
     before: Option<&TracePoint>,
@@ -497,7 +430,6 @@ fn pictures(
     out.push_str("</div>");
 }
 
-/// The changes between two snapshots as a table.
 fn changes(out: &mut String, changes: &[SnapshotChange]) {
     if changes.is_empty() {
         out.push_str("<h4>Changes</h4><p>The world did not change.</p>");
@@ -522,7 +454,6 @@ fn changes(out: &mut String, changes: &[SnapshotChange]) {
     out.push_str("</table>");
 }
 
-/// A trace point's UI tree and snapshot, collapsed.
 fn point(out: &mut String, title: &str, point: &TracePoint) {
     let mut tree = String::new();
     for line in &point.ui {
@@ -545,7 +476,6 @@ fn point(out: &mut String, title: &str, point: &TracePoint) {
     );
 }
 
-/// The end of the run: the expectations and the final world.
 fn end_section(out: &mut String, recording: &ScenarioRecording, trace: &ScenarioTrace) {
     let failed =
         recording.report.checks.iter().any(|check| {
@@ -581,8 +511,6 @@ fn end_section(out: &mut String, recording: &ScenarioRecording, trace: &Scenario
     out.push_str("</details>");
 }
 
-/// The contact sheet: scenarios grouped as the catalogue groups them, groups
-/// with a failure first, and failures first within each group.
 #[must_use]
 pub fn index_html(scenarios: &[ScenarioRecording]) -> String {
     let mut groups: Vec<(&str, Vec<&ScenarioRecording>)> = Vec::new();
@@ -666,7 +594,6 @@ mod tests {
     use crate::{Step, player::ScenarioReport};
     use bevy::prelude::{Reflect, ReflectResource, Resource};
 
-    /// Reads `%XX` escapes back into bytes, as a browser does for a path.
     fn percent_decode(text: &str) -> String {
         let bytes = text.as_bytes();
         let mut out = Vec::new();
@@ -740,7 +667,6 @@ mod tests {
         Ok(())
     }
 
-    /// A recording with a finished report that passed or not.
     fn recording(name: &str, group: &str, passed: bool) -> ScenarioRecording {
         let mut report = ScenarioReport {
             finished: true,
@@ -767,7 +693,6 @@ mod tests {
         }
     }
 
-    /// A recording of a scenario that does not run in its variant.
     fn skipped_recording(name: &str, group: &str) -> ScenarioRecording {
         ScenarioRecording {
             name: name.into(),
@@ -851,7 +776,6 @@ mod tests {
         assert!(html.contains("1 failed"), "the summary counts failures");
     }
 
-    /// A recording of a scenario that fails its check, with its trace.
     fn traced_failure() -> ScenarioRecording {
         let scenario = crate::Scenario::new("shows it")
             .setup(|world| {
@@ -891,7 +815,6 @@ mod tests {
         assert!(!html.contains("<img"), "no picture was taken");
     }
 
-    /// A resource a `Capture` step can read.
     #[derive(Resource, Reflect)]
     #[reflect(Resource)]
     struct Tally(u32);

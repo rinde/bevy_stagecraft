@@ -1,41 +1,5 @@
-//! A checkpoint saved as a setup for other scenarios.
-//!
-//! In the gallery, **Save as setup** (while recording, paused, taken over or
-//! finished, but not while a script plays, when the button is disabled)
-//! writes the world as it is to a file next to the scenarios, and any
-//! scenario can start from it with `setup: Scene("name.scene.ron")` (see
-//! [`Setup::Scene`]).
-//!
-//! The file is Bevy's own world format (a `DynamicWorld`, the dynamic scene of
-//! earlier versions) holding the app's reflected resources and entities. What
-//! belongs to the test tooling or to the UI is left out, because the scenario
-//! brings its own UI (its setup closure, or the app's setup after this one):
-//!
-//! * every type of Bevy's crates and of this one, as a [`NoiseFilter`]
-//!   decides (the default leaves them all out), so no layout, transform or
-//!   picking state, and no gallery or overlay state;
-//! * every entity that is a UI node, a camera or a window, or that sits below
-//!   one, and everything marked [`NotUnderTest`](crate::NotUnderTest);
-//! * entities left with no component after that.
-//!
-//! What is saved needs `#[derive(Reflect)]` and `#[reflect(Component)]` or
-//! `#[reflect(Resource)]` (and `Default`, as Bevy's world format needs to
-//! read it back), as for checks on resources. A component that refers to
-//! another entity is saved with that entity's id: keep both in the file, or
-//! the reference dangles when it is loaded.
-//!
-//! The file is the same on every run of the same app: the resources and the
-//! components of each entity are written sorted by type path, the entities by
-//! id. Inside one component or resource the order is the value's own: a
-//! `HashMap` or `HashSet` field is written in hash order, which can differ
-//! between runs, so use an ordered collection (`BTreeMap`, `Vec`) for what is
-//! saved if the file must be the same every time.
-//!
-//! An app with its own save format does not use this: its
-//! [`AppSetup::capture`](crate::AppSetup::capture) writes the file and names
-//! it in the setup it returns, and [`save_setup`] prefers that. Name what it
-//! writes `"{stem}.{extension}"` so that a second save gets another `stem`
-//! rather than overwriting the first.
+//! Saved types need `Reflect`, `Default` and `#[reflect(Component)]` or
+//! `#[reflect(Resource)]`; use ordered collections, as hash order differs between runs.
 
 use core::{any::TypeId, fmt};
 use std::{
@@ -66,16 +30,13 @@ use crate::{
     targets::{is_tooling, is_ui_node},
 };
 
-/// The end of a saved world's file name, which makes a `.ron` file a setup
-/// and not a scenario: [`crate::ron_files`] skips such files.
+/// Makes a `.ron` file a setup, not a scenario: [`crate::ron_files`] skips it.
 pub const SCENE_SUFFIX: &str = ".scene.ron";
 
-/// Saving or loading a world failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveError(String);
 
 impl SaveError {
-    /// An error with this message.
     fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
@@ -89,21 +50,16 @@ impl fmt::Display for SaveError {
 
 impl core::error::Error for SaveError {}
 
-/// What a saved world's file is called for `stem`: `"{stem}.scene.ron"`.
 #[must_use]
 pub fn scene_file_name(stem: &str) -> String {
     format!("{stem}{SCENE_SUFFIX}")
 }
 
-/// Whether `name` is the name of a saved world (see [`SCENE_SUFFIX`]).
 #[must_use]
 pub fn is_scene_file(name: &str) -> bool {
     name.ends_with(SCENE_SUFFIX)
 }
 
-/// Whether `entity` belongs to the app's data and not to its UI or to the
-/// tooling: it and nothing above it is a UI node, a camera, a window or
-/// marked [`NotUnderTest`](crate::NotUnderTest).
 fn is_app_data(world: &World, entity: Entity) -> bool {
     if is_tooling(world, entity) {
         return false;
@@ -123,7 +79,6 @@ fn is_app_data(world: &World, entity: Entity) -> bool {
     }
 }
 
-/// The types in `world`'s registry that `noise` leaves out.
 fn ignored_types(world: &World, noise: &NoiseFilter) -> Vec<TypeId> {
     let Some(registry) = world.get_resource::<AppTypeRegistry>() else {
         return Vec::new();
@@ -136,12 +91,6 @@ fn ignored_types(world: &World, noise: &NoiseFilter) -> Vec<TypeId> {
         .collect()
 }
 
-/// The world's reflected resources and app entities as a [`DynamicWorld`],
-/// everything in it in a fixed order.
-///
-/// # Errors
-///
-/// [`SaveError`] when the world has no type registry.
 fn extract(world: &World, noise: &NoiseFilter) -> Result<DynamicWorld, SaveError> {
     let registry = world
         .get_resource::<AppTypeRegistry>()
@@ -177,13 +126,9 @@ fn extract(world: &World, noise: &NoiseFilter) -> Result<DynamicWorld, SaveError
     Ok(saved)
 }
 
-/// The world's app data as the text of a saved world; see the
-/// [module documentation](self) for what that is.
-///
 /// # Errors
 ///
-/// [`SaveError`] when the world has no type registry or something in it
-/// cannot be written (a value whose type does not derive `Reflect` fully).
+/// [`SaveError`] when the world has no type registry or a value cannot be written.
 pub fn scene_ron(world: &World, noise: &NoiseFilter) -> Result<String, SaveError> {
     let saved = extract(world, noise)?;
     let registry = world
@@ -194,13 +139,12 @@ pub fn scene_ron(world: &World, noise: &NoiseFilter) -> Result<String, SaveError
         .map_err(|error| SaveError::new(format!("the world cannot be written: {error}")))
 }
 
-/// Puts a saved world's resources and entities into `world`: resources are
-/// replaced, entities are spawned anew.
+/// Resources are replaced, entities are spawned anew.
 ///
 /// # Errors
 ///
-/// [`SaveError`] when the text is not a saved world, names a type `world`
-/// does not know, or the world has no type registry.
+/// [`SaveError`] when the text is not a saved world, names a type `world` does not
+/// know, or the world has no type registry.
 pub fn load_scene_ron(world: &mut World, text: &str) -> Result<(), SaveError> {
     let registry = world
         .get_resource::<AppTypeRegistry>()
@@ -220,8 +164,6 @@ pub fn load_scene_ron(world: &mut World, text: &str) -> Result<(), SaveError> {
         .map_err(|error| SaveError::new(format!("the saved world cannot be loaded: {error}")))
 }
 
-/// How a saved world's handles are loaded: by the world's asset server, or,
-/// where it has none, as the default handle of their type.
 struct Loader(Option<AssetServer>);
 
 impl LoadFromPath for Loader {
@@ -237,13 +179,9 @@ impl LoadFromPath for Loader {
     }
 }
 
-/// Reads the file `file` and loads it as a saved world into `world`: resolved
-/// against `base_dir` when it is relative and there is one.
-///
 /// # Errors
 ///
-/// [`SaveError`] when the file cannot be read (naming the path tried) or does
-/// not load; see [`load_scene_ron`].
+/// [`SaveError`] when the file cannot be read or does not load.
 pub fn load_scene_file(
     world: &mut World,
     base_dir: Option<&Path>,
@@ -256,8 +194,6 @@ pub fn load_scene_file(
         .map_err(|error| SaveError::new(format!("{}: {error}", path.display())))
 }
 
-/// Where the file `file` of a scenario is: next to the scenario's file when
-/// it is relative and the scenario came from a file, else as given.
 fn resolve(base_dir: Option<&Path>, file: &str) -> PathBuf {
     let path = Path::new(file);
     match base_dir {
@@ -266,25 +202,14 @@ fn resolve(base_dir: Option<&Path>, file: &str) -> PathBuf {
     }
 }
 
-/// Whether `dir` holds a file a save with this `stem` would write or has
-/// written: `"{stem}.{extension}"`, which covers the saved world and what an
-/// app's own [`AppSetup::capture`](crate::AppSetup::capture) writes. Not
-/// `"{stem}.ron"`: that is the scenario the save is named for, and sits there
-/// to begin with.
-///
-/// # Errors
-///
-/// A directory that cannot be listed, or an entry that cannot be read, is an
-/// error and never "free": an incomplete listing could hide the very file a
-/// save would then overwrite.
+/// Not `"{stem}.ron"`: the scenario the save is named for sits there already. A
+/// listing error is never "free", as it could hide a file the save would overwrite.
 fn stem_is_taken(dir: &Path, stem: &str) -> Result<bool, SaveError> {
     stem_is_used(dir, stem, false)
 }
 
-/// Whether `dir` holds a file named `"{stem}.{extension}"`; the scenario's own
-/// `"{stem}.ron"` counts only when `scenario_counts`. A recorded session
-/// counts it, since it has yet to write that file and must not replace one
-/// that is there.
+/// A recorded session counts `"{stem}.ron"`: it has yet to write that file and
+/// must not replace one.
 fn stem_is_used(dir: &Path, stem: &str, scenario_counts: bool) -> Result<bool, SaveError> {
     let prefix = format!("{stem}.");
     let scenario = format!("{stem}.ron");
@@ -300,7 +225,6 @@ fn stem_is_used(dir: &Path, stem: &str, scenario_counts: bool) -> Result<bool, S
     Ok(false)
 }
 
-/// The stem `name` numbered `number`: `name` for 1, then `name-2`, `name-3`.
 fn numbered_stem(name: &str, number: u32) -> String {
     if number <= 1 {
         name.to_owned()
@@ -309,8 +233,6 @@ fn numbered_stem(name: &str, number: u32) -> String {
     }
 }
 
-/// The first number from `from` whose stem nothing saved in `dir` uses yet
-/// (see [`stem_is_taken`]).
 fn free_stem_number(dir: &Path, name: &str, from: u32) -> Result<u32, SaveError> {
     let mut number = from.max(1);
     while stem_is_taken(dir, &numbered_stem(name, number))? {
@@ -321,17 +243,11 @@ fn free_stem_number(dir: &Path, name: &str, from: u32) -> Result<u32, SaveError>
     Ok(number)
 }
 
-/// The stem for a recorded session named `name` (already file-name safe): the
-/// first of `name`, `name-2`, `name-3` with no file `"{stem}.{extension}"` in
-/// `dir`, the scenario file and any orphaned saved world or app capture file
-/// included, so neither is overwritten.
+/// Counts the scenario file and orphaned captures, so neither is overwritten.
 ///
 /// # Errors
 ///
-/// A directory that cannot be listed is an error and never a free stem. A
-/// concurrent save can still take the stem before the session writes; the
-/// session shares [`AppSetup::capture`](crate::AppSetup::capture)'s contract
-/// of creating files exclusively.
+/// A directory that cannot be listed is an error and never a free stem.
 pub(crate) fn free_session_stem(dir: &Path, name: &str) -> Result<String, SaveError> {
     let mut number = 1_u32;
     loop {
@@ -345,9 +261,6 @@ pub(crate) fn free_session_stem(dir: &Path, name: &str) -> Result<String, SaveEr
     }
 }
 
-/// Writes `text` as the saved world of `stem` numbered `number` or, when that
-/// file exists by now, of the next free number; never over an existing file.
-/// Gives the file's name and path.
 fn write_new_scene(
     dir: &Path,
     stem: &str,
@@ -382,43 +295,25 @@ fn write_new_scene(
     }
 }
 
-/// A saved setup: the setup that gets back to the state saved, and the files
-/// it wrote.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavedSetup {
-    /// The setup to put in a script: [`Setup::Scene`] for a saved world, or
-    /// what the app's own [`AppSetup::capture`](crate::AppSetup::capture)
-    /// made.
     pub setup: Setup,
-    /// The saved world's file, when the setup is [`Setup::Scene`].
     pub path: Option<PathBuf>,
 }
 
-/// Saves the state of `world` as a setup in `dir`, for scenarios that sit in
-/// the same directory.
-///
-/// The app's own [`AppSetup::capture`](crate::AppSetup::capture) goes first:
-/// when it returns a setup, that is the result and the crate writes nothing
-/// (the app wrote what it needs in files named `"{stem}.{extension}"`).
-/// Otherwise the world is written as `"{stem}.scene.ron"` and the setup is
-/// `Scene` of that name. Either way `stem` is numbered (`stem-2`, `stem-3`)
-/// when `dir` already holds any file named `"{stem}.{extension}"` (other than
-/// the scenario's own `"{stem}.ron"`), so an earlier save is not overwritten.
+/// The app's own [`AppSetup::capture`](crate::AppSetup::capture) goes first; if it
+/// returns a setup the crate writes nothing. `stem` is numbered when `dir` holds
+/// `"{stem}.{extension}"`.
 ///
 /// # Errors
 ///
-/// [`SaveError`] when the directory or file cannot be written, the world
-/// cannot be saved, the directory cannot be listed (a stem is never taken to
-/// be free when the listing fails), or the app's capture fails.
+/// [`SaveError`] when the directory or file cannot be written, the world cannot
+/// be saved, the directory cannot be listed, or the app's capture fails.
 ///
 /// # Races
 ///
-/// The saved world is created exclusively (`create_new`): when another save
-/// took the file between the check and the write, the next number is tried, so
-/// a scene is never overwritten. The crate cannot do the same for an app's own
-/// files, which [`AppSetup::capture`](crate::AppSetup::capture) writes: the
-/// contract is that it creates them exclusively too and returns an error
-/// rather than replacing a file that exists.
+/// The world is created exclusively. The app's capture must create its files
+/// exclusively too, and error rather than replace one.
 pub fn save_setup(
     world: &mut World,
     dir: &Path,
@@ -448,7 +343,6 @@ mod tests {
 
     use super::*;
 
-    /// A fresh empty directory for one test.
     fn dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("stagecraft-save-unit-{name}"));
         let _ = fs::remove_dir_all(&dir);

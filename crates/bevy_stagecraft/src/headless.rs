@@ -1,17 +1,3 @@
-//! Running a real Bevy app, UI included, with no GPU and no display.
-//!
-//! [`HeadlessPlugins`] is the plugin group: Bevy's minimal plugins plus the
-//! UI, text, picking, input and widget plugins, and a virtual primary window
-//! that no operating system backs. Time advances by a fixed 1/60 s per
-//! update whatever the wall clock says, so a run is the same on every
-//! machine.
-//!
-//! The window is sized in logical pixels ([`DEFAULT_WINDOW_SIZE`]).
-//! [`HeadlessPlugins::with_scale_factor`] sets the physical pixels per logical
-//! one ([`DEFAULT_SCALE_FACTOR`] otherwise): the window keeps its logical
-//! size and its physical size is that times the factor. Input goes in
-//! through [`SyntheticInput`](crate::SyntheticInput), which the group adds.
-
 use core::time::Duration;
 
 use bevy::{
@@ -37,31 +23,19 @@ use bevy::{
 
 use crate::input::SyntheticInputPlugin;
 
-/// The size of the virtual primary window unless configured otherwise.
+/// Logical pixels.
 pub const DEFAULT_WINDOW_SIZE: (u32, u32) = (1280, 720);
 
-/// The scale factor of the virtual primary window unless configured otherwise:
-/// one physical pixel per logical pixel.
 pub const DEFAULT_SCALE_FACTOR: f32 = 1.0;
 
-/// Every frame advances time by exactly this much, in every runner.
 pub const FRAME_STEP: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
-/// A plugin group that runs a real Bevy app, UI included, with no GPU and no
-/// display.
-///
-/// It is built on `MinimalPlugins`. The primary window is virtual: there is no
-/// winit and no surface, only a `Window` entity of the configured size. Time
-/// advances by a fixed [`FRAME_STEP`] per update, so runs are deterministic.
-///
-/// An app whose own plugins expect resources or asset types that the render
-/// plugins normally provide registers those itself, for example with a small
-/// support plugin. Do not silence systems by downgrading the error handler.
+/// Runs a real Bevy app, UI included, with no GPU and no display. Register
+/// resources the render plugins would provide yourself; do not silence systems
+/// by downgrading the error handler.
 #[derive(Debug, Clone, Copy)]
 pub struct HeadlessPlugins {
-    /// Size of the virtual primary window, in logical pixels.
     window_size: (u32, u32),
-    /// Physical pixels per logical pixel of the virtual primary window.
     scale_factor: f32,
 }
 
@@ -75,24 +49,18 @@ impl Default for HeadlessPlugins {
 }
 
 impl HeadlessPlugins {
-    /// Sets the size of the virtual primary window, in logical pixels.
     #[must_use]
     pub const fn with_window_size(mut self, width: u32, height: u32) -> Self {
         self.window_size = (width, height);
         self
     }
 
-    /// The size of the virtual primary window, in logical pixels.
     #[must_use]
     pub const fn window_size(&self) -> (u32, u32) {
         self.window_size
     }
 
-    /// Sets the scale factor of the virtual primary window: how many physical
-    /// pixels make one logical pixel, as on a high-density display. The
-    /// window keeps its logical size (see [`HeadlessPlugins::with_window_size`]),
-    /// so the UI lays out the same and renders at `scale_factor` times as
-    /// many pixels. A value that is not finite and above zero is ignored.
+    /// Ignores a value that is not finite and above zero.
     #[must_use]
     pub const fn with_scale_factor(mut self, scale_factor: f32) -> Self {
         if scale_factor.is_finite() && scale_factor > 0.0 {
@@ -101,14 +69,11 @@ impl HeadlessPlugins {
         self
     }
 
-    /// The scale factor of the virtual primary window.
     #[must_use]
     pub const fn scale_factor(&self) -> f32 {
         self.scale_factor
     }
 
-    /// The primary window's resolution: `window_size` logical pixels at
-    /// `scale_factor`, rounded to whole physical pixels.
     fn resolution(&self) -> WindowResolution {
         let (width, height) = self.window_size;
         let mut resolution = WindowResolution::new(width, height);
@@ -132,7 +97,6 @@ impl PluginGroup for HeadlessPlugins {
                     resolution,
                     ..Window::default()
                 }),
-                // Nothing closes a virtual window, and the app must outlive it.
                 exit_condition: ExitCondition::DontExit,
                 close_when_requested: false,
                 ..WindowPlugin::default()
@@ -143,9 +107,7 @@ impl PluginGroup for HeadlessPlugins {
             .add(TextureAtlasPlugin)
             .add(MeshPlugin)
             .add(CameraPlugin)
-            // The render crate's camera plugin is the only thing that works
-            // out a camera's target size. Without it UI picking finds no
-            // viewport and only ever hits the window.
+            // Without it UI picking finds no viewport and only hits the window.
             .add(RenderCameraSupport)
             .add(TextPlugin)
             .add(UiPlugin)
@@ -159,7 +121,6 @@ impl PluginGroup for HeadlessPlugins {
     }
 }
 
-/// Adds `bevy::render::camera::CameraPlugin` and the resource it reads.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct RenderCameraSupport;
 
@@ -170,7 +131,6 @@ impl Plugin for RenderCameraSupport {
     }
 }
 
-/// Makes every update advance time by exactly [`FRAME_STEP`].
 #[derive(Debug, Default, Clone, Copy)]
 struct FixedTimePlugin;
 

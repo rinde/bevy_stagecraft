@@ -1,42 +1,13 @@
-//! Tags and annotations of a scenario, as Playwright's `@tag`, `skip`,
-//! `fixme` and `fail`.
-//!
-//! A scenario carries `tags`, and may be skipped (`skip`), set aside as a
-//! known problem (`fixme`) or expected to fail (`should_fail`); see
-//! [`crate::Scenario::tags`]. A runner chooses scenarios by tag with a
-//! [`TagFilter`], which `run_ron_tests` reads from the environment variable
-//! [`TAGS_ENV`].
-//!
-//! Skip and fixme give [`Disabled`] (skip first); the file fields `tags`,
-//! `skip`, `fixme` and `should_fail` are forms added in format 3. A
-//! [`TagFilter`] matches when no forbidden tag is present and, if any tag is
-//! required, one is: `bridge,-slow`.
-//!
-//! Consumers: [`crate::run_ron_tests`] does not list a scenario outside the
-//! filter, reports skip and fixme as disabled (`ignored, ..`, apart from a
-//! variant skip), and flips the result of a `should_fail` scenario, failing
-//! with a hint when it passes. The recorder dims disabled cards in the index
-//! with the reason, lists them last and flips `should_fail`. The gallery has a
-//! **Tag** row, shows disabled entries as skipped and dimmed with their
-//! reason, and skips them in run-all.
-
-/// The environment variable `run_ron_tests` reads its [`TagFilter`] from:
-/// `RIN_SCENARIO_TAGS=bridge,-slow` plays the scenarios tagged `bridge`
-/// except those tagged `slow`.
+/// Holds the [`TagFilter`] text, such as `bridge,-slow`.
 pub const TAGS_ENV: &str = "RIN_SCENARIO_TAGS";
 
-/// Why a runner leaves a scenario out: it is skipped, or marked fixme. Both
-/// carry the reason; the two are listed apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disabled {
-    /// `skip: Some(reason)`: not run.
     Skip(String),
-    /// `fixme: Some(reason)`: a known problem, not run, listed separately.
     Fixme(String),
 }
 
 impl Disabled {
-    /// The reason the scenario gave.
     #[must_use]
     pub fn reason(&self) -> &str {
         match self {
@@ -44,7 +15,6 @@ impl Disabled {
         }
     }
 
-    /// The word a runner puts before the reason: `skip` or `fixme`.
     #[must_use]
     pub const fn label(&self) -> &'static str {
         match self {
@@ -53,18 +23,13 @@ impl Disabled {
         }
     }
 
-    /// The reason with its label, `fixme: not built yet`.
     #[must_use]
     pub fn describe(&self) -> String {
         format!("{}: {}", self.label(), self.reason())
     }
 }
 
-/// Which tags a runner plays: a comma-separated list where `bridge` requires
-/// a tag and `-slow` forbids one.
-///
-/// A scenario matches when it has none of the forbidden tags and, if any tag
-/// is required, at least one of them. An empty filter matches everything.
+/// Comma-separated tags: `bridge` requires one, `-slow` forbids one.
 ///
 /// ```
 /// use bevy_stagecraft::TagFilter;
@@ -76,14 +41,11 @@ impl Disabled {
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TagFilter {
-    /// Tags of which a scenario needs at least one; empty needs none.
     include: Vec<String>,
-    /// Tags a scenario must not have.
     exclude: Vec<String>,
 }
 
 impl TagFilter {
-    /// Reads `bridge,-slow`: words split at commas, blank ones ignored.
     #[must_use]
     pub fn parse(text: &str) -> Self {
         let mut filter = Self::default();
@@ -97,26 +59,22 @@ impl TagFilter {
         filter
     }
 
-    /// The filter in [`TAGS_ENV`]; everything where it is not set.
     #[must_use]
     pub fn from_env() -> Self {
         std::env::var(TAGS_ENV).map_or_else(|_| Self::default(), |text| Self::parse(&text))
     }
 
-    /// Whether the filter lets everything through.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.include.is_empty() && self.exclude.is_empty()
     }
 
-    /// Whether a scenario with these tags is played.
     #[must_use]
     pub fn matches(&self, tags: &[String]) -> bool {
         let has = |wanted: &String| tags.contains(wanted);
         !self.exclude.iter().any(has) && (self.include.is_empty() || self.include.iter().any(has))
     }
 
-    /// The filter as written, for a status line: `bridge,-slow`.
     #[must_use]
     pub fn describe(&self) -> String {
         let excluded = self.exclude.iter().map(|tag| format!("-{tag}"));
