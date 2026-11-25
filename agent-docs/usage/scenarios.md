@@ -199,7 +199,7 @@ one that is, fails at once. The steps that aim at a target wait for it to be
 actionable like `Click` and `Drag`, and `Timeout(..)` and `Force(..)` wrap them
 (not `TouchUp` or `TouchCancel`).
 
-On Bevy 0.20 a cancelled finger reaches widgets as `Pointer<Out>` and never as
+On Bevy 0.20 a canceled finger reaches widgets as `Pointer<Out>` and never as
 `Pointer<Cancel>`: `bevy_picking` drops the hits of a pointer that has a cancel
 input, so there is nobody to send it to. A real touch screen does the same, and
 `TouchCancel` sends no `Pointer<Cancel>` of its own, so a scenario cannot pass

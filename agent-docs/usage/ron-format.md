@@ -4,7 +4,7 @@
 name, window size, action timeout, setup, view, variants, steps, expect list),
 and `Scenario::from_ron`
 reads one back, so a scenario can be written in Rust or as a file and
-converted either way. Closures cannot be serialised, so a script holds the
+converted either way. Closures cannot be serialized, so a script holds the
 app's setup, view, targets and checks as values of its own reflected enums,
 inside `App(..)`; nothing is looked up by a name. Types that checks name, and
 the app's own types, are looked up in `Registry::types`, so a whole file is

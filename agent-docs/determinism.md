@@ -2,7 +2,7 @@
 
 A scenario must produce the same frames in every runner. So: fixed 1/60 s
 steps, no wall clock, and no `HashMap`/`HashSet` iteration where the order
-reaches behaviour (use ordered collections or sort first).
+reaches behavior (use ordered collections or sort first).
 
 Nor may a scenario depend on the order of systems nothing orders. Bevy 0.20
 can shuffle those (`ScheduleBuildSettings::shuffle_seed`, behind Bevy's `debug`

@@ -1,7 +1,7 @@
 # Dependencies and advisories (`just deny`)
 
 `just deny` runs `cargo deny check` against `deny.toml`: advisories, bans,
-licences and sources. It is part of `just ci`.
+licenses and sources. It is part of `just ci`.
 
 When `just deny` reports a new advisory:
 
@@ -10,5 +10,5 @@ When `just deny` reports a new advisory:
    advisory ID, the reason, and a date to revisit. No ignore without all three.
 
 A new duplicate crate version is a warning: avoid it, or add it to
-`bans.skip` with a reason. A new licence must be checked, then added to the
+`bans.skip` with a reason. A new license must be checked, then added to the
 allow-list explicitly. Only crates.io is allowed as a source.

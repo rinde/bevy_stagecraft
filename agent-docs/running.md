@@ -12,7 +12,7 @@
 | `just doc`         | Rustdoc, warnings denied                        | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --document-private-items` |
 | `just features`    | Check none, `record`, `gallery`, all features   | `cargo check --workspace --all-targets --no-default-features [--features ...]`    |
 | `just unused-deps` | Fail on unused dependencies                     | `cargo machete --with-metadata`                                                   |
-| `just deny`        | Licences, advisories, bans                      | `cargo deny check`                                                                |
+| `just deny`        | Licenses, advisories, bans                      | `cargo deny check`                                                                |
 | `just test-gpu`    | Tests needing a GPU, on the backend wgpu picks (needs a display) | `cargo test --workspace --features record gpu -- --include-ignored` |
 | `just test-gpu-headless` | The same on a software GPU (lavapipe), forcing Vulkan | `WGPU_BACKEND=vulkan cargo test --workspace --features record gpu -- --include-ignored` |
 | `just gallery-test` | Play every gallery scenario in a window; non-zero on failure (needs a display, not in `ci`) | `cargo run --example gallery --features gallery -- --run-all` |

@@ -91,7 +91,7 @@ the widgets they label, every reflected Bevy `State`, and the app's own
 | a component count              | `Count(with: ["Ghost"], is: Eq(2))`          |
 | a state                        | `InState(state: "Mode", value: Editing)`     |
 | text now shown / no longer     | `Shows("1")` / `Not(Shows("0"))`             |
-| a labelled widget's state      | `Disabled(Text("Save"))`, `Not(Checked(..))`, also selected, pressed, focused, visible |
+| a labeled widget's state      | `Disabled(Text("Save"))`, `Not(Checked(..))`, also selected, pressed, focused, visible |
 | an app fact now / no longer    | `App(CounterIs(1))` / `Not(App(CounterIs(0)))` |
 
 Every suggestion is run against the world at the end and kept only if it

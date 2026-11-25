@@ -54,7 +54,7 @@ divided by the primary window's scale factor, so the same number states the
 size or position in logical pixels and passes at every scale factor.
 
 ```ron
-// The popup is 430 logical pixels wide and its centre is 225 logical pixels
+// The popup is 430 logical pixels wide and its center is 225 logical pixels
 // from the left edge, whatever the scale factor.
 Check(Component(target: Name("popup"), path: "ComputedNode.size.x", unit: Logical, is: Eq(430.0))),
 Check(Component(target: Name("popup"), path: "UiGlobalTransform.0.translation.x", unit: Logical, is: Eq(225.0))),

@@ -171,6 +171,6 @@ recorder uses for clicks too.
 
 Limits: only the primary window is recorded and nothing marked `NotUnderTest`
 is ever named as a target; a click on a label replays on the middle of the
-labelled node, not the exact pixel; typed text and touch are not recorded (key
+labeled node, not the exact pixel; typed text and touch are not recorded (key
 presses are, except the checkpoint key's). Selecting, restarting and stepping
 are refused in the gallery while recording.

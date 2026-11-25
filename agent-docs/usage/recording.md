@@ -5,13 +5,13 @@ at the cursor, a ring that expands and fades on each press, a held marker
 while a button is down, a short fading trail, and a caption strip along the
 bottom naming the current step ("Click: Rail", "Glide to (5, 0)", "Tap =") and
 each check's pass or fail mark. For touch steps it draws a filled circle under
-each finger that is down (one per finger, a different colour from the arrow,
+each finger that is down (one per finger, a different color from the arrow,
 which a touch step never moves) and a short mark that shrinks and fades where
-a finger went down and where it lifted or was cancelled. Everything is UI with
+a finger went down and where it lifted or was canceled. Everything is UI with
 `Pickable::IGNORE`, so it never takes a picking hit. Only the gallery and the
 recorder add it; headless tests do not.
 
-Replace the `OverlayTheme` resource to change colours, sizes, font and marks.
+Replace the `OverlayTheme` resource to change colors, sizes, font and marks.
 The default marks are the words `PASS` and `FAIL`, because the bundled font has
 no `\u{2714}` or `\u{2718}` (they render as empty boxes); set a font that has
 them if you want the glyphs. The app's own targets read as their RON
