@@ -146,9 +146,9 @@ fn font() -> TextFont {
     }
 }
 
-fn label(parent: &mut ChildSpawnerCommands<'_>, text: impl Into<String>, colour: Color) -> Entity {
+fn label(parent: &mut ChildSpawnerCommands<'_>, text: impl Into<String>, color: Color) -> Entity {
     parent
-        .spawn((Text::new(text), font(), TextColor(colour), NotUnderTest))
+        .spawn((Text::new(text), font(), TextColor(color), NotUnderTest))
         .id()
 }
 
@@ -568,8 +568,8 @@ fn spawn_catalogue(list: &mut ChildSpawnerCommands<'_>, gallery: &Gallery) {
                     let result = label(head, "-", DIM);
                     head.commands().entity(result).insert(EntryResult(at));
                     let disabled = entry.scenario.disabled();
-                    let name_colour = if disabled.is_some() { DIM } else { TEXT };
-                    label(head, entry.scenario.name(), name_colour);
+                    let name_color = if disabled.is_some() { DIM } else { TEXT };
+                    label(head, entry.scenario.name(), name_color);
                     if !entry.scenario.tag_names().is_empty() {
                         let tags = entry
                             .scenario
@@ -615,7 +615,7 @@ pub(super) fn style_controls(
     state: Res<GalleryState>,
     mut buttons: Query<(&Control, &mut BackgroundColor), Without<StaticShade>>,
 ) {
-    for (control, mut colour) in &mut buttons {
+    for (control, mut color) in &mut buttons {
         let on = match control {
             Control::Play => state.is_playing(),
             Control::Speed(speed) => state.speed() == *speed,
@@ -672,8 +672,8 @@ pub(super) fn style_controls(
         } else {
             BUTTON
         };
-        if colour.0 != wanted {
-            colour.0 = wanted;
+        if color.0 != wanted {
+            color.0 = wanted;
         }
     }
 }
@@ -727,7 +727,7 @@ pub(super) fn update_labels(
         ),
     >,
 ) {
-    for (ControlLabel(control), mut text, mut colour) in &mut labels {
+    for (ControlLabel(control), mut text, mut color) in &mut labels {
         let wanted = control_text(*control, &state);
         if text.0 != wanted {
             text.0 = wanted;
@@ -737,11 +737,11 @@ pub(super) fn update_labels(
         } else {
             TEXT
         };
-        if colour.0 != tint {
-            colour.0 = tint;
+        if color.0 != tint {
+            color.0 = tint;
         }
     }
-    for (EntryResult(index), mut text, mut colour) in &mut results {
+    for (EntryResult(index), mut text, mut color) in &mut results {
         let (mark, tint) = match state.result(*index) {
             Some(ScenarioResult::Passed) => (theme.pass_mark.clone(), theme.pass_text),
             Some(ScenarioResult::Failed) => (theme.fail_mark.clone(), theme.fail_text),
@@ -750,7 +750,7 @@ pub(super) fn update_labels(
         if text.0 != mark {
             text.0 = mark;
         }
-        colour.0 = tint;
+        color.0 = tint;
     }
     let line = status_text(&state, &report, &gallery);
     for mut text in &mut status {

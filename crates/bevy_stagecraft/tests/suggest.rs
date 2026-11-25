@@ -182,7 +182,7 @@ fn real_click(app: &mut App) {
     }
 }
 
-fn button_centre(app: &mut App) -> Vec2 {
+fn button_center(app: &mut App) -> Vec2 {
     let world = app.world_mut();
     let label = world
         .query::<(Entity, &Text)>()
@@ -200,9 +200,9 @@ fn record_one_click(name: &str, hooks: SessionHooks) -> session::SavedSession {
     let dir = dir(name);
     let mut app = recording_app(&dir, hooks);
     session::start(app.world_mut(), "one click").expect("recording starts");
-    let centre = button_centre(&mut app);
-    real_move(&mut app, centre);
-    real_move(&mut app, centre);
+    let center = button_center(&mut app);
+    real_move(&mut app, center);
+    real_move(&mut app, center);
     real_click(&mut app);
     for _ in 0..5 {
         app.update();

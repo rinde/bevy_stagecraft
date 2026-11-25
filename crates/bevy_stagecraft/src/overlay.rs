@@ -357,7 +357,7 @@ pub struct OverlayHeld;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct OverlayRing {
     pub age: u16,
-    pub centre: Vec2,
+    pub center: Vec2,
 }
 
 /// Exists exactly while the finger is down. Not the arrow: a touch step never
@@ -375,7 +375,7 @@ pub enum TouchMarkKind {
 pub struct OverlayTouchMark {
     pub kind: TouchMarkKind,
     pub age: u16,
-    pub centre: Vec2,
+    pub center: Vec2,
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -659,7 +659,7 @@ fn spawn_checkpoint_flash(commands: &mut Commands, theme: &OverlayTheme, camera:
 
 fn spawn_pick_outlines(commands: &mut Commands, theme: &OverlayTheme, camera: Entity) {
     for kind in [PickOutlineKind::Selected, PickOutlineKind::Hovered] {
-        let colour = match kind {
+        let color = match kind {
             PickOutlineKind::Hovered => theme.pick_hovered,
             PickOutlineKind::Selected => theme.pick_selected,
         };
@@ -673,7 +673,7 @@ fn spawn_pick_outlines(commands: &mut Commands, theme: &OverlayTheme, camera: En
                 border: UiRect::all(px(PICK_OUTLINE_WIDTH)),
                 ..Node::default()
             },
-            BorderColor::all(colour),
+            BorderColor::all(color),
             Pickable::IGNORE,
             Visibility::Hidden,
             GlobalZIndex(OVERLAY_Z_INDEX),
@@ -718,8 +718,8 @@ fn logical_rect(
 ) -> Option<(Vec2, Vec2)> {
     let (node, transform) = nodes.get(entity).ok()?;
     let size = node.size() * node.inverse_scale_factor;
-    let centre = transform.affine().translation * node.inverse_scale_factor;
-    Some((centre - size / 2.0, size))
+    let center = transform.affine().translation * node.inverse_scale_factor;
+    Some((center - size / 2.0, size))
 }
 
 fn show_pick_outlines(
@@ -740,7 +740,7 @@ fn show_pick_outlines(
 ) {
     let mut hovered_top = None;
     for (OverlayPickOutline(kind), mut node, mut visibility, mut border) in &mut outlines {
-        let (entity, colour, gap) = match kind {
+        let (entity, color, gap) = match kind {
             PickOutlineKind::Hovered => (highlight.hovered, theme.pick_hovered, 0.0),
             PickOutlineKind::Selected => {
                 (highlight.selected, theme.pick_selected, PICK_OUTLINE_WIDTH)
@@ -758,7 +758,7 @@ fn show_pick_outlines(
         node.top = px(corner.y - out);
         node.width = px(2.0f32.mul_add(out, size.x));
         node.height = px(2.0f32.mul_add(out, size.y));
-        *border = BorderColor::all(colour);
+        *border = BorderColor::all(color);
         *visibility = Visibility::Inherited;
         if *kind == PickOutlineKind::Hovered {
             hovered_top = Some((corner.y - out, 2.0f32.mul_add(out, size.y)));
@@ -780,11 +780,11 @@ fn show_pick_outlines(
         background.0 = theme.pick_tag_background;
         *visibility = Visibility::Inherited;
     }
-    for (mut text, mut colour) in &mut texts {
+    for (mut text, mut color) in &mut texts {
         if text.0 != highlight.tag {
             text.0.clone_from(&highlight.tag);
         }
-        colour.0 = theme.pick_tag_text;
+        color.0 = theme.pick_tag_text;
     }
 }
 
@@ -912,7 +912,7 @@ fn spawn_rings(
     commands.spawn((
         OverlayRing {
             age: 0,
-            centre: position,
+            center: position,
         },
         OverlayRoot,
         NotUnderTest,
@@ -942,11 +942,11 @@ fn animate_rings(
         }
         let progress = f32::from(ring.age) / f32::from(RING_FRAMES);
         let size = (RING_END_SIZE - RING_START_SIZE).mul_add(progress, RING_START_SIZE);
-        let centre = ring.centre;
+        let center = ring.center;
         node.width = px(size);
         node.height = px(size);
-        node.left = px(centre.x - size / 2.0);
-        node.top = px(centre.y - size / 2.0);
+        node.left = px(center.x - size / 2.0);
+        node.top = px(center.y - size / 2.0);
         *border = BorderColor::all(
             theme
                 .press_ring
@@ -957,11 +957,11 @@ fn animate_rings(
 
 fn touch_mark_bundle(
     kind: TouchMarkKind,
-    centre: Vec2,
+    center: Vec2,
     theme: &OverlayTheme,
     camera: Entity,
 ) -> impl bevy::ecs::bundle::Bundle {
-    let colour = match kind {
+    let color = match kind {
         TouchMarkKind::Down => theme.touch_down_mark,
         TouchMarkKind::Up => theme.touch_up_mark,
     };
@@ -969,17 +969,17 @@ fn touch_mark_bundle(
         OverlayTouchMark {
             kind,
             age: 0,
-            centre,
+            center,
         },
         OverlayRoot,
         NotUnderTest,
         UiTargetCamera(camera),
         Node {
-            left: px(centre.x - TOUCH_MARK_START_SIZE / 2.0),
-            top: px(centre.y - TOUCH_MARK_START_SIZE / 2.0),
+            left: px(center.x - TOUCH_MARK_START_SIZE / 2.0),
+            top: px(center.y - TOUCH_MARK_START_SIZE / 2.0),
             ..round_marker(TOUCH_MARK_START_SIZE, TOUCH_MARK_BORDER)
         },
-        BorderColor::all(colour),
+        BorderColor::all(color),
         Pickable::IGNORE,
         GlobalZIndex(OVERLAY_Z_INDEX),
     )
@@ -1016,7 +1016,7 @@ fn show_fingers(
         ));
     }
     let mut seen = Vec::new();
-    for (entity, OverlayFinger(id), mut node, mut colour) in &mut fingers {
+    for (entity, OverlayFinger(id), mut node, mut color) in &mut fingers {
         let Some(touch) = touches.get_pressed(*id) else {
             commands.entity(entity).despawn();
             continue;
@@ -1025,7 +1025,7 @@ fn show_fingers(
         let at = touch.position();
         node.left = px(at.x - FINGER_SIZE / 2.0);
         node.top = px(at.y - FINGER_SIZE / 2.0);
-        colour.0 = theme.finger;
+        color.0 = theme.finger;
     }
     for touch in touches.iter() {
         if seen.contains(&touch.id()) {
@@ -1067,13 +1067,13 @@ fn animate_touch_marks(
             (TOUCH_MARK_END_SIZE - TOUCH_MARK_START_SIZE).mul_add(progress, TOUCH_MARK_START_SIZE);
         node.width = px(size);
         node.height = px(size);
-        node.left = px(mark.centre.x - size / 2.0);
-        node.top = px(mark.centre.y - size / 2.0);
-        let colour = match mark.kind {
+        node.left = px(mark.center.x - size / 2.0);
+        node.top = px(mark.center.y - size / 2.0);
+        let color = match mark.kind {
             TouchMarkKind::Down => theme.touch_down_mark,
             TouchMarkKind::Up => theme.touch_up_mark,
         };
-        *border = BorderColor::all(colour.with_alpha(colour.alpha() * (1.0 - progress)));
+        *border = BorderColor::all(color.with_alpha(color.alpha() * (1.0 - progress)));
     }
 }
 
@@ -1095,16 +1095,16 @@ fn update_trail(
         }
     }
     *last = position;
-    for (dot, mut node, mut colour) in &mut dots {
+    for (dot, mut node, mut color) in &mut dots {
         // Index 0 is where the arrow is now, so the dots start behind it.
         let Some(at) = history.0.get(usize::from(dot.0) + 1) else {
-            *colour = BackgroundColor(theme.trail.with_alpha(0.0));
+            *color = BackgroundColor(theme.trail.with_alpha(0.0));
             continue;
         };
         let fade = 1.0 - (f32::from(dot.0) / f32::from(TRAIL_LENGTH));
         node.left = px(at.x - TRAIL_DOT_SIZE / 2.0);
         node.top = px(at.y - TRAIL_DOT_SIZE / 2.0);
-        *colour = BackgroundColor(theme.trail.with_alpha(theme.trail.alpha() * fade));
+        *color = BackgroundColor(theme.trail.with_alpha(theme.trail.alpha() * fade));
     }
 }
 
@@ -1131,10 +1131,10 @@ fn show_checkpoint(
     }
     let age = notice.shown.as_ref().map(|(age, _)| *age);
     let fading = age.filter(|age| *age < CHECKPOINT_FLASH_FRAMES);
-    for (mut colour, mut visibility) in &mut flash {
+    for (mut color, mut visibility) in &mut flash {
         if let Some(age) = fading {
             let left = 1.0 - f32::from(age) / f32::from(CHECKPOINT_FLASH_FRAMES);
-            colour.0 = theme
+            color.0 = theme
                 .checkpoint_flash
                 .with_alpha(theme.checkpoint_flash.alpha() * left);
             *visibility = Visibility::Inherited;
@@ -1153,11 +1153,11 @@ fn show_checkpoint(
             .as_ref()
             .map_or("", |(_, caption)| caption.as_str())
     });
-    for (mut text, mut colour) in &mut line {
+    for (mut text, mut color) in &mut line {
         if text.0 != caption {
             caption.clone_into(&mut text.0);
         }
-        colour.0 = theme.checkpoint_text;
+        color.0 = theme.checkpoint_text;
     }
 }
 
@@ -1205,9 +1205,9 @@ fn update_caption(
     for mut text in &mut step {
         text.0.clone_from(&step_text);
     }
-    for (mut text, mut colour) in &mut checks {
+    for (mut text, mut color) in &mut checks {
         text.0.clone_from(&checks_text);
-        colour.0 = if failed {
+        color.0 = if failed {
             theme.fail_text
         } else {
             theme.pass_text

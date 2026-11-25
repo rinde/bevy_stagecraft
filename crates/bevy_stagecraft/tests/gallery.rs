@@ -310,7 +310,7 @@ fn real_key(app: &mut App, window: Entity, key_code: KeyCode) {
     app.world_mut().write_message(input);
 }
 
-fn centre_of_button_with(app: &mut App, text: &str) -> Vec2 {
+fn center_of_button_with(app: &mut App, text: &str) -> Vec2 {
     let world = app.world_mut();
     let label = world
         .query::<(Entity, &Text)>()
@@ -498,7 +498,7 @@ fn moving_and_clicking_the_real_mouse_over_the_app_changes_nothing_during_playba
         .get::<Window>(window)
         .and_then(Window::cursor_position);
     let _ = script_cursor;
-    let add = centre_of_button_with(&mut app, "Add");
+    let add = center_of_button_with(&mut app, "Add");
     real_move(&mut app, window, add);
     real_click(&mut app, window);
     real_key(&mut app, window, KeyCode::KeyA);
@@ -570,7 +570,7 @@ fn take_over_pauses_the_script_and_gives_the_app_back_to_the_real_mouse() {
     }
     assert_eq!(frames(app.world()), held, "the script is paused");
     let window = primary(&mut app);
-    let add = centre_of_button_with(&mut app, "Add");
+    let add = center_of_button_with(&mut app, "Add");
     real_move(&mut app, window, add);
     app.update();
     app.update();
@@ -707,7 +707,7 @@ fn real_clicks_on_the_scenarios_windows_buttons_work_during_playback() {
     app.update();
     app.update();
     let second = scenarios_window(&mut app);
-    let pause = centre_of_button_with(&mut app, "Pause");
+    let pause = center_of_button_with(&mut app, "Pause");
     real_move(&mut app, second, pause);
     app.update();
     app.update();
@@ -871,7 +871,7 @@ fn a_real_click_reaches_the_app_once_and_is_not_replayed_every_update() {
     ask(&mut app, GalleryAction::TakeOver);
     app.update();
     let window = primary(&mut app);
-    let add = centre_of_button_with(&mut app, "Add");
+    let add = center_of_button_with(&mut app, "Add");
     real_move(&mut app, window, add);
     app.update();
     real_click(&mut app, window);
@@ -915,7 +915,7 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
     app.update();
 
     let window = primary(&mut app);
-    let add = centre_of_button_with(&mut app, "Add");
+    let add = center_of_button_with(&mut app, "Add");
     for step in 1..=8_u8 {
         let t = f32::from(step) / 8.0;
         real_move(&mut app, window, Vec2::new(20.0, 20.0).lerp(add, t));
@@ -930,7 +930,7 @@ fn a_session_recorded_in_the_gallery_plays_back_to_the_same_end_state() {
     assert_eq!(count(app.world()), 3, "the real clicks reached the app");
 
     let second = scenarios_window(&mut app);
-    let restart = centre_of_button_with(&mut app, "Step frame");
+    let restart = center_of_button_with(&mut app, "Step frame");
     real_move(&mut app, second, restart);
     app.update();
     app.update();
@@ -1012,7 +1012,7 @@ fn stopping_a_recording_lists_the_suggested_checks_and_a_click_unticks_one_in_th
     ask(&mut app, GalleryAction::Record);
     app.update();
     let window = primary(&mut app);
-    let add = centre_of_button_with(&mut app, "Add");
+    let add = center_of_button_with(&mut app, "Add");
     real_move(&mut app, window, add);
     app.update();
     app.update();
@@ -1040,7 +1040,7 @@ fn stopping_a_recording_lists_the_suggested_checks_and_a_click_unticks_one_in_th
     assert_eq!(read(&path).expect.len(), suggestions.len());
 
     let second = scenarios_window(&mut app);
-    let at = centre_of_button_with(&mut app, &row);
+    let at = center_of_button_with(&mut app, &row);
     real_move(&mut app, second, at);
     app.update();
     app.update();
@@ -1093,7 +1093,7 @@ fn a_checkpoint_while_recording_in_the_gallery_gets_its_own_checklist_and_a_clic
     );
     app.update();
     let window = primary(&mut app);
-    let add = centre_of_button_with(&mut app, "Add");
+    let add = center_of_button_with(&mut app, "Add");
     real_move(&mut app, window, add);
     app.update();
     app.update();
@@ -1146,7 +1146,7 @@ fn a_checkpoint_while_recording_in_the_gallery_gets_its_own_checklist_and_a_clic
     assert!(read(&path).steps.contains(&check_step));
 
     let second = scenarios_window(&mut app);
-    let row = centre_of_button_with(&mut app, &format!("[x] {at_checkpoint}"));
+    let row = center_of_button_with(&mut app, &format!("[x] {at_checkpoint}"));
     real_move(&mut app, second, row);
     app.update();
     app.update();
@@ -1200,7 +1200,7 @@ fn the_wheel_scrolls_long_checklists_while_the_pointer_is_over_them() {
         .get::<ChildOf>(label)
         .expect("in the details panel")
         .parent();
-    let at = centre_of_button_with(&mut app, "Checkpoint 2: nothing changed");
+    let at = center_of_button_with(&mut app, "Checkpoint 2: nothing changed");
     let second = scenarios_window(&mut app);
     real_move(&mut app, second, at);
     app.update();
@@ -1371,7 +1371,7 @@ fn new_is_refused_while_recording_and_its_buttons_ask_for_it() {
     ask(&mut app, GalleryAction::StopRecording);
 
     let second = scenarios_window(&mut app);
-    let button = centre_of_button_with(&mut app, "New: empty world");
+    let button = center_of_button_with(&mut app, "New: empty world");
     real_move(&mut app, second, button);
     app.update();
     app.update();
@@ -1411,7 +1411,7 @@ fn pick_button(app: &mut App, text: &str) {
         "pick mode is on"
     );
     let window = primary(app);
-    let at = centre_of_button_with(app, text);
+    let at = center_of_button_with(app, text);
     real_move(app, window, at);
     app.update();
     app.update();
@@ -1463,7 +1463,7 @@ fn picking_a_disabled_button_while_recording_offers_disabled_and_the_recording_p
 
     let second = scenarios_window(&mut app);
     let spelled = ron::to_string(&wanted).expect("the check is written as RON");
-    let row = centre_of_button_with(&mut app, &format!("[+] {spelled}"));
+    let row = center_of_button_with(&mut app, &format!("[+] {spelled}"));
     real_move(&mut app, second, row);
     app.update();
     app.update();
@@ -1542,7 +1542,7 @@ fn picking_does_not_change_the_apps_state() {
         app.world().resource::<PickHighlight>(),
         &PickHighlight::default()
     );
-    let add = centre_of_button_with(&mut app, "Add");
+    let add = center_of_button_with(&mut app, "Add");
     real_move(&mut app, window, add);
     app.update();
     app.update();

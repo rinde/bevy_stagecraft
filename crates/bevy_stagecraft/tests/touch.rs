@@ -289,7 +289,7 @@ fn two_fingers_can_be_down_at_once() {
 }
 
 #[test]
-fn a_cancelled_finger_gives_no_click() {
+fn a_canceled_finger_gives_no_click() {
     let (app, report) = play(&scenario([
         Step::touch_down(pad()),
         Step::wait(1),
@@ -302,7 +302,7 @@ fn a_cancelled_finger_gives_no_click() {
 }
 
 #[test]
-fn a_cancelled_finger_gives_out_and_no_pointer_cancel_on_bevy_0_20() {
+fn a_canceled_finger_gives_out_and_no_pointer_cancel_on_bevy_0_20() {
     let (app, report) = play(&scenario([
         Step::touch_down(pad()),
         Step::wait(1),
@@ -319,7 +319,7 @@ fn a_cancelled_finger_gives_out_and_no_pointer_cancel_on_bevy_0_20() {
 }
 
 #[test]
-fn a_cancelled_finger_shows_in_touches_in_the_frame_the_step_plays() {
+fn a_canceled_finger_shows_in_touches_in_the_frame_the_step_plays() {
     let (app, report) = play(&scenario([
         Step::touch_down(pad()),
         Step::wait(1),

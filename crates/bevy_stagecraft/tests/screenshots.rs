@@ -12,8 +12,8 @@ use bevy_stagecraft::{
     Check, Recorder, RecorderPlugins, Scenario, ScreenshotSettings, Step, Target,
 };
 
-fn srgb8(colour: Color) -> [u8; 3] {
-    let [red, green, blue, _] = colour.to_srgba().to_u8_array();
+fn srgb8(color: Color) -> [u8; 3] {
+    let [red, green, blue, _] = color.to_srgba().to_u8_array();
     [red, green, blue]
 }
 
@@ -30,8 +30,8 @@ fn output_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn solid_colours(dir: &Path, inner: Color) -> Scenario {
-    Scenario::new("Solid colours")
+fn solid_colors(dir: &Path, inner: Color) -> Scenario {
+    Scenario::new("Solid colors")
         .window_size(320, 240)
         .with_base_dir(dir)
         .setup(move |world| {
@@ -75,7 +75,7 @@ fn recorder_app(update: bool) -> App {
 #[test]
 fn a_screenshot_check_is_skipped_in_a_plain_headless_run() {
     let dir = output_dir("screenshots-headless");
-    let report = solid_colours(&dir, Color::WHITE).run_headless();
+    let report = solid_colors(&dir, Color::WHITE).run_headless();
     assert!(report.passed(), "failures: {:?}", report.failures());
     assert_eq!(report.screenshots.len(), 0);
     assert!(!dir.exists(), "nothing is written without a renderer");
@@ -86,9 +86,9 @@ fn a_screenshot_check_is_skipped_in_a_plain_headless_run() {
 fn gpu_a_screenshot_check_compares_with_its_baseline_and_writes_a_diff_on_a_change() {
     let dir = output_dir("recorder-screenshot-check");
     let blue = Color::srgb_u8(30, 60, 220);
-    let baseline = dir.join("solid-colours/home.png");
+    let baseline = dir.join("solid-colors/home.png");
 
-    let first = solid_colours(&dir, blue).run_in(&mut recorder_app(false));
+    let first = solid_colors(&dir, blue).run_in(&mut recorder_app(false));
     assert!(!first.passed(), "a missing baseline fails the first run");
     assert!(baseline.exists(), "the picture is kept as the baseline");
 
@@ -102,22 +102,22 @@ fn gpu_a_screenshot_check_compares_with_its_baseline_and_writes_a_diff_on_a_chan
     );
     assert!(near(picture.get_pixel(5, 5).0, [200, 40, 40]));
 
-    let second = solid_colours(&dir, blue).run_in(&mut recorder_app(false));
+    let second = solid_colors(&dir, blue).run_in(&mut recorder_app(false));
     assert!(second.passed(), "failures: {:?}", second.failures());
 
     let green = Color::srgb_u8(30, 200, 60);
-    let changed = solid_colours(&dir, green).run_in(&mut recorder_app(false));
+    let changed = solid_colors(&dir, green).run_in(&mut recorder_app(false));
     assert!(!changed.passed());
-    let actual = dir.join("solid-colours/.diagnostics/home.actual.png");
-    let diff = dir.join("solid-colours/.diagnostics/home.diff.png");
+    let actual = dir.join("solid-colors/.diagnostics/home.actual.png");
+    let diff = dir.join("solid-colors/.diagnostics/home.diff.png");
     assert!(actual.exists() && diff.exists(), "{:?}", changed.failures());
     let diff_picture = image::open(&diff).expect("the diff").to_rgba8();
     assert_eq!(diff_picture.get_pixel(150, 50).0, [255, 0, 255, 255]);
     assert_ne!(diff_picture.get_pixel(5, 5).0, [255, 0, 255, 255]);
 
-    let updated = solid_colours(&dir, green).run_in(&mut recorder_app(true));
+    let updated = solid_colors(&dir, green).run_in(&mut recorder_app(true));
     assert!(updated.passed(), "failures: {:?}", updated.failures());
-    let after = solid_colours(&dir, green).run_in(&mut recorder_app(false));
+    let after = solid_colors(&dir, green).run_in(&mut recorder_app(false));
     assert!(after.passed(), "failures: {:?}", after.failures());
 }
 
@@ -127,21 +127,21 @@ fn gpu_the_index_links_the_pictures_of_a_screenshot_mismatch() {
     let dir = output_dir("recorder-screenshot-index");
     let baselines = dir.join("baselines");
     let blue = Color::srgb_u8(30, 60, 220);
-    let _ = solid_colours(&baselines, blue).run_in(&mut recorder_app(false));
+    let _ = solid_colors(&baselines, blue).run_in(&mut recorder_app(false));
     let out = dir.join("out");
     Recorder::new(|_app| {})
-        .scenario(solid_colours(&baselines, Color::srgb_u8(30, 200, 60)))
+        .scenario(solid_colors(&baselines, Color::srgb_u8(30, 200, 60)))
         .record(&out)
         .expect("recording works");
     let index = fs::read_to_string(out.join("index.html")).expect("the index");
     assert!(
-        index.contains("solid-colours/snapshots/home.diff.png"),
+        index.contains("solid-colors/snapshots/home.diff.png"),
         "{index}"
     );
-    assert!(out.join("solid-colours/snapshots/home.diff.png").exists());
-    assert!(out.join("solid-colours/snapshots/home.actual.png").exists());
+    assert!(out.join("solid-colors/snapshots/home.diff.png").exists());
+    assert!(out.join("solid-colors/snapshots/home.actual.png").exists());
     assert!(
-        out.join("solid-colours/snapshots/home.baseline.png")
+        out.join("solid-colors/snapshots/home.baseline.png")
             .exists()
     );
 }

@@ -120,9 +120,9 @@ enum SessionTarget {
 impl AppTarget for SessionTarget {
     fn resolve(&self, _world: &World) -> Result<ResolvedTarget, String> {
         let Self::Cell(column, row) = self;
-        let centre =
+        let center =
             |cell: &i32| f32::mul_add(f32::from(i16::try_from(*cell).unwrap_or(0)), 100.0, 50.0);
-        Ok(ResolvedTarget::at(Vec2::new(centre(column), centre(row))))
+        Ok(ResolvedTarget::at(Vec2::new(center(column), center(row))))
     }
 
     fn at(world: &World, position: Vec2) -> Option<Self> {
@@ -196,7 +196,7 @@ fn real_click(app: &mut App) {
     }
 }
 
-fn centre_of(app: &mut App, text: &str) -> Vec2 {
+fn center_of(app: &mut App, text: &str) -> Vec2 {
     let world = app.world_mut();
     let label = world
         .query::<(Entity, &Text)>()
@@ -219,7 +219,7 @@ fn real_glide(app: &mut App, from: Vec2, to: Vec2) {
 }
 
 fn use_the_app(app: &mut App) {
-    let button = centre_of(app, "+1");
+    let button = center_of(app, "+1");
     real_glide(app, Vec2::new(10.0, 10.0), button);
     for _ in 0..3 {
         real_click(app);
@@ -263,7 +263,7 @@ fn a_recorded_session_plays_back_to_the_same_end_state() {
 }
 
 #[test]
-fn the_recorded_file_reads_as_a_few_labelled_steps() {
+fn the_recorded_file_reads_as_a_few_labeled_steps() {
     let dir = dir("session-readable");
     let mut app = app(&dir);
     session::start(app.world_mut(), "Three clicks").expect("recording starts");
@@ -322,7 +322,7 @@ fn a_session_is_the_same_whatever_frame_rate_it_ran_at() {
         let dir = dir(&format!("session-rate-{extra_updates}"));
         let mut app = app(&dir);
         session::start(app.world_mut(), "rate").expect("starts");
-        let button = centre_of(&mut app, "+1");
+        let button = center_of(&mut app, "+1");
         real_glide(&mut app, Vec2::new(10.0, 10.0), button);
         real_click(&mut app);
         for _ in 0..(20 + extra_updates) {
@@ -435,7 +435,7 @@ fn requests_start_and_stop_at_the_next_update_for_a_command_line_flag() {
 }
 
 #[test]
-fn a_click_that_landed_on_nothing_labelled_stays_a_screen_position() {
+fn a_click_that_landed_on_nothing_labeled_stays_a_screen_position() {
     let dir = dir("session-screen");
     let mut app = app(&dir);
     session::start(app.world_mut(), "ground").expect("starts");
@@ -529,13 +529,13 @@ fn a_recorded_click_names_a_test_id_then_role_and_label_then_text_then_the_posit
     for _ in 0..2 {
         app.update();
     }
-    let tagged = centre_of(&mut app, "Tagged");
+    let tagged = center_of(&mut app, "Tagged");
     assert_eq!(
         recorded_target(&mut app, "tagged", tagged),
         Target::component::<Tagged>(),
         "a test id first"
     );
-    let plus = centre_of(&mut app, "+1");
+    let plus = center_of(&mut app, "+1");
     assert_eq!(
         recorded_target(&mut app, "role", plus),
         Target::role(WidgetRole::Button, "+1"),
@@ -644,7 +644,7 @@ fn a_recorded_real_tap_is_a_touch_tap_that_plays_back() {
     let dir = dir("session-touch");
     let mut app = app(&dir);
     session::start(app.world_mut(), "Touch").expect("recording starts");
-    let button = centre_of(&mut app, "+1");
+    let button = center_of(&mut app, "+1");
     real_touch(&mut app, TouchPhase::Started, button);
     real_touch(&mut app, TouchPhase::Ended, button);
     for _ in 0..5 {

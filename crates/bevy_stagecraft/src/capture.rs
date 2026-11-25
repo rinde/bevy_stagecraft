@@ -81,8 +81,8 @@ impl Frame {
     }
 
     #[must_use]
-    pub fn filled(width: u32, height: u32, colour: [u8; 4]) -> Self {
-        let rgba = colour
+    pub fn filled(width: u32, height: u32, color: [u8; 4]) -> Self {
+        let rgba = color
             .iter()
             .copied()
             .cycle()
@@ -157,7 +157,7 @@ impl Frame {
         <[u8; 4]>::try_from(bytes).ok()
     }
 
-    fn put(&mut self, x: i32, y: i32, colour: [u8; 4]) {
+    fn put(&mut self, x: i32, y: i32, color: [u8; 4]) {
         let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else {
             return;
         };
@@ -166,16 +166,16 @@ impl Frame {
         }
         let start = offset(x, y, self.width);
         if let Some(target) = self.rgba.get_mut(start..start + CHANNELS) {
-            target.copy_from_slice(&colour);
+            target.copy_from_slice(&color);
         }
     }
 
-    fn fill_rect(&mut self, left: u32, top: u32, width: u32, height: u32, colour: [u8; 4]) {
+    fn fill_rect(&mut self, left: u32, top: u32, width: u32, height: u32, color: [u8; 4]) {
         for y in top..top.saturating_add(height).min(self.height) {
             for x in left..left.saturating_add(width).min(self.width) {
                 let start = offset(x, y, self.width);
                 if let Some(target) = self.rgba.get_mut(start..start + CHANNELS) {
-                    target.copy_from_slice(&colour);
+                    target.copy_from_slice(&color);
                 }
             }
         }
@@ -332,14 +332,14 @@ pub fn filmstrip(cells: &[FilmstripCell], columns: usize) -> Option<Frame> {
     Some(strip)
 }
 
-fn draw_line(frame: &mut Frame, from: (i32, i32), to: (i32, i32), colour: [u8; 4]) {
+fn draw_line(frame: &mut Frame, from: (i32, i32), to: (i32, i32), color: [u8; 4]) {
     let steps = (to.0 - from.0).abs().max((to.1 - from.1).abs()).max(1);
     for step in 0..=steps {
         let x = from.0 + (to.0 - from.0) * step / steps;
         let y = from.1 + (to.1 - from.1) * step / steps;
         for dy in 0..STROKE {
             for dx in 0..STROKE {
-                frame.put(x + dx, y + dy, colour);
+                frame.put(x + dx, y + dy, color);
             }
         }
     }
@@ -414,8 +414,8 @@ mod tests {
 
     use super::*;
 
-    fn flat(width: u32, height: u32, colour: [u8; 4]) -> Frame {
-        Frame::filled(width, height, colour)
+    fn flat(width: u32, height: u32, color: [u8; 4]) -> Frame {
+        Frame::filled(width, height, color)
     }
 
     #[test]
@@ -466,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn a_filmstrip_lays_cells_in_a_grid_with_coloured_bands() {
+    fn a_filmstrip_lays_cells_in_a_grid_with_colored_bands() {
         let cell = |mark, number| FilmstripCell {
             frame: flat(10, 10, [255, 255, 255, 255]),
             mark,

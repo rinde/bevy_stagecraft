@@ -21,8 +21,8 @@ use bevy_stagecraft::{HeadlessPlugins, SyntheticInput};
 #[derive(Resource, Default)]
 struct Activations(u32);
 
-const BUTTON_CENTRE: Vec2 = Vec2::new(150.0, 50.0);
-const SCROLL_CENTRE: Vec2 = Vec2::new(150.0, 300.0);
+const BUTTON_CENTER: Vec2 = Vec2::new(150.0, 50.0);
+const SCROLL_CENTER: Vec2 = Vec2::new(150.0, 300.0);
 
 fn ui_app() -> App {
     let mut app = App::new();
@@ -88,7 +88,7 @@ fn a_synthetic_click_on_a_button_fires_activate() {
     let mut app = ui_app();
     {
         let mut input = app.world_mut().resource_mut::<SyntheticInput>();
-        input.move_cursor(BUTTON_CENTRE);
+        input.move_cursor(BUTTON_CENTER);
     }
     settle(&mut app);
     {
@@ -131,7 +131,7 @@ fn a_wheel_turn_over_a_scroll_area_scrolls_it() {
     let mut app = ui_app();
     app.world_mut()
         .resource_mut::<SyntheticInput>()
-        .move_cursor(SCROLL_CENTRE);
+        .move_cursor(SCROLL_CENTER);
     settle(&mut app);
     app.world_mut()
         .resource_mut::<SyntheticInput>()

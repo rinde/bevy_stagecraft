@@ -187,7 +187,7 @@ fn nothing_matches(world: &World, target: &Target) -> String {
                     .filter(|text| !text.is_empty())
             });
             format!(
-                "no {role:?} is labelled \"{label}\"{}",
+                "no {role:?} is labeled \"{label}\"{}",
                 did_you_mean_quoted(label, &labels)
             )
         }
@@ -251,9 +251,9 @@ fn describe_match(world: &World, entity: Entity) -> String {
         world.get::<UiGlobalTransform>(entity),
     ) {
         (Some(node), Some(transform)) => {
-            let centre = transform.affine().translation * node.inverse_scale_factor;
-            let centre = (centre * MESSAGE_PRECISION).round() / MESSAGE_PRECISION;
-            format!("{what} ({entity}) at ({}, {})", centre.x, centre.y)
+            let center = transform.affine().translation * node.inverse_scale_factor;
+            let center = (center * MESSAGE_PRECISION).round() / MESSAGE_PRECISION;
+            format!("{what} ({entity}) at ({}, {})", center.x, center.y)
         }
         _ => format!("{what} ({entity})"),
     }

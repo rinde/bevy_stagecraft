@@ -105,7 +105,7 @@ fn button_with(app: &mut App, text: &str) -> Entity {
         .parent()
 }
 
-fn centre(app: &App, entity: Entity) -> Vec2 {
+fn center(app: &App, entity: Entity) -> Vec2 {
     let world = app.world();
     let node = world.get::<ComputedNode>(entity).expect("laid out");
     let transform = world.get::<UiGlobalTransform>(entity).expect("positioned");
@@ -116,7 +116,7 @@ fn centre(app: &App, entity: Entity) -> Vec2 {
 fn the_node_under_a_position_is_the_apps_topmost_and_never_the_toolings() {
     let mut app = form_app();
     let save = button_with(&mut app, "Save");
-    let hit = node_at(app.world(), centre(&app, save)).expect("something is there");
+    let hit = node_at(app.world(), center(&app, save)).expect("something is there");
     assert!(
         hit == save || hit == text_node(&mut app, "Save"),
         "the label or its button"
@@ -128,7 +128,7 @@ fn the_node_under_a_position_is_the_apps_topmost_and_never_the_toolings() {
     );
 
     let pause = button_with(&mut app, "Pause");
-    let under_tooling = node_at(app.world(), centre(&app, pause)).expect("the app's node");
+    let under_tooling = node_at(app.world(), center(&app, pause)).expect("the app's node");
     assert_eq!(
         subject_of(app.world(), under_tooling),
         pause,

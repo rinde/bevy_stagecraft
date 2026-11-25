@@ -73,11 +73,11 @@ pub fn subject_of(world: &World, node: Entity) -> Entity {
 }
 
 /// Rounded as a recording rounds positions.
-fn centre_of(world: &World, entity: Entity) -> Option<Vec2> {
+fn center_of(world: &World, entity: Entity) -> Option<Vec2> {
     let node = world.get::<ComputedNode>(entity)?;
     let transform = world.get::<UiGlobalTransform>(entity)?;
-    let centre = transform.affine().translation * node.inverse_scale_factor;
-    Some((centre * SCREEN_PRECISION).round() / SCREEN_PRECISION)
+    let center = transform.affine().translation * node.inverse_scale_factor;
+    Some((center * SCREEN_PRECISION).round() / SCREEN_PRECISION)
 }
 
 fn texts_within(world: &World, entity: Entity) -> Vec<String> {
@@ -128,7 +128,7 @@ pub fn target_alternatives(
             }
         }
     }
-    let position = at.or_else(|| subject.and_then(|subject| centre_of(world, subject)));
+    let position = at.or_else(|| subject.and_then(|subject| center_of(world, subject)));
     if let Some(position) = position {
         if let Some(app) = app_target_at(world, position)
             && !targets.contains(&app)

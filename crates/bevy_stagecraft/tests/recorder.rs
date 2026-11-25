@@ -110,7 +110,7 @@ fn gpu_a_click_reaches_a_button_through_an_image_targeted_camera() {
     let background = picture.pixel(280, 40).expect("inside the frame");
     assert!(
         background.iter().take(3).all(|c| *c < 128),
-        "clear colour is dark: {background:?}"
+        "clear color is dark: {background:?}"
     );
 }
 
@@ -299,8 +299,8 @@ fn gpu_shuffling_the_order_of_unordered_systems_changes_no_recorded_frame() {
     }
 }
 
-fn srgb8(colour: Color) -> [u8; 3] {
-    let [red, green, blue, _] = colour.to_srgba().to_u8_array();
+fn srgb8(color: Color) -> [u8; 3] {
+    let [red, green, blue, _] = color.to_srgba().to_u8_array();
     [red, green, blue]
 }
 

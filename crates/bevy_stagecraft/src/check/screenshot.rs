@@ -17,11 +17,11 @@ use super::{Check, Verdict, widget};
 use crate::targets::{Lookup, Target};
 
 pub(crate) const UPDATE_ENV: &str = "RIN_UPDATE_SNAPSHOTS";
-pub(crate) const DEFAULT_COLOUR_TOLERANCE: u8 = 2;
+pub(crate) const DEFAULT_COLOR_TOLERANCE: u8 = 2;
 const CHANNELS: usize = 4;
 /// A renderer that never answers is an error, not a hang.
 const MAX_PICTURE_FRAMES: u32 = 600;
-const DIFF_COLOUR: [u8; 4] = [255, 0, 255, 255];
+const DIFF_COLOR: [u8; 4] = [255, 0, 255, 255];
 const DIFF_DIM_DIVISOR: u8 = 3;
 /// A name may not start with `.`, so no baseline can be this directory or lie
 /// in it.
@@ -34,14 +34,14 @@ const DIFF_SUFFIX: &str = "diff";
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Tolerance {
-    pub colour: u8,
+    pub color: u8,
     pub pixels: f64,
 }
 
 impl Default for Tolerance {
     fn default() -> Self {
         Self {
-            colour: DEFAULT_COLOUR_TOLERANCE,
+            color: DEFAULT_COLOR_TOLERANCE,
             pixels: 0.0,
         }
     }
@@ -51,14 +51,14 @@ impl Tolerance {
     #[must_use]
     pub const fn exact() -> Self {
         Self {
-            colour: 0,
+            color: 0,
             pixels: 0.0,
         }
     }
 
     #[must_use]
-    pub const fn with_colour(mut self, colour: u8) -> Self {
-        self.colour = colour;
+    pub const fn with_color(mut self, color: u8) -> Self {
+        self.color = color;
         self
     }
 
@@ -86,8 +86,8 @@ impl fmt::Display for Tolerance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "colour {}, {}% of pixels",
-            self.colour,
+            "color {}, {}% of pixels",
+            self.color,
             self.pixels * 100.0
         )
     }
@@ -200,8 +200,8 @@ pub(crate) struct Picture {
 
 impl Picture {
     #[cfg(test)]
-    pub(crate) fn filled(width: u32, height: u32, colour: [u8; 4]) -> Self {
-        let rgba = colour
+    pub(crate) fn filled(width: u32, height: u32, color: [u8; 4]) -> Self {
+        let rgba = color
             .iter()
             .copied()
             .cycle()
@@ -239,22 +239,22 @@ impl Picture {
         })
     }
 
-    fn differing(&self, other: &Self, colour: u8) -> usize {
+    fn differing(&self, other: &Self, color: u8) -> usize {
         let (ours, _) = self.rgba.as_chunks::<CHANNELS>();
         let (theirs, _) = other.rgba.as_chunks::<CHANNELS>();
         ours.iter()
             .zip(theirs)
-            .filter(|(a, b)| differs(**a, **b, colour))
+            .filter(|(a, b)| differs(**a, **b, color))
             .count()
     }
 
-    fn diff(&self, other: &Self, colour: u8) -> Self {
+    fn diff(&self, other: &Self, color: u8) -> Self {
         let mut rgba = Vec::with_capacity(self.rgba.len());
         let (ours, _) = self.rgba.as_chunks::<CHANNELS>();
         let (theirs, _) = other.rgba.as_chunks::<CHANNELS>();
         for (a, b) in ours.iter().zip(theirs) {
-            if differs(*a, *b, colour) {
-                rgba.extend_from_slice(&DIFF_COLOUR);
+            if differs(*a, *b, color) {
+                rgba.extend_from_slice(&DIFF_COLOR);
             } else {
                 rgba.extend(a.iter().take(3).map(|channel| channel / DIFF_DIM_DIVISOR));
                 rgba.push(u8::MAX);
@@ -268,8 +268,8 @@ impl Picture {
     }
 }
 
-fn differs(a: [u8; CHANNELS], b: [u8; CHANNELS], colour: u8) -> bool {
-    a.iter().zip(b).any(|(a, b)| a.abs_diff(b) > colour)
+fn differs(a: [u8; CHANNELS], b: [u8; CHANNELS], color: u8) -> bool {
+    a.iter().zip(b).any(|(a, b)| a.abs_diff(b) > color)
 }
 
 #[derive(Debug, Default)]
@@ -613,20 +613,20 @@ fn compare(
             diff: None,
         });
     }
-    let differing = actual.differing(&expected, tolerance.colour);
+    let differing = actual.differing(&expected, tolerance.color);
     let total = actual.rgba.len() / CHANNELS;
     if within_share(differing, total, tolerance.pixels) {
         remove_stale(&actual_path, &diff_path);
         return Ok(Compared::Matched);
     }
     write_png(&actual_path, actual)?;
-    write_png(&diff_path, &expected.diff(actual, tolerance.colour))?;
+    write_png(&diff_path, &expected.diff(actual, tolerance.color))?;
     Ok(Compared::Differs {
         message: format!(
             "{differing} of {total} pixels differ from the baseline `{}` by more than {} in a \
              channel (up to {}% may); the picture is in `{}`, what differs in `{}`",
             baseline.display(),
-            tolerance.colour,
+            tolerance.color,
             tolerance.pixels * 100.0,
             actual_path.display(),
             diff_path.display()
@@ -722,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scale_grows_the_crop_about_the_centre() {
+    fn a_scale_grows_the_crop_about_the_center() {
         let scaled =
             Affine2::from_scale_angle_translation(Vec2::new(2.0, 0.5), 0.0, Vec2::new(100.0, 50.0));
         let (top_left, size) = bounds(scaled, Vec2::new(40.0, 20.0));
@@ -828,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn a_picture_differs_only_past_the_colour_tolerance() {
+    fn a_picture_differs_only_past_the_color_tolerance() {
         let a = Picture::filled(4, 4, [100, 100, 100, 255]);
         let near = Picture::filled(4, 4, [102, 99, 100, 255]);
         let far = Picture::filled(4, 4, [110, 100, 100, 255]);
@@ -854,7 +854,7 @@ mod tests {
             *byte = 200;
         }
         let diff = a.diff(&b, 0);
-        assert_eq!(diff.pixel(0, 0), Some(&DIFF_COLOUR[..]));
+        assert_eq!(diff.pixel(0, 0), Some(&DIFF_COLOR[..]));
         assert_eq!(diff.pixel(1, 0), Some(&[30, 30, 30, 255][..]));
     }
 
@@ -960,13 +960,13 @@ mod tests {
     #[test]
     fn a_screenshot_check_is_read_from_a_file_and_written_back() {
         let text =
-            r#"Screenshot(name: "home", of: Name("Bar"), tolerance: (colour: 4, pixels: 0.01))"#;
+            r#"Screenshot(name: "home", of: Name("Bar"), tolerance: (color: 4, pixels: 0.01))"#;
         let parsed = ron::from_str::<Check>(text);
         assert_eq!(
             parsed.ok(),
             Some(
                 Check::screenshot_of("home", Target::name("Bar"))
-                    .with_tolerance(Tolerance::default().with_colour(4).with_pixels(0.01))
+                    .with_tolerance(Tolerance::default().with_color(4).with_pixels(0.01))
             )
         );
         let bare = ron::from_str::<Check>(r#"Screenshot(name: "home")"#);
@@ -1029,7 +1029,7 @@ mod flow {
         path
     }
 
-    fn run(dir: &Path, check: &Check, colour: [u8; 4], update: bool) -> crate::ScenarioReport {
+    fn run(dir: &Path, check: &Check, color: [u8; 4], update: bool) -> crate::ScenarioReport {
         let scenario = Scenario::new("Home screen")
             .with_base_dir(dir)
             .setup(|world| {
@@ -1051,7 +1051,7 @@ mod flow {
         let mut app: App = scenario.headless_app();
         app.init_resource::<Pictures>()
             .insert_resource(ScreenshotSettings { update })
-            .insert_resource(Paint(colour))
+            .insert_resource(Paint(color))
             .add_systems(Last, fake_renderer.after(ScenarioSystems::Trace));
         scenario.run_in(&mut app)
     }
@@ -1076,7 +1076,7 @@ mod flow {
     }
 
     #[test]
-    fn a_changed_colour_fails_with_a_picture_and_a_diff() {
+    fn a_changed_color_fails_with_a_picture_and_a_diff() {
         let dir = directory("changed");
         let check = Check::screenshot("home");
         run(&dir, &check, [10, 20, 30, 255], false);
@@ -1089,7 +1089,7 @@ mod flow {
             report.screenshots.first().map(|record| &record.result),
             Some(ScreenshotResult::Mismatch { diff: Some(_), .. })
         ));
-        let loose = check.with_tolerance(Tolerance::default().with_colour(100));
+        let loose = check.with_tolerance(Tolerance::default().with_color(100));
         let accepted = run(&dir, &loose, [10, 20, 90, 255], false);
         assert!(accepted.passed(), "{:?}", accepted.failures());
         assert!(!folder.join(".diagnostics/home.actual.png").exists());
