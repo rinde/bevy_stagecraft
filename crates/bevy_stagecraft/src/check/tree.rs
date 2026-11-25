@@ -1,7 +1,4 @@
-//! UI tree snapshots: the UI below a node as indented lines of role, label
-//! and states, and a partial match of an expected tree against it.
-//!
-//! A snapshot reads
+//! UI tree snapshots, and partial matching of an expected tree against one.
 //!
 //! ```text
 //! - panel:
@@ -11,19 +8,15 @@
 //!   - text-input "Name" [focused] = "Alice"
 //! ```
 //!
-//! Every line is a role (`panel`, `text`, or the [`WidgetRole`] in kebab case,
-//! as `menu-item`), perhaps a quoted label, and perhaps states in brackets
-//! (`disabled`, `checked`, `selected`, `pressed`, `focused`, `value=..`). A text input
-//! also shows the text it holds after its states, as `= "Alice"` (quoted like a
-//! label, and an expected line that leaves it out matches any value). A line with
-//! lines below it ends in a colon.
+//! A line is a role (`panel`, `text` or a [`WidgetRole`] in kebab case), a
+//! quoted label and `[states]`, each optional; a trailing colon means lines
+//! below. A text input adds `= "Alice"`, which an expected line may omit to
+//! match any value.
 //!
-//! An expected tree is partial: it lists only what matters. A line matches an
-//! actual one with the same role, the same label (when it gives one) and at
-//! least its states; the lines below it match the lines below the actual one
-//! as an ordered subsequence, so siblings may be left out but not reordered.
-//! Roles come from the same components as [`Target::Role`](crate::Target),
-//! not from AccessKit.
+//! An expected tree is partial: a line matches an actual one with the same role,
+//! the same label (when given) and at least its states, and the lines below it
+//! match as an ordered subsequence. Roles come from the same components as
+//! [`Target::Role`](crate::Target), not from AccessKit.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt::Write as _;
@@ -48,26 +41,18 @@ use bevy::{
 use super::{reflect::close_names, widget::label_of};
 use crate::{probe::is_within, targets::WidgetRole, targets::is_tooling, targets::is_ui_node};
 
-/// How far each level of the tree is indented.
 const INDENT: usize = 2;
 
-/// What a line of the tree is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    /// A node that groups others and shows no text of its own.
     Panel,
-    /// A node showing text.
     Text,
-    /// An image set inline in text (`InlineImage`).
     Image,
-    /// Room reserved inline in text for something else (`InlineBox`).
     InlineBox,
-    /// A widget of this role.
     Widget(WidgetRole),
 }
 
 impl Kind {
-    /// Every kind, in the order a hint lists them.
     const ALL: [Self; 14] = [
         Self::Panel,
         Self::Text,
@@ -85,7 +70,6 @@ impl Kind {
         Self::Widget(WidgetRole::TextInput),
     ];
 
-    /// The name a tree writes: `panel`, `text`, `button`, `menu-item`.
     const fn name(self) -> &'static str {
         match self {
             Self::Panel => "panel",
@@ -107,31 +91,23 @@ impl Kind {
         }
     }
 
-    /// The kind a tree calls `name`.
     fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| kind.name() == name)
     }
 }
 
-/// A state a line can show, in the order a snapshot writes them.
+/// Ordered as a snapshot writes them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum State {
-    /// `disabled`.
     Disabled,
-    /// `checked`.
     Checked,
-    /// `selected`.
     Selected,
-    /// `pressed`.
     Pressed,
-    /// `focused`.
     Focused,
-    /// `value=0.5`, as the text after the equals sign.
     Value(String),
 }
 
 impl State {
-    /// The state as it is written inside brackets.
     fn text(&self) -> String {
         match self {
             Self::Disabled => "disabled".into(),
@@ -143,7 +119,6 @@ impl State {
         }
     }
 
-    /// The state written as `text`, or what is wrong with it.
     fn parse(text: &str) -> Result<Self, String> {
         match text.trim() {
             "disabled" => Ok(Self::Disabled),
@@ -161,8 +136,7 @@ impl State {
         }
     }
 
-    /// Whether this expected state is the actual one `held`: values compare
-    /// as numbers where both are, so `0.50` is `0.5`.
+    /// Values compare as numbers where both are, so `0.50` is `0.5`.
     fn is_held_by(&self, held: &Self) -> bool {
         match (self, held) {
             (Self::Value(wanted), Self::Value(actual)) => {
@@ -176,7 +150,6 @@ impl State {
     }
 }
 
-/// Appends `text` to `out` in double quotes, escaping `"`, `\\` and newlines.
 fn push_quoted(out: &mut String, text: &str) {
     out.push('"');
     for character in text.chars() {
@@ -192,24 +165,16 @@ fn push_quoted(out: &mut String, text: &str) {
     out.push('"');
 }
 
-/// One line of a tree and the lines below it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Line {
-    /// What it is.
     kind: Kind,
-    /// The label: the text of a text node or widget, or a node's name.
     label: Option<String>,
-    /// Its states.
     states: Vec<State>,
-    /// The text a text input holds.
     value: Option<String>,
-    /// The lines below it, in document order.
     children: Vec<Self>,
 }
 
 impl Line {
-    /// The line without what lies below it: `button "Lay" [pressed]`, with
-    /// the colon that says lines follow when `colon` is set.
     fn head(&self, colon: bool) -> String {
         let mut head = self.kind.name().to_owned();
         if let Some(label) = &self.label {
@@ -230,8 +195,6 @@ impl Line {
         head
     }
 
-    /// Whether this expected line is satisfied by `actual` as far as its own
-    /// head goes: role, label if it gives one, and every state it names.
     fn head_matches(&self, actual: &Self) -> bool {
         self.kind == actual.kind
             && self
@@ -248,13 +211,8 @@ impl Line {
                 .is_none_or(|value| actual.value.as_ref() == Some(value))
     }
 
-    /// Whether this expected line and everything below it is satisfied by
-    /// `actual`: the lines below as an ordered subsequence, each taking the
-    /// first actual line after the last one used that satisfies it.
-    ///
-    /// Uncached on purpose: one match asks about each pair of lines at most
-    /// once, so remembering answers would only slow down the common case, a
-    /// tree that matches. [`Matcher`] is for the diff.
+    /// Uncached on purpose: one match asks about each pair once, so a cache
+    /// would only slow the common case. [`Matcher`] is for the diff.
     fn matches(&self, actual: &Self) -> bool {
         if !self.head_matches(actual) {
             return false;
@@ -271,50 +229,21 @@ impl Line {
     }
 }
 
-/// Answers "does this expected line match that actual one" once per pair,
-/// for [`render_diff`].
-///
-/// One call of [`Line::matches`] asks about each pair at most once, but the
-/// diff asks again at every level it descends through, so a mismatch deep in
-/// a tree costs its depth times the size of the tree (see
-/// `a_deep_mismatch_matches_each_pair_once`). A result depends on the pair
-/// alone, so remembering it keeps the semantics and makes the whole diff cost
-/// about one match. It is not used for the first pass: a map lookup costs
-/// more than comparing one head, so there it only slowed the common case, a
-/// tree that matches.
-///
-/// Measured with `tree_matching_timings` (a mismatch, first pass and diff,
-/// test profile; `spine N deep, W wide` is a chain of N levels each holding W
-/// decoys before the next level):
-///
-/// | shape                         | before  | after   |
-/// | ----------------------------- | ------- | ------- |
-/// | spine 10 deep, 3 wide         | 5.9 us  | 7.2 us  |
-/// | spine 100 deep, 5 wide        | 302 us  | 150 us  |
-/// | spine 400 deep, 5 wide        | 4.5 ms  | 0.67 ms |
-/// | spine 400 deep, 50 wide       | 28 ms   | 4.3 ms  |
-/// | spine 1000 deep, 5 wide       | 16.5 ms | 1.3 ms  |
-/// | flat, 1000 siblings           | 25 us   | 286 us  |
-///
-/// The diff drops from quadratic in the depth to linear, and a wide flat
-/// level pays for filling the map without gaining anything; both are well
-/// under a frame, and a tree that matches is as fast as before.
+/// Answers each pair once for [`render_diff`], which asks again at every
+/// level it descends (see `a_deep_mismatch_matches_each_pair_once`). Unused for
+/// the first pass: a map lookup costs more than comparing a head.
 #[derive(Debug, Default)]
 struct Matcher {
-    /// The answer for a pair, keyed by the addresses of the two lines. Both
-    /// trees outlive the matcher and are not moved while it runs, so an
-    /// address names one line. Only looked up, never iterated.
+    /// Keyed by the addresses of the two lines, which outlive the matcher
+    /// unmoved. Only looked up, never iterated.
     seen: BTreeMap<(usize, usize), bool>,
-    /// How many pairs were worked out rather than remembered.
     #[cfg(test)]
     computed: usize,
-    /// Remember nothing: the behaviour before the cache, for comparison.
     #[cfg(test)]
     uncached: bool,
 }
 
 impl Matcher {
-    /// Whether `expected` and everything below it is satisfied by `actual`.
     fn matches(&mut self, expected: &Line, actual: &Line) -> bool {
         let key = (
             core::ptr::from_ref(expected).addr(),
@@ -337,7 +266,6 @@ impl Matcher {
         result
     }
 
-    /// The uncached answer of [`Self::matches`].
     fn compute(&mut self, expected: &Line, actual: &Line) -> bool {
         if !expected.head_matches(actual) {
             return false;
@@ -357,14 +285,12 @@ impl Matcher {
     }
 }
 
-/// The tree of the UI at and below `root`.
 pub(super) fn snapshot(world: &World, root: Entity) -> String {
     let mut text = String::new();
     write_lines(&root_line(world, root), 0, &mut text);
     text.trim_end().to_owned()
 }
 
-/// Writes `line` and what is below it as the tree is written in a file.
 fn write_lines(line: &Line, depth: usize, out: &mut String) {
     let _ = writeln!(
         out,
@@ -377,8 +303,8 @@ fn write_lines(line: &Line, depth: usize, out: &mut String) {
     }
 }
 
-/// The line for `root`, which is a line whatever it is: a root that is no
-/// node, or is hidden, is still what was asked for.
+/// A root that is no node, or is hidden, is still a line: it is what was
+/// asked for.
 fn root_line(world: &World, root: Entity) -> Line {
     lines_of(world, root, false, true).pop().unwrap_or(Line {
         kind: Kind::Panel,
@@ -389,8 +315,8 @@ fn root_line(world: &World, root: Entity) -> Line {
     })
 }
 
-/// The lines `entity` stands for: its own, or for an entity that is no UI
-/// node at all (a bare grouping entity) the lines of what is below it.
+/// An entity that is no UI node (a bare grouping entity) gives the lines of
+/// what is below it.
 fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) -> Vec<Line> {
     let Ok(this) = world.get_entity(entity) else {
         return Vec::new();
@@ -461,8 +387,7 @@ fn lines_of(world: &World, entity: Entity, below_widget: bool, is_root: bool) ->
     }]
 }
 
-/// The line for an inline image or box, or `None` for anything else. Nothing
-/// inside it is read: Bevy lays out no text below an inline box.
+/// Reads nothing inside it: Bevy lays out no text below an inline box.
 fn inline_line(entity: &EntityRef<'_>) -> Option<Line> {
     let kind = if entity.contains::<InlineImage>() {
         Kind::Image
@@ -480,8 +405,6 @@ fn inline_line(entity: &EntityRef<'_>) -> Option<Line> {
     })
 }
 
-/// The lines of the images and boxes set inline in the text of `entity`, in
-/// order, found through its spans.
 fn inline_lines(world: &World, entity: Entity) -> Vec<Line> {
     let Some(children) = world.get::<Children>(entity) else {
         return Vec::new();
@@ -505,7 +428,6 @@ fn inline_lines(world: &World, entity: Entity) -> Vec<Line> {
         .collect()
 }
 
-/// The lines of everything directly below `entity`, in order.
 fn children_of(world: &World, entity: Entity, below_widget: bool) -> Vec<Line> {
     world.get::<Children>(entity).map_or_default(|children| {
         children
@@ -515,8 +437,6 @@ fn children_of(world: &World, entity: Entity, below_widget: bool) -> Vec<Line> {
     })
 }
 
-/// Whether the node is not on screen: not displayed, or hidden in the
-/// hierarchy.
 fn is_hidden(entity: &EntityRef<'_>) -> bool {
     entity
         .get::<Node>()
@@ -526,7 +446,6 @@ fn is_hidden(entity: &EntityRef<'_>) -> bool {
             .is_some_and(|visibility| !visibility.get())
 }
 
-/// The states of the widget `entity`, in the order they are written.
 fn states_of(world: &World, entity: &EntityRef<'_>) -> Vec<State> {
     let mut states = BTreeSet::new();
     if entity.contains::<InteractionDisabled>() {
@@ -554,8 +473,6 @@ fn states_of(world: &World, entity: &EntityRef<'_>) -> Vec<State> {
     states.into_iter().collect()
 }
 
-/// Reads an expected tree: the lines `- role "label" [state]`, indented to
-/// show what is below what, with one root.
 pub(super) fn parse(text: &str) -> Result<Tree, String> {
     let mut stack: Vec<(usize, Line)> = Vec::new();
     let mut root: Option<Line> = None;
@@ -604,13 +521,10 @@ pub(super) fn parse(text: &str) -> Result<Tree, String> {
         .ok_or_else(|| "the tree is empty: write at least `- panel`".into())
 }
 
-/// A tree read from text, ready to be matched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Tree(Line);
 
 impl Tree {
-    /// Matches the tree against the snapshot of the UI at and below `root`:
-    /// nothing when it matches, the diff otherwise.
     pub(super) fn compare(&self, world: &World, root: Entity) -> Result<(), String> {
         let actual = root_line(world, root);
         if self.0.matches(&actual) {
@@ -622,7 +536,6 @@ impl Tree {
     }
 }
 
-/// Reads one `- role "label" [state] [state]:` line, already trimmed.
 fn parse_line(text: &str) -> Result<Line, String> {
     let rest = text
         .strip_prefix('-')
@@ -683,8 +596,6 @@ fn parse_line(text: &str) -> Result<Line, String> {
     })
 }
 
-/// Reads the rest of a quoted label, after its opening quote: the label with
-/// escapes undone and what follows the closing quote.
 fn read_quoted(text: &str) -> Result<(String, &str), String> {
     let mut label = String::new();
     let mut characters = text.char_indices();
@@ -702,9 +613,6 @@ fn read_quoted(text: &str) -> Result<(String, &str), String> {
     Err("a label is missing its closing quote".into())
 }
 
-/// Writes the diff of an expected line against the actual one it was matched
-/// with: context for what holds, `-` for what was expected and `+` for what
-/// is there.
 fn render_diff(
     matcher: &mut Matcher,
     expected: &Line,
@@ -751,7 +659,6 @@ fn render_diff(
     }
 }
 
-/// Writes `line` and what is below it, every line marked with `marker`.
 fn write_expected(line: &Line, depth: usize, marker: char, out: &mut String) {
     let _ = writeln!(
         out,
@@ -824,7 +731,6 @@ mod tests {
         assert!(!State::Value("0.6".into()).is_held_by(&State::Value("0.5".into())));
     }
 
-    /// A line with a label and children.
     fn node(label: &str, children: Vec<Line>) -> Line {
         Line {
             kind: Kind::Panel,
@@ -851,7 +757,6 @@ mod tests {
         })
     }
 
-    /// The expected chain of `depth` panels down to "b", which `spine` lacks.
     fn wanted_chain(depth: usize) -> Line {
         (0..depth).fold(node("b", Vec::new()), |below, _| node("p", vec![below]))
     }
@@ -942,16 +847,13 @@ mod tests {
         );
     }
 
-    /// Run by hand for the numbers in the pull request that added `Matcher`:
-    /// `cargo test -p bevy_stagecraft tree_matching_timings -- --ignored --nocapture`.
+    /// Run by hand: `cargo test -p bevy_stagecraft tree_matching_timings -- --ignored --nocapture`.
     #[test]
     #[ignore = "a measurement, not a check"]
     #[expect(clippy::print_stdout, reason = "the measurement is the output")]
     fn tree_matching_timings() {
         use std::time::Instant;
-        /// Runs averaged per shape.
         const REPEATS: u32 = 20;
-        // The whole of `Tree::compare` on a mismatch: the first pass, then the diff.
         let time = |expected: &Line, actual: &Line, uncached: bool| {
             let start = Instant::now();
             let mut pairs = 0;

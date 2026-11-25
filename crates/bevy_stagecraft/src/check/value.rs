@@ -1,15 +1,8 @@
 //! Values a script writes, and how checks compare against them.
 //!
-//! A value is kept as the RON text the script holds. Only once the check
-//! knows what it is compared with (a field of a resource, a count, a state)
-//! is the text read, against that type, so `Eq(Lay)` means the variant `Lay`
-//! of whatever enum the field holds.
-//!
-//! A value may also be a captured one, `Captured("views")`: what an earlier
-//! `Capture` step measured. It is looked up when the check runs and then
-//! compared as the literal it turned out to be. Anything written as
-//! `Captured(..)` is read as a captured operand, so a literal of an app enum
-//! with a variant called `Captured` cannot be written as a value.
+//! A value stays RON text until compared: `Eq(Lay)` is read as a variant of
+//! the field's own enum. `Captured(..)` is always a captured operand, so an app
+//! variant of that name cannot be written as a value.
 
 use core::{cmp::Ordering, fmt};
 
@@ -21,17 +14,12 @@ use serde::{Deserialize, Serialize};
 
 use super::CapturedValues;
 
-/// What a script spells a captured operand with: `Captured("views")`.
 const CAPTURED: &str = "Captured";
 
 /// Whether a reflected number is a physical or a logical pixel value.
 ///
-/// Bevy's UI holds some numbers in physical pixels (`ComputedNode.size`,
-/// `ComputedNode.scroll_position`, `UiGlobalTransform`) and some in logical
-/// pixels (`ScrollPosition`). A `Resource(..)`, `Component(..)`, or the
-/// matching `Measure`, written as `unit: Logical` reads a physical value as
-/// logical: divided by the primary window's scale factor. A script then states
-/// sizes and positions in logical pixels and passes at every scale factor.
+/// Bevy's UI mixes both (`ComputedNode.size` is physical, `ScrollPosition`
+/// logical); `Logical` divides by the primary window's scale factor.
 ///
 /// ```ron
 /// Check(Component(target: Name("popup"), path: "ComputedNode.size.x", unit: Logical, is: Eq(430.0))),
@@ -40,35 +28,27 @@ const CAPTURED: &str = "Captured";
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Unit {
-    /// The field as it is, in physical pixels. The default.
     #[default]
     Physical,
-    /// The field divided by the primary window's scale factor, in logical
-    /// pixels.
     Logical,
 }
 
 impl Unit {
-    /// Whether this reads a physical value as logical.
     #[must_use]
     pub const fn is_logical(self) -> bool {
         matches!(self, Self::Logical)
     }
 
-    /// Whether this reads the field as it is, for `serde`'s
-    /// `skip_serializing_if`.
     #[must_use]
     pub const fn is_physical(&self) -> bool {
         matches!(self, Self::Physical)
     }
 }
 
-/// A value as a script writes it: RON text, read against the type of what it
-/// is compared with, or a value captured earlier in the scenario (see
-/// [`Value::captured`]).
+/// A value as a script writes it: RON text, or a captured one.
 ///
-/// An offset (`plus`) is added to a whole number exactly, so a `u64` above
-/// 2^53 keeps every digit, and to anything else as an `f64`.
+/// `plus` adds exactly to a whole number, so a `u64` above 2^53 keeps every
+/// digit, and as an `f64` to anything else.
 ///
 /// ```
 /// use bevy_stagecraft::check::Value;
@@ -84,39 +64,27 @@ impl Unit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Value(Repr);
 
-/// What a [`Value`] is.
 #[derive(Debug, Clone, PartialEq)]
 enum Repr {
-    /// RON text, or why it could not be written.
     Literal(Result<String, String>),
-    /// A value a `Capture` step took earlier, with an optional offset.
     Captured {
-        /// What the capture is called.
         name: String,
-        /// Added to the captured number.
         plus: Option<f64>,
     },
-    /// A captured value as it was when a check ran: never read from a file
-    /// nor written to one.
+    /// Never read from a file nor written to one.
     Resolved {
-        /// The operand it came from, in words.
         from: String,
-        /// The value, as RON.
         ron: String,
     },
 }
 
-/// Sound because the only `f64` a [`Repr`] holds is an offset that is finite
-/// (`from_raw` and [`Value::plus`] refuse any other), so it equals itself.
+/// Sound because the only `f64` is a finite offset (`from_raw` and
+/// [`Value::plus`] refuse any other).
 impl Eq for Repr {}
 
 impl Value {
-    /// `value` as RON, written through its reflected form: the same form the
-    /// check reads it back with.
-    ///
-    /// A value that reflection cannot write (a field whose type lacks
-    /// serialisation) is kept as the reason, and the check that holds it
-    /// cannot run.
+    /// A value reflection cannot write is kept as its reason, and the check
+    /// holding it cannot run.
     #[must_use]
     pub fn of<T: Reflect + GetTypeRegistration + TypePath>(value: &T) -> Self {
         let mut types = TypeRegistry::new();
@@ -127,9 +95,7 @@ impl Value {
         )))
     }
 
-    /// The value written in `text`, which must be one RON value, or a
-    /// captured one: `Captured("views")`, `Captured(name: "views", plus: 5)`.
-    /// Whitespace and comments around it are dropped.
+    /// Whitespace and comments around the value are dropped.
     ///
     /// # Errors
     ///
@@ -139,23 +105,16 @@ impl Value {
         Self::from_raw(raw.trim().get_ron())
     }
 
-    /// The value in `text`, which is already known to be one RON value.
     fn from_raw(text: &str) -> Result<Self, String> {
-        /// `Captured("name")`.
         #[derive(Debug, Deserialize)]
         enum Short {
-            /// The only form.
             Captured(String),
         }
-        /// `Captured(name: "name", plus: 5)`.
         #[derive(Debug, Deserialize)]
         #[serde(deny_unknown_fields)]
         enum Long {
-            /// The only form.
             Captured {
-                /// What the capture is called.
                 name: String,
-                /// Added to the captured number.
                 #[serde(default)]
                 plus: Option<f64>,
             },
@@ -189,8 +148,6 @@ impl Value {
         Ok(Self(Repr::Captured { name, plus }))
     }
 
-    /// The value a `Capture` step took under `name`, to compare with in place
-    /// of a literal. See [`Value::plus`].
     #[must_use]
     pub fn captured(name: impl Into<String>) -> Self {
         Self(Repr::Captured {
@@ -199,9 +156,8 @@ impl Value {
         })
     }
 
-    /// This captured value with `amount` added to it, for numbers only. On a
-    /// value that is not a captured one it makes the value unusable, and the
-    /// check that holds it cannot run.
+    /// Numbers only: on a value that is not captured it makes the value
+    /// unusable.
     #[must_use]
     pub fn plus(self, amount: f64) -> Self {
         match self.0 {
@@ -225,12 +181,9 @@ impl Value {
         }
     }
 
-    /// The RON text, or why the value could not be written (or, for a
-    /// captured value, that it has not been looked up yet).
-    ///
     /// # Errors
     ///
-    /// Why [`Value::of`] could not write the value.
+    /// The value is captured, or its text is not RON.
     pub fn ron(&self) -> Result<&str, &str> {
         match &self.0 {
             Repr::Literal(text) => text.as_deref().map_err(String::as_str),
@@ -239,7 +192,6 @@ impl Value {
         }
     }
 
-    /// The name of the capture this value refers to, if it does.
     #[must_use]
     pub fn captured_name(&self) -> Option<&str> {
         match &self.0 {
@@ -248,13 +200,6 @@ impl Value {
         }
     }
 
-    /// This value with a captured operand replaced by what was captured, so
-    /// it can be read against a type; any other value as it is.
-    ///
-    /// # Errors
-    ///
-    /// Why the operand cannot be used: nothing was captured under its name,
-    /// or `plus` does not apply to what was.
     pub(super) fn resolve(&self, captures: &CapturedValues) -> Result<Self, String> {
         let Repr::Captured { name, plus } = &self.0 else {
             return Ok(self.clone());
@@ -281,21 +226,19 @@ impl Value {
     }
 }
 
-/// `ron`, a number, plus `plus`, as RON: a whole number stays whole, and is
-/// added exactly (an `f64` holds integers only up to 2^53).
+/// A whole number stays whole and adds exactly (an `f64` holds integers only
+/// up to 2^53).
 fn add(ron: &str, plus: f64) -> Result<String, &'static str> {
     let options = crate::script::ron_options();
-    // Digits alone are an integer, whatever its type; a float is written with
-    // a point, an exponent or a name.
+    // Digits alone are an integer; a float has a point, an exponent or a name.
     let whole = ron
         .trim()
         .trim_start_matches('-')
         .chars()
         .all(|digit| digit.is_ascii_digit() || digit == '_');
     if whole && plus.fract() == 0.0 {
-        // `plus` is whole and finite, so printing it without decimals is exact.
         let exact = format!("{plus:.0}").parse::<i128>();
-        // RON allows `1_000`; reflection never writes it, a literal might.
+        // RON allows `1_000`; reflection never writes it.
         let number = ron.trim().replace('_', "").parse::<i128>();
         if let (Ok(number), Ok(plus)) = (number, exact) {
             return number
@@ -321,9 +264,7 @@ fn add(ron: &str, plus: f64) -> Result<String, &'static str> {
     }
 }
 
-/// Written as the bare RON value, so a file reads `Eq(Lay)`, not a string; a
-/// captured one as `Captured("views")`, or with an offset as
-/// `Captured(name: "views", plus: 5.0)`, which is RON too.
+/// Written as bare RON, so a file reads `Eq(Lay)`, not a string.
 impl Serialize for Value {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let text = match &self.0 {
@@ -347,8 +288,6 @@ impl Serialize for Value {
     }
 }
 
-/// Read as whatever RON value stands there, or a captured one; only RON can
-/// provide one.
 impl<'de> Deserialize<'de> for Value {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = Box::<RawValue>::deserialize(deserializer)?;
@@ -371,9 +310,8 @@ impl fmt::Display for Value {
     }
 }
 
-/// How a measured value must compare with the values written in the script.
-///
-/// A value is a literal, or one a `Capture` step took earlier:
+/// How a measured value must compare with the values in the script, literal
+/// or captured:
 ///
 /// ```ron
 /// Count(with: ["Ghost"], is: Eq(1)),
@@ -384,24 +322,16 @@ impl fmt::Display for Value {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Comparison {
-    /// Equal to the value.
     Eq(Value),
-    /// Not equal to the value.
     Ne(Value),
-    /// Less than the value.
     Lt(Value),
-    /// Less than or equal to the value.
     Le(Value),
-    /// Greater than the value.
     Gt(Value),
-    /// Greater than or equal to the value.
     Ge(Value),
-    /// From the first value to the second, both included.
     Between(Value, Value),
 }
 
 impl Comparison {
-    /// The values the comparison holds, in order.
     pub(super) fn values(&self) -> Vec<&Value> {
         match self {
             Self::Eq(value)
@@ -414,20 +344,16 @@ impl Comparison {
         }
     }
 
-    /// Whether the comparison needs an order, not just equality.
     pub(super) const fn orders(&self) -> bool {
         !matches!(self, Self::Eq(_) | Self::Ne(_))
     }
 
-    /// Whether any value in the comparison is a captured one, as written or
-    /// already looked up.
     pub(super) fn is_captured(&self) -> bool {
         self.values()
             .iter()
             .any(|value| matches!(value.0, Repr::Captured { .. } | Repr::Resolved { .. }))
     }
 
-    /// The names of the captures the comparison refers to, in order.
     pub(super) fn captured_names(&self) -> Vec<&str> {
         self.values()
             .into_iter()
@@ -435,12 +361,6 @@ impl Comparison {
             .collect()
     }
 
-    /// The comparison with every captured value replaced by what was
-    /// captured, ready to [`test`](Self::test).
-    ///
-    /// # Errors
-    ///
-    /// Why a captured value cannot be used.
     pub(super) fn resolve(&self, captures: &CapturedValues) -> Result<Self, String> {
         let look = |value: &Value| value.resolve(captures);
         Ok(match self {
@@ -454,12 +374,6 @@ impl Comparison {
         })
     }
 
-    /// Whether `measured` compares as asked.
-    ///
-    /// # Errors
-    ///
-    /// Why the comparison cannot be made at all: a value that does not fit,
-    /// or values that have no order.
     pub(super) fn test(&self, measured: &dyn Comparable) -> Result<bool, String> {
         Ok(match self {
             Self::Eq(value) => measured.equals(value)?,
@@ -474,7 +388,6 @@ impl Comparison {
         })
     }
 
-    /// What the comparison expects, in words: `1`, `less than 3`.
     #[must_use]
     pub fn expected(&self) -> String {
         match self {
@@ -489,37 +402,22 @@ impl Comparison {
     }
 }
 
-/// `is 1`, `is less than 3`.
 impl fmt::Display for Comparison {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "is {}", self.expected())
     }
 }
 
-/// Something a [`Comparison`] can be made against: a count, or a reflected
-/// field.
 pub(super) trait Comparable {
-    /// Whether the measured value equals `value`.
-    ///
-    /// # Errors
-    ///
-    /// Why `value` cannot be compared with it.
     fn equals(&self, value: &Value) -> Result<bool, String>;
 
-    /// How the measured value orders against `value`.
-    ///
-    /// # Errors
-    ///
-    /// Why the two have no order.
     fn order(&self, value: &Value) -> Result<Ordering, String>;
 }
 
-/// A count of entities, compared with whole numbers.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Counted(pub(super) usize);
 
 impl Counted {
-    /// Reads `value` as a count.
     pub(super) fn read(value: &Value) -> Result<usize, String> {
         let text = value.ron()?;
         crate::script::ron_options()
@@ -546,28 +444,22 @@ impl Comparable for Counted {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum TextMatch {
-    /// Exactly this text.
     Exact(String),
-    /// This text somewhere in it.
     Contains(String),
-    /// Starting with this text.
     StartsWith(String),
 }
 
 impl TextMatch {
-    /// Exactly `text`.
     #[must_use]
     pub fn exact(text: impl Into<String>) -> Self {
         Self::Exact(text.into())
     }
 
-    /// `text` somewhere in it.
     #[must_use]
     pub fn contains(text: impl Into<String>) -> Self {
         Self::Contains(text.into())
     }
 
-    /// Starting with `text`.
     #[must_use]
     pub fn starts_with(text: impl Into<String>) -> Self {
         Self::StartsWith(text.into())

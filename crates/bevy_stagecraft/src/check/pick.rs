@@ -1,20 +1,5 @@
-//! Checks and targets for one node, picked by pointing at it.
-//!
-//! The gallery's **Pick** mode (see `crate::gallery`) uses this; it reads the
-//! world only, so picking never changes the app.
-//!
-//! * [`node_at`] finds the app's topmost UI node under a position, the way
-//!   Bevy's UI picking would, without moving any pointer;
-//! * [`subject_of`] goes from that node to the widget it belongs to, as the
-//!   built-in checks do;
-//! * [`target_alternatives`] lists the targets that find the widget again,
-//!   best first: the one ranking of targets, which the session recorder
-//!   uses too;
-//! * [`checks_that_hold`] lists the built-in checks about it that hold now:
-//!   its text, its states and its reflected component fields;
-//! * [`app_check_forms`] fills a form for each variant of the app's check
-//!   type (see [`AppCheck`](super::AppCheck)) from what the widget shows;
-//! * [`Picked`] keeps all of that for one picked node.
+//! Checks and targets for one node picked by pointing at it, for the
+//! gallery's **Pick** mode. It reads the world only.
 //!
 //! Every list is in a fixed order, never hash order.
 
@@ -43,18 +28,10 @@ use crate::{
     targets::{Lookup, Target, WidgetRole, is_tooling, locate},
 };
 
-/// How a position is rounded in a screen target: to a tenth of a pixel, as
-/// recordings write them.
 const SCREEN_PRECISION: f32 = 10.0;
 
-/// The app's topmost UI node at `position` (logical pixels in the primary
-/// window), or `None` where there is none.
-///
-/// It walks Bevy's `UiStack` from the front, as UI picking does: a node
-/// counts when it is laid out, visible, hoverable (`Pickable`), not clipped
-/// away at the position and not part of the tooling
-/// ([`NotUnderTest`](crate::NotUnderTest)). Nothing is moved and no pointer
-/// is touched.
+/// The app's topmost UI node at `position`, found as UI picking does; the
+/// tooling ([`NotUnderTest`](crate::NotUnderTest)) never counts.
 #[must_use]
 pub fn node_at(world: &World, position: Vec2) -> Option<Entity> {
     let stack = world.get_resource::<UiStack>()?;
@@ -66,7 +43,6 @@ pub fn node_at(world: &World, position: Vec2) -> Option<Entity> {
         .find(|entity| is_hit(world, *entity, position))
 }
 
-/// Whether `entity` is a node of the app that `position` is on.
 fn is_hit(world: &World, entity: Entity, position: Vec2) -> bool {
     let (Some(node), Some(transform)) = (
         world.get::<ComputedNode>(entity),
@@ -93,16 +69,14 @@ fn is_hit(world: &World, entity: Entity, position: Vec2) -> bool {
         && !is_tooling(world, entity)
 }
 
-/// The widget `node` belongs to: the nearest widget at or above it (a
-/// button, a checkbox, a slider, a node that tracks interaction), as the
-/// built-in checks find it from a label; otherwise `node` itself.
+/// The widget `node` belongs to, as the built-in checks find it from a label;
+/// otherwise `node` itself.
 #[must_use]
 pub fn subject_of(world: &World, node: Entity) -> Entity {
     widget::widget(world, node)
 }
 
-/// The middle of `entity` in logical pixels, rounded as a recording rounds
-/// positions.
+/// Rounded as a recording rounds positions.
 fn centre_of(world: &World, entity: Entity) -> Option<Vec2> {
     let node = world.get::<ComputedNode>(entity)?;
     let transform = world.get::<UiGlobalTransform>(entity)?;
@@ -110,7 +84,6 @@ fn centre_of(world: &World, entity: Entity) -> Option<Vec2> {
     Some((centre * SCREEN_PRECISION).round() / SCREEN_PRECISION)
 }
 
-/// Every non-empty text at or below `entity`, depth first, each once.
 fn texts_within(world: &World, entity: Entity) -> Vec<String> {
     let mut texts = Vec::new();
     let mut stack = vec![entity];
@@ -128,31 +101,12 @@ fn texts_within(world: &World, entity: Entity) -> Vec<String> {
     texts
 }
 
-/// The targets that name `subject`, best first, ending with what names the
-/// position `at` (or the widget's middle when there is none).
+/// The targets that name `subject`, sturdiest first: each test-id
+/// `Component(..)`, `Role(..)`, each `Text(..)`, `Name(..)`, what the app's
+/// [`AppTarget::at`](crate::AppTarget::at) makes of `at`, then `Screen(..)`.
 ///
-/// This is the one place targets are ranked: pick mode offers the whole
-/// list, and the session recorder writes the first for a click (see
-/// [`crate::session`]). The order is the sturdiest first:
-///
-/// 1. `Component(..)` of each test id on the widget, by name: a reflected
-///    marker component, that is a unit struct (`struct PauseButton;`) with
-///    `#[reflect(Component)]`, that is not Bevy's or this crate's (the
-///    default [`NoiseFilter`] decides) and that no other entity of the app
-///    has;
-/// 2. `Role(..)` of the widget's role (see [`WidgetRole`])
-///    with its text as the label, or with no label when it shows none;
-/// 3. `Text(..)` of each text at or below the widget, depth first;
-/// 4. `Name(..)` of the widget's Bevy `Name`;
-/// 5. what the app's [`AppTarget::at`](crate::AppTarget::at) makes of the
-///    position;
-/// 6. `Screen(..)` of the position, which always works but follows no layout
-///    change.
-///
-/// Each of the first four is kept only if it names exactly one node and that
-/// node is `subject` or lies in it, so a target that is ambiguous, or that
-/// leads to another widget, is never offered. With no `subject` only the
-/// last two are left.
+/// The first four are kept only if they name exactly one node, `subject` or
+/// inside it. This is the one ranking; the session recorder uses it too.
 #[must_use]
 pub fn target_alternatives(
     world: &World,
@@ -194,8 +148,6 @@ pub fn target_alternatives(
     targets
 }
 
-/// `Component(..)` of every test id on `subject`, by name (see
-/// [`target_alternatives`]), whether or not another entity has it too.
 fn marker_targets(world: &World, subject: Entity) -> Vec<Target> {
     let Some(registry) = world.get_resource::<AppTypeRegistry>() else {
         return Vec::new();
@@ -214,8 +166,6 @@ fn marker_targets(world: &World, subject: Entity) -> Vec<Target> {
     names.into_iter().map(Target::Component).collect()
 }
 
-/// Whether the type `registration` describes can be a test id: a reflected
-/// component that is a unit struct and that `filter` does not leave out.
 fn is_test_id(registration: &TypeRegistration, filter: &NoiseFilter) -> bool {
     Role::Component.fits(registration)
         && !Role::Resource.fits(registration)
@@ -223,8 +173,6 @@ fn is_test_id(registration: &TypeRegistration, filter: &NoiseFilter) -> bool {
         && !filter.ignores(registration.type_info().type_path_table())
 }
 
-/// `Role(..)` of `subject`'s role, labelled with its text, if it is a widget
-/// with a role.
 fn role_target(world: &World, subject: Entity) -> Option<Target> {
     let entity = world.get_entity(subject).ok()?;
     let role = WidgetRole::of(&entity)?;
@@ -236,24 +184,11 @@ fn role_target(world: &World, subject: Entity) -> Option<Target> {
     })
 }
 
-/// The built-in checks about `subject`, named through `target`, that hold in
-/// `world` now, in a fixed order:
+/// The built-in checks about `subject` that hold now, in a fixed order: text,
+/// states, component fields, then `Tree(..)`.
 ///
-/// * its text: `Shows(..)` when the target is that very text, otherwise
-///   `TextOf(target, Exact(..))`;
-/// * its states: `Visible`, `Disabled` or `Not(Disabled)`, `Checked` or
-///   `Not(Checked)` (for something that can be checked), `Selected` or
-///   `Not(Selected)` (for something that can be selected), `Focused`,
-///   `Hovered`;
-/// * each field of each reflected component on the target's node and the
-///   nodes above it up to the widget, as `Component(..)`, leaving out the
-///   types `filter` ignores;
-/// * last, `Tree(..)` with the snapshot of the node's tree, to snapshot the
-///   node whole.
-///
-/// A target that is only a position names no node; then only `Shows(..)` of
-/// the texts the widget shows is offered. Every check is kept only if it
-/// would load from a file and holds.
+/// A position-only target names no node, so only `Shows(..)` is offered. A
+/// check is kept only if it would load from a file.
 #[must_use]
 pub fn checks_that_hold(
     world: &World,
@@ -290,8 +225,6 @@ pub fn checks_that_hold(
         candidates.push(widget_check(WidgetState::Focused, target.clone()));
         candidates.push(Check::hovered(target.clone()));
         candidates.extend(component_checks(world, subject, target, filter));
-        // Last: the snapshot of the node, for when the person wants the whole
-        // of what is below it rather than one fact.
         if let Ok(tree) = super::tree_snapshot(world, target) {
             candidates.push(Check::tree(target.clone(), tree));
         }
@@ -307,9 +240,7 @@ pub fn checks_that_hold(
     kept
 }
 
-/// `Component(target, path, is: Eq(..))` for every field of every reflected
-/// component the target's node or a node above it, up to `subject`, has;
-/// for a type on several of them, the nearest, as the check finds it.
+/// For a type on several nodes, the nearest, as the check finds it.
 fn component_checks(
     world: &World,
     subject: Entity,
@@ -367,8 +298,6 @@ fn component_checks(
     checks
 }
 
-/// `start` and the entities above it up to and including `top`, nearest
-/// first; only `start` when `top` is not above it.
 fn chain_up_to(world: &World, start: Entity, top: Entity) -> Vec<Entity> {
     let mut chain = vec![start];
     let mut current = start;
@@ -382,24 +311,17 @@ fn chain_up_to(world: &World, start: Entity, top: Entity) -> Vec<Entity> {
     chain
 }
 
-/// The value in one field of an [`AppCheckForm`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum FieldValue {
     /// A whole number; `signed` says whether it may go below zero.
     Integer {
-        /// The number.
         value: i128,
-        /// Whether the field's type is signed.
         signed: bool,
     },
-    /// A floating-point number.
     Float(f64),
-    /// Yes or no.
     Bool(bool),
-    /// A [`Target`], one of the picked node's.
     Target(Target),
-    /// Text.
     Text(String),
     /// A value the form cannot change, as RON: `None`, or the type's default.
     Ron(String),
@@ -409,8 +331,6 @@ pub enum FieldValue {
 }
 
 impl FieldValue {
-    /// The value as RON, as it goes into the check; `None` when the field
-    /// cannot be filled.
     #[must_use]
     pub fn ron(&self) -> Option<String> {
         match self {
@@ -424,7 +344,6 @@ impl FieldValue {
         }
     }
 
-    /// Whether [`Self::step`] changes the value.
     #[must_use]
     pub const fn can_step(&self) -> bool {
         matches!(
@@ -433,9 +352,8 @@ impl FieldValue {
         )
     }
 
-    /// Moves the value one step: a number up or down by one (not below zero
-    /// for an unsigned type), yes to no and back, a target to the next or the
-    /// previous of `targets`. Anything else stays.
+    /// Numbers step by one (unsigned stop at zero), bools flip, targets cycle
+    /// through `targets`; anything else stays.
     pub fn step(&mut self, up: bool, targets: &[Target]) {
         match self {
             Self::Integer { value, signed } => {
@@ -470,19 +388,14 @@ impl FieldValue {
     }
 }
 
-/// One variant of the app's check type, with a value in each field.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppCheckForm {
-    /// The variant and its fields' types.
     pub variant: AppVariant,
-    /// A value for each field, in order.
     pub values: Vec<FieldValue>,
 }
 
 impl AppCheckForm {
-    /// The variant with its values, as a file writes it inside `App(..)`:
-    /// `Activated(3)`, `Between(at_least: 1, at_most: 2)`; `None` while a
-    /// field cannot be filled.
+    /// `None` while a field cannot be filled.
     #[must_use]
     pub fn ron(&self) -> Option<String> {
         if self.values.is_empty() {
@@ -499,11 +412,9 @@ impl AppCheckForm {
         Some(format!("{}({})", self.variant.name, parts.join(", ")))
     }
 
-    /// The check the form makes, read as the app's check type in `types`.
-    ///
     /// # Errors
     ///
-    /// Why the form does not make a check of that type.
+    /// The check text cannot be read as a [`Check`].
     pub fn check(&self, types: &TypeRegistry) -> Result<Check, String> {
         let ron = self.ron().ok_or_else(|| {
             let missing: Vec<&str> = self
@@ -524,13 +435,8 @@ impl AppCheckForm {
     }
 }
 
-/// A form for each variant of the app's check type, in declaration order.
-///
-/// Each field is filled from what `subject` shows: a [`Target`] field with
-/// `target`, text with the widget's text, a number with the first number in
-/// that text (or zero), `bool` with `false`, an `Option` with `None`, and
-/// any other type with its reflected default where it has one. Nothing when
-/// the app has no check type, or more than one.
+/// A form per variant, in declaration order, each field filled from what
+/// `subject` shows; empty unless the app has exactly one check type.
 #[must_use]
 pub fn app_check_forms(
     world: &World,
@@ -559,7 +465,6 @@ pub fn app_check_forms(
         .collect()
 }
 
-/// The first value of a form's field.
 fn fill(types: &TypeRegistry, field: &AppField, text: &str, target: Option<&Target>) -> FieldValue {
     let short = field.short_type_path.as_str();
     if field.type_path == Target::type_path() {
@@ -592,15 +497,13 @@ fn fill(types: &TypeRegistry, field: &AppField, text: &str, target: Option<&Targ
     }
 }
 
-/// The reflected default of the type at `type_path`, as RON.
 fn default_of(types: &TypeRegistry, type_path: &str) -> Option<String> {
     let registration = types.get_with_type_path(type_path)?;
     let value = registration.data::<ReflectDefault>()?.default();
     ron_of(types, value.as_partial_reflect())
 }
 
-/// The first whole number written in `text`, with a minus sign when
-/// `signed`: 3 in `Score: 3`.
+/// With a minus sign when `signed`: 3 in `Score: 3`.
 fn first_number(text: &str, signed: bool) -> Option<i128> {
     let start = text.find(|c: char| c.is_ascii_digit())?;
     let digits: String = text
@@ -617,43 +520,26 @@ fn first_number(text: &str, signed: bool) -> Option<i128> {
     Some(if negative { -value } else { value })
 }
 
-/// An app check form, with the check it makes and whether that holds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PickedForm {
-    /// The form.
     pub form: AppCheckForm,
-    /// The check the form makes, or why it makes none.
     pub check: Result<Check, String>,
-    /// Whether the check holds now.
     pub holds: bool,
 }
 
-/// One picked node, with what can be checked about it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Picked {
-    /// The node under the pointer.
     node: Entity,
-    /// The widget it belongs to, which the targets name.
     subject: Entity,
-    /// The targets that name it, best first.
     targets: Vec<Target>,
-    /// Which of them the checks use.
     chosen: usize,
-    /// The built-in checks that hold, through the chosen target.
     checks: Vec<Check>,
-    /// The app's check forms.
     forms: Vec<PickedForm>,
-    /// What component checks leave out.
     filter: NoiseFilter,
-    /// The checks already taken, so they read as such.
     added: Vec<Check>,
 }
 
 impl Picked {
-    /// Picks `node`, clicked at `at` (its widget's middle when `None`): works
-    /// out its widget, the targets that name it (see
-    /// [`target_alternatives`]), the checks that hold and the app's check
-    /// forms.
     #[must_use]
     pub fn new(world: &World, node: Entity, filter: &NoiseFilter, at: Option<Vec2>) -> Self {
         let subject = subject_of(world, node);
@@ -672,63 +558,53 @@ impl Picked {
         picked
     }
 
-    /// The node that was under the pointer.
     #[must_use]
     pub const fn node(&self) -> Entity {
         self.node
     }
 
-    /// The widget the node belongs to.
     #[must_use]
     pub const fn subject(&self) -> Entity {
         self.subject
     }
 
-    /// The targets that name the widget, best first.
     #[must_use]
     pub fn targets(&self) -> &[Target] {
         &self.targets
     }
 
-    /// The index of the target the checks use.
     #[must_use]
     pub const fn chosen(&self) -> usize {
         self.chosen
     }
 
-    /// The target the checks use.
     #[must_use]
     pub fn target(&self) -> Option<&Target> {
         self.targets.get(self.chosen)
     }
 
-    /// The built-in checks that hold, through the chosen target.
     #[must_use]
     pub fn checks(&self) -> &[Check] {
         &self.checks
     }
 
-    /// The app's check forms.
     #[must_use]
     pub fn forms(&self) -> &[PickedForm] {
         &self.forms
     }
 
-    /// Whether `check` was taken already.
     #[must_use]
     pub fn is_added(&self, check: &Check) -> bool {
         self.added.contains(check)
     }
 
-    /// Notes that `check` was taken.
     pub fn mark_added(&mut self, check: Check) {
         if !self.added.contains(&check) {
             self.added.push(check);
         }
     }
 
-    /// Uses target `index` for the checks and refills the forms with it. An
-    /// index past the end changes nothing.
+    /// An index past the end changes nothing.
     pub fn choose_target(&mut self, world: &World, index: usize) {
         if index < self.targets.len() {
             self.chosen = index;
@@ -736,8 +612,6 @@ impl Picked {
         }
     }
 
-    /// Steps field `field` of form `form` up or down (see
-    /// [`FieldValue::step`]) and works its check out again.
     pub fn step_field(&mut self, world: &World, form: usize, field: usize, up: bool) {
         let targets = self.targets.clone();
         if let Some(value) = self
@@ -750,7 +624,6 @@ impl Picked {
         self.refresh(world);
     }
 
-    /// Fills the forms afresh and works everything out again.
     fn reset_forms(&mut self, world: &World) {
         self.forms = app_check_forms(world, self.subject, self.target())
             .into_iter()
@@ -763,7 +636,6 @@ impl Picked {
         self.refresh(world);
     }
 
-    /// Works out again which checks hold, in the world as it is now.
     pub fn refresh(&mut self, world: &World) {
         self.checks = self
             .target()
@@ -777,7 +649,7 @@ impl Picked {
                     .map(|picked| picked.form.check(&types))
                     .collect()
             });
-        // The lock is let go first: running a check takes it again.
+        // Release the lock first: running a check takes it again.
         for (picked, check) in self.forms.iter_mut().zip(built) {
             picked.holds = check.as_ref().is_ok_and(|check| {
                 matches!(

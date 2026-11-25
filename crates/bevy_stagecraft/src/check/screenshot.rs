@@ -1,31 +1,15 @@
 //! Screenshot checks: the frame, or one node's rectangle of it, against a
-//! picture stored next to the scenario (Playwright's `toHaveScreenshot`).
+//! picture stored next to the scenario.
 //!
-//! The baseline is `<base_dir>/<slug of the scenario name>/<name>.png`
-//! (see `directory_name`). A missing baseline is written and fails. A
-//! mismatch writes `.diagnostics/<name>.actual.png` and
-//! `.diagnostics/<name>.diff.png` in the baseline directory, and a match
-//! removes them; a name may not start with `.`, so no baseline can collide
-//! with them, and other files beside the baselines are never touched. Update
-//! mode (`RIN_UPDATE_SNAPSHOTS`) rewrites the baseline. With `of`, the picture
-//! is the target's node rectangle: the upright bounding box, in whole
-//! physical pixels, of its box under the complete `UiGlobalTransform`, so a
-//! quarter turn swaps width and height; it is clipped to the picture.
-//! [`Tolerance`] is `colour` per channel (default 2) and `pixels`, the
-//! share of pixels that may differ (default 0).
+//! The baseline is `<base_dir>/<slug of the scenario name>/<name>.png`. A
+//! missing baseline is written and fails. A mismatch writes
+//! `.diagnostics/<name>.actual.png` and `.diff.png` beside the baselines, and a
+//! match removes them; a name may not start with `.`, so no baseline can
+//! collide. Update mode (`RIN_UPDATE_SNAPSHOTS`) rewrites the baseline.
 //!
-//! The compare, crop and diff code is ungated; PNG encoding and decoding need
-//! feature `record`.
-//!
-//! Pixels need the renderer, so only the recorder (feature `record`) can
-//! take them. Everywhere else the check is *skipped*: it is recorded as
-//! [`Outcome::Skipped`](crate::Outcome::Skipped), which does not fail the
-//! scenario.
-//!
-//! The comparison itself is plain data over RGBA bytes and is tested without
-//! a GPU. The player asks for a picture through [`Pictures`], the recorder
-//! answers it, and [`judge`] then compares each screenshot check in the
-//! check that is polled, leaving the verdicts for [`verdict`] to read.
+//! Pixels need the renderer: without the recorder (feature `record`) the check
+//! is skipped, which does not fail the scenario. PNG encoding and decoding need
+//! that feature too; the rest is ungated and tested without a GPU.
 
 use alloc::{string::String, vec::Vec};
 use core::fmt;
@@ -42,43 +26,24 @@ use serde::{Deserialize, Serialize};
 use super::{Check, Verdict, widget};
 use crate::targets::{Lookup, Target};
 
-/// The environment variable that makes every screenshot check rewrite its
-/// baseline instead of comparing with it.
 pub(crate) const UPDATE_ENV: &str = "RIN_UPDATE_SNAPSHOTS";
-/// How far a channel may be off before a pixel counts as different, unless the
-/// check says otherwise: enough for rounding in a driver, far below any change
-/// of colour a person would make.
 pub(crate) const DEFAULT_COLOUR_TOLERANCE: u8 = 2;
-/// Bytes in one RGBA pixel.
 const CHANNELS: usize = 4;
-/// Frames a picture may take to come back before the check gives up, so a
-/// renderer that never answers is an error and not a hang.
+/// A renderer that never answers is an error, not a hang.
 const MAX_PICTURE_FRAMES: u32 = 600;
-/// What a pixel that differs is painted in a diff image.
 const DIFF_COLOUR: [u8; 4] = [255, 0, 255, 255];
-/// How much of its brightness a pixel that matches keeps in a diff image.
 const DIFF_DIM_DIVISOR: u8 = 3;
-/// The directory, inside a baseline directory, that holds the pictures a
-/// failure leaves. A screenshot name may not start with `.`, so no baseline
-/// (`<name>.png`) can be this directory or lie in it, whatever the names are:
-/// `home.actual` is a baseline of its own and `home`'s picture taken is not it.
+/// A name may not start with `.`, so no baseline can be this directory or lie
+/// in it.
 const DIAGNOSTICS_DIR: &str = ".diagnostics";
-/// The file name suffix of the picture a baseline is compared with.
 const ACTUAL_SUFFIX: &str = "actual";
-/// The file name suffix of the picture that shows what differs.
 const DIFF_SUFFIX: &str = "diff";
 
-/// How much two pictures may differ and still be the same: noise a renderer
-/// adds is not a regression.
-///
-/// A pixel differs when any of its channels is further than `colour` from the
-/// baseline's; the check fails when the share of pixels that differ is above
-/// `pixels`. In a file it is written `tolerance: (colour: 4, pixels: 0.01)`,
-/// leaving out what is not changed.
+/// Noise a renderer adds is not a regression. In a file:
+/// `tolerance: (colour: 4, pixels: 0.01)`, leaving out what is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Tolerance {
-    /// The most a channel (0 to 255) may be off before the pixel differs.
     pub colour: u8,
     /// The largest share of pixels, from 0 to 1, that may differ.
     pub pixels: f64,
@@ -94,7 +59,6 @@ impl Default for Tolerance {
 }
 
 impl Tolerance {
-    /// No pixel may be off at all.
     #[must_use]
     pub const fn exact() -> Self {
         Self {
@@ -103,26 +67,22 @@ impl Tolerance {
         }
     }
 
-    /// This tolerance with another per-channel colour tolerance.
     #[must_use]
     pub const fn with_colour(mut self, colour: u8) -> Self {
         self.colour = colour;
         self
     }
 
-    /// This tolerance with another largest share of differing pixels.
     #[must_use]
     pub const fn with_pixels(mut self, pixels: f64) -> Self {
         self.pixels = pixels;
         self
     }
 
-    /// Whether this is [`Tolerance::default`], which a file leaves out.
     pub(super) fn is_default(&self) -> bool {
         *self == Self::default()
     }
 
-    /// Why this tolerance cannot be used, if it cannot.
     pub(super) fn problem(&self) -> Option<String> {
         (!self.pixels.is_finite() || !(0.0..=1.0).contains(&self.pixels)).then(|| {
             format!(
@@ -144,7 +104,6 @@ impl fmt::Display for Tolerance {
     }
 }
 
-/// Why `name` cannot name a baseline file, if it cannot.
 pub(super) fn name_problem(name: &str) -> Option<String> {
     if name.is_empty() {
         Some("a screenshot needs a name".into())
@@ -161,8 +120,7 @@ pub(super) fn name_problem(name: &str) -> Option<String> {
     }
 }
 
-/// The directory a scenario's baselines are in, below the directory its
-/// files are in: its name with everything but letters and digits made `-`.
+/// Everything but letters and digits becomes `-`.
 #[must_use]
 pub(crate) fn directory_name(scenario: &str) -> String {
     let slug: String = scenario
@@ -187,20 +145,13 @@ pub(crate) fn directory_name(scenario: &str) -> String {
     }
 }
 
-/// The file in a baseline directory that names the scenario it belongs to.
-/// A screenshot name may not start with `.`, so it never clashes with one.
+/// A name may not start with `.`, so it never clashes with a baseline.
 const OWNER_FILE: &str = ".scenario";
 
-/// Claims `folder` for `scenario`, or says who has it already.
-///
-/// `directory_name` is lossy (`A B` and `A-B` are both `a-b`), so two
-/// scenarios, or a scenario and one of its variants, could share baselines
-/// and overwrite each other's. The folder therefore records the exact name
-/// that owns it in [`OWNER_FILE`]; a different name finds it taken and the
-/// check is broken, not silently compared. A folder with baselines but no
-/// record (made before this existed) is adopted by the first scenario that
-/// uses it. Failing to write the record is not an error: the baselines then
-/// work as they did, unprotected.
+/// `directory_name` is lossy (`A B` and `A-B` are both `a-b`), so the folder
+/// records its exact owner in [`OWNER_FILE`] and another name finds it taken. A
+/// folder with baselines and no record is adopted by the first scenario to use
+/// it; failing to write the record is not an error.
 fn claim_directory(folder: &Path, scenario: &str) -> Result<(), String> {
     let owner = folder.join(OWNER_FILE);
     let Ok(existing) = fs::read_to_string(&owner) else {
@@ -221,13 +172,10 @@ fn claim_directory(folder: &Path, scenario: &str) -> Result<(), String> {
     }
 }
 
-/// Whether screenshot checks rewrite their baselines instead of comparing.
-///
-/// Starts as `RIN_UPDATE_SNAPSHOTS` says (set and not `0`); insert it to
-/// decide in code. Only the recorder has pictures to write.
+/// Starts as `RIN_UPDATE_SNAPSHOTS` says (set and not `0`). Only the recorder
+/// has pictures to write.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenshotSettings {
-    /// Rewrite every baseline with the picture taken.
     pub update: bool,
 }
 
@@ -239,50 +187,34 @@ impl Default for ScreenshotSettings {
     }
 }
 
-/// What a screenshot check did to its files, for the index to link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenshotRecord {
-    /// The check's name.
     pub name: String,
-    /// Where its baseline is (or was to be).
     pub baseline: PathBuf,
-    /// What came of it.
     pub result: ScreenshotResult,
 }
 
-/// How a screenshot check ended, as far as its files go.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ScreenshotResult {
-    /// The picture matched the baseline.
     Matched,
-    /// There was no baseline, and the picture was written as one.
     Created,
-    /// `RIN_UPDATE_SNAPSHOTS` rewrote the baseline.
     Updated,
-    /// The picture did not match; it and a picture of what differs were
-    /// written next to the baseline.
     Mismatch {
-        /// The picture taken.
         actual: PathBuf,
-        /// The picture of what differs, where the sizes allowed one.
         diff: Option<PathBuf>,
     },
 }
 
-/// A picture: tightly packed 8-bit RGBA, top row first.
+/// Tightly packed 8-bit RGBA, top row first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Picture {
-    /// Width in pixels.
     pub(crate) width: u32,
-    /// Height in pixels.
     pub(crate) height: u32,
-    /// `width * height * 4` bytes.
     pub(crate) rgba: Vec<u8>,
 }
 
 impl Picture {
-    /// A picture of one colour.
     #[cfg(test)]
     pub(crate) fn filled(width: u32, height: u32, colour: [u8; 4]) -> Self {
         let rgba = colour
@@ -298,14 +230,12 @@ impl Picture {
         }
     }
 
-    /// The bytes of the pixel at `(x, y)`, which must be inside.
     fn pixel(&self, x: u32, y: u32) -> Option<&[u8]> {
         let start = (y as usize * self.width as usize + x as usize) * CHANNELS;
         self.rgba.get(start..start + CHANNELS)
     }
 
-    /// The part of the picture in the rectangle from `left_top` of this size,
-    /// clipped to the picture; `None` where nothing of it is inside.
+    /// Clipped to the picture; `None` where nothing is inside.
     fn crop(&self, left_top: UVec2, size: UVec2) -> Option<Self> {
         let right = left_top.x.saturating_add(size.x).min(self.width);
         let bottom = left_top.y.saturating_add(size.y).min(self.height);
@@ -325,8 +255,6 @@ impl Picture {
         })
     }
 
-    /// How many pixels differ from `other`'s, when both are the same size:
-    /// those with a channel further apart than `colour`.
     fn differing(&self, other: &Self, colour: u8) -> usize {
         let (ours, _) = self.rgba.as_chunks::<CHANNELS>();
         let (theirs, _) = other.rgba.as_chunks::<CHANNELS>();
@@ -336,8 +264,6 @@ impl Picture {
             .count()
     }
 
-    /// A picture of where this one and `other`, the same size, differ: the
-    /// differing pixels in a loud colour, the rest of this one dimmed.
     fn diff(&self, other: &Self, colour: u8) -> Self {
         let mut rgba = Vec::with_capacity(self.rgba.len());
         let (ours, _) = self.rgba.as_chunks::<CHANNELS>();
@@ -358,60 +284,44 @@ impl Picture {
     }
 }
 
-/// Whether two pixels differ by more than `colour` in some channel.
 fn differs(a: [u8; CHANNELS], b: [u8; CHANNELS], colour: u8) -> bool {
     a.iter().zip(b).any(|(a, b)| a.abs_diff(b) > colour)
 }
 
-/// Whether the picture a check waits for is asked for, on its way or here.
 #[derive(Debug, Default)]
 enum Phase {
-    /// None is wanted.
     #[default]
     Idle,
-    /// The player wants one; the renderer has not been told yet.
     Wanted,
-    /// The renderer is taking one.
     Requested,
-    /// It is here, or why it never will be.
     Ready(Result<Picture, String>),
 }
 
-/// The picture a screenshot check compares with, between the player, which
-/// asks for it, and the recorder, which takes it. Present only where a
-/// renderer is, so a world without it skips the checks.
+/// Present only where a renderer is, so a world without it skips the checks.
 #[derive(Resource, Debug, Default)]
 pub(crate) struct Pictures {
-    /// Where the picture is.
     phase: Phase,
     /// Which request the picture is for, so one that comes back late from a
-    /// scenario that was stopped is not taken for the next one's.
+    /// stopped scenario is not taken for the next one's.
     token: u32,
-    /// Frames the picture has been waited for.
     waited: u32,
-    /// What each screenshot check in the check being polled came to.
     judgements: Vec<(Check, Judgement)>,
-    /// The overlay's nodes hidden from the picture, with what to put back.
     hidden: Vec<(Entity, Visibility)>,
 }
 
 impl Pictures {
-    /// Forgets any request, for a scenario that begins.
     pub(crate) fn reset(&mut self) {
         self.phase = Phase::Idle;
         self.token = self.token.wrapping_add(1);
         self.judgements.clear();
     }
 
-    /// Asks for a picture of the world as the frame being played leaves it.
     fn want(&mut self) {
         self.token = self.token.wrapping_add(1);
         self.waited = 0;
         self.phase = Phase::Wanted;
     }
 
-    /// Whether a picture is wanted and not yet being taken; marks it as being
-    /// taken, and says which request it is.
     pub(crate) fn begin_taking(&mut self) -> Option<u32> {
         matches!(self.phase, Phase::Wanted).then(|| {
             self.phase = Phase::Requested;
@@ -419,32 +329,25 @@ impl Pictures {
         })
     }
 
-    /// Whether the player is waiting for a picture the renderer has not been
-    /// told about yet: the overlay is hidden for it.
     pub(crate) const fn is_wanted(&self) -> bool {
         matches!(self.phase, Phase::Wanted)
     }
 
-    /// Hands over the picture for request `token`, or why there is none. One
-    /// for another request is dropped.
+    /// One for another request is dropped.
     pub(crate) fn deliver(&mut self, token: u32, picture: Result<Picture, String>) {
         if token == self.token && matches!(self.phase, Phase::Requested) {
             self.phase = Phase::Ready(picture);
         }
     }
 
-    /// Remembers what was hidden from the picture, to put back.
     pub(crate) fn hide(&mut self, hidden: Vec<(Entity, Visibility)>) {
         self.hidden = hidden;
     }
 
-    /// Takes what was hidden from the picture.
     pub(crate) fn take_hidden(&mut self) -> Vec<(Entity, Visibility)> {
         core::mem::take(&mut self.hidden)
     }
 
-    /// The picture, once it is here: asks for one when none is wanted yet, and
-    /// `None` while it is on its way.
     fn advance(&mut self) -> Option<Result<Picture, String>> {
         match core::mem::take(&mut self.phase) {
             Phase::Idle => {
@@ -467,31 +370,19 @@ impl Pictures {
     }
 }
 
-/// What a screenshot check came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Judgement {
-    /// The picture matches.
     Holds,
-    /// It does not, and why.
     Fails(String),
-    /// The check cannot be made at all, and why.
     Broken(String),
 }
 
-/// What the player does for a check that has a screenshot in it, before it
-/// polls it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Readiness {
-    /// The picture is on its way; look again after a frame.
     Waiting,
-    /// The check can be polled: the pictures are judged, or there is no
-    /// renderer and the checks will say they were skipped.
     Ready,
 }
 
-/// Makes ready what polling `check` needs: asks for a picture and, once it is
-/// here, compares it with the baseline of each screenshot check in `check`.
-/// `directory` is where the scenario's files are, and `scenario` its name.
 pub(crate) fn prepare(
     world: &mut World,
     check: &Check,
@@ -553,14 +444,12 @@ pub(crate) fn prepare(
     Readiness::Ready
 }
 
-/// Forgets what the last [`prepare`] judged.
 pub(crate) fn forget(world: &mut World) {
     if let Some(mut pictures) = world.get_resource_mut::<Pictures>() {
         pictures.judgements.clear();
     }
 }
 
-/// What a screenshot check comes to, for [`Check::poll`](super::Check).
 pub(super) fn verdict(world: &World, check: &Check) -> Verdict {
     let Some(pictures) = world.get_resource::<Pictures>() else {
         return Verdict::Unavailable(
@@ -580,30 +469,20 @@ pub(super) fn verdict(world: &World, check: &Check) -> Verdict {
     }
 }
 
-/// How far a corner may sit inside a pixel edge and still count as on it:
-/// a node turned a quarter turn has corners off by float noise, which would
-/// otherwise widen the crop by a whole pixel.
+/// A quarter-turned node has corners off by float noise, which would widen the
+/// crop by a whole pixel.
 const EDGE_EPSILON: f32 = 1e-3;
 
-/// The rectangle of the picture a target's node covers, in physical pixels:
-/// where its top left is and how big it is.
-///
-/// This is the axis-aligned bounding box of the node's box after its complete
-/// [`UiGlobalTransform`] (its own `UiTransform` and those of its parents:
-/// rotation, scale and translation), widened to whole pixels. A node turned a
-/// quarter turn therefore swaps its width and height; one turned any other
-/// way is cropped to the smallest upright rectangle holding it, so pixels of
-/// the picture outside the node itself but inside that rectangle are part of
-/// the crop. Parts left of or above the picture are clipped here and the rest
-/// by [`Picture::crop`].
+/// The upright bounding box of the node's box under its complete
+/// [`UiGlobalTransform`], widened to whole pixels: a quarter turn swaps width
+/// and height, and other turns include pixels outside the node. Clipped here
+/// on the left and top, the rest by [`Picture::crop`].
 fn node_rectangle(world: &World, node: Entity) -> Option<(UVec2, UVec2)> {
     let computed = world.get::<ComputedNode>(node)?;
     let transform = world.get::<UiGlobalTransform>(node)?.affine();
     Some(bounds(transform, computed.size()))
 }
 
-/// [`node_rectangle`] for a box of `size` centred on the origin that
-/// `transform` places.
 fn bounds(transform: Affine2, size: Vec2) -> (UVec2, UVec2) {
     let half = size / 2.0;
     let (low, high) = [
@@ -625,7 +504,6 @@ fn bounds(transform: Affine2, size: Vec2) -> (UVec2, UVec2) {
     )
 }
 
-/// Compares the picture, or the part of it a node covers, with its baseline.
 fn judge(
     world: &World,
     picture: &Picture,
@@ -694,28 +572,19 @@ fn judge(
     }
 }
 
-/// How a picture compared with the baseline file.
 enum Compared {
-    /// Within the tolerance.
     Matched,
-    /// The baseline was rewritten.
     Updated,
-    /// There was no baseline; it was written.
     Created,
-    /// Not within the tolerance.
     Differs {
-        /// What differs, in words.
         message: String,
-        /// Where the picture taken was written.
         actual: PathBuf,
-        /// Where the picture of the difference was written.
         diff: Option<PathBuf>,
     },
 }
 
-/// Compares `actual` with the baseline file, writing what the outcome needs.
-/// An error is a file that cannot be read or written, which is no verdict on
-/// the picture.
+/// An error is a file that cannot be read or written, no verdict on the
+/// picture.
 fn compare(
     actual: &Picture,
     name: &str,
@@ -723,9 +592,8 @@ fn compare(
     tolerance: Tolerance,
     update: bool,
 ) -> Result<Compared, String> {
-    // Files an older version left as `<name>.actual.png` beside the baselines
-    // are never touched: one of them may be a baseline of a check with that
-    // name. They are stale and can be deleted by hand.
+    // Older `<name>.actual.png` files beside the baselines are never touched:
+    // one may be a baseline.
     let diagnostics = baseline.with_file_name(DIAGNOSTICS_DIR);
     let actual_path = diagnostics.join(format!("{name}.{ACTUAL_SUFFIX}.png"));
     let diff_path = diagnostics.join(format!("{name}.{DIFF_SUFFIX}.png"));
@@ -789,16 +657,12 @@ fn compare(
     })
 }
 
-/// Whether `differing` of `total` pixels is no more than the `share`, from 0
-/// to 1, a tolerance allows.
 fn within_share(differing: usize, total: usize, share: f64) -> bool {
-    // Counts are exact in `f64`; a picture of over four billion pixels is
-    // compared as if it had that many.
+    // Counts are exact in `f64`; over four billion pixels compare as that many.
     let count = |pixels: usize| f64::from(u32::try_from(pixels).unwrap_or(u32::MAX));
     count(differing) <= count(total) * share
 }
 
-/// Writes `picture` as a PNG at `path`, with the directory made.
 fn write_png(path: &Path, picture: &Picture) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -809,15 +673,13 @@ fn write_png(path: &Path, picture: &Picture) -> Result<(), String> {
         .map_err(|error| format!("`{}` cannot be written: {error}", path.display()))
 }
 
-/// Removes the pictures an earlier failure left, now that there is none.
 fn remove_stale(actual: &Path, diff: &Path) {
-    // A file that is not there is the usual case, and one that cannot be
-    // removed only leaves an old picture lying about.
+    // A missing file is the usual case; one that cannot be removed only leaves
+    // an old picture.
     let _ = fs::remove_file(actual);
     let _ = fs::remove_file(diff);
 }
 
-/// PNG reading and writing, which only the recorder's image codec has.
 #[cfg(feature = "record")]
 mod png {
     use alloc::{string::String, vec::Vec};
@@ -825,7 +687,6 @@ mod png {
     use super::Picture;
     use crate::capture::Frame;
 
-    /// The picture as PNG bytes.
     pub(super) fn encode(picture: &Picture) -> Result<Vec<u8>, String> {
         Frame::new(picture.width, picture.height, picture.rgba.clone())
             .ok_or_else(|| "the picture's size does not fit its pixels".to_owned())?
@@ -833,7 +694,6 @@ mod png {
             .map_err(|error| error.to_string())
     }
 
-    /// The picture a PNG holds, as 8-bit RGBA.
     pub(super) fn decode(bytes: &[u8]) -> Result<Picture, String> {
         let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
             .map_err(|error| error.to_string())?
@@ -846,22 +706,18 @@ mod png {
     }
 }
 
-/// Without the recorder there is no PNG codec, and no picture to compare.
 #[cfg(not(feature = "record"))]
 mod png {
     use alloc::{string::String, vec::Vec};
 
     use super::Picture;
 
-    /// What both ways of using the codec say.
     const NEEDS_RECORD: &str = "reading and writing pictures needs feature `record`";
 
-    /// Always an error: see [`NEEDS_RECORD`].
     pub(super) fn encode(_: &Picture) -> Result<Vec<u8>, String> {
         Err(NEEDS_RECORD.into())
     }
 
-    /// Always an error: see [`NEEDS_RECORD`].
     pub(super) fn decode(_: &[u8]) -> Result<Picture, String> {
         Err(NEEDS_RECORD.into())
     }
@@ -876,7 +732,6 @@ mod tests {
         ui::{UiTransform, px},
     };
 
-    /// Updates the headless app gets to lay the UI out and place it.
     const LAYOUT_FRAMES: u8 = 3;
 
     #[test]
@@ -935,9 +790,6 @@ mod tests {
         );
     }
 
-    /// Lays out a 200 by 100 panel at (50, 50) carrying `transform`, with a 40
-    /// by 30 child at local (20, 10), in a headless app at `scale_factor`, and
-    /// gives the child's rectangle as the screenshot check would crop it.
     fn laid_out_child_rectangle(
         transform: UiTransform,
         scale_factor: f32,
@@ -1071,7 +923,6 @@ mod tests {
         assert_eq!(directory_name("???"), "scenario");
     }
 
-    /// A fresh directory for one test's baselines.
     fn scratch(test: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("rin-claims-{}-{test}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
@@ -1166,8 +1017,7 @@ mod tests {
     }
 }
 
-/// The flow of a screenshot check against a renderer that answers at once
-/// with a picture of one colour: no GPU is needed.
+/// A screenshot check against a renderer that answers at once; no GPU needed.
 #[cfg(all(test, feature = "record"))]
 mod flow {
     use bevy::{
@@ -1184,11 +1034,9 @@ mod flow {
     use super::*;
     use crate::{Outcome, Scenario, player::ScenarioSystems};
 
-    /// The colour the fake renderer paints the whole frame.
     #[derive(Resource)]
     struct Paint([u8; 4]);
 
-    /// Answers the player's request with a picture of [`Paint`].
     fn fake_renderer(paint: Res<Paint>, mut pictures: ResMut<Pictures>) {
         if let Some(token) = pictures.begin_taking() {
             pictures.deliver(
@@ -1202,7 +1050,6 @@ mod flow {
         }
     }
 
-    /// A fresh directory for one test's baselines.
     fn directory(test: &str) -> PathBuf {
         let path =
             std::env::temp_dir().join(format!("rin-screenshots-{}-{test}", std::process::id()));
@@ -1210,8 +1057,6 @@ mod flow {
         path
     }
 
-    /// Runs `check` as the scenario's expectation in an app whose frame is
-    /// `colour` and whose baselines live in `dir`.
     fn run(dir: &Path, check: &Check, colour: [u8; 4], update: bool) -> crate::ScenarioReport {
         let scenario = Scenario::new("Home screen")
             .with_base_dir(dir)
@@ -1272,14 +1117,12 @@ mod flow {
             report.screenshots.first().map(|record| &record.result),
             Some(ScreenshotResult::Mismatch { diff: Some(_), .. })
         ));
-        // A looser tolerance accepts the same change.
         let loose = check.with_tolerance(Tolerance::default().with_colour(100));
         let accepted = run(&dir, &loose, [10, 20, 90, 255], false);
         assert!(accepted.passed(), "{:?}", accepted.failures());
         assert!(!folder.join(".diagnostics/home.actual.png").exists());
     }
 
-    /// Reads the baseline of `name` in the `home-screen` folder of `dir`.
     fn baseline_of(dir: &Path, name: &str) -> Vec<u8> {
         fs::read(dir.join(format!("home-screen/{name}.png"))).unwrap_or_default()
     }
@@ -1293,7 +1136,7 @@ mod flow {
         for check in [&home, &other, &diff] {
             run(&dir, check, [10, 20, 30, 255], false);
         }
-        // Give each baseline its own colour so a clobbered one shows.
+        // Give each baseline its own color so a clobbered one shows.
         run(&dir, &other, [1, 2, 3, 255], true);
         run(&dir, &diff, [4, 5, 6, 255], true);
         let (kept_other, kept_diff) = (
@@ -1302,13 +1145,11 @@ mod flow {
         );
         assert!(!kept_other.is_empty() && !kept_diff.is_empty());
 
-        // A mismatch in `home` leaves both alone.
         let mismatch = run(&dir, &home, [10, 20, 90, 255], false);
         assert!(!mismatch.passed());
         assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
         assert_eq!(baseline_of(&dir, "home.diff"), kept_diff);
 
-        // A match in `home` removes its own leftovers only.
         let matched = run(&dir, &home, [10, 20, 30, 255], false);
         assert!(matched.passed(), "{:?}", matched.failures());
         assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
@@ -1318,14 +1159,12 @@ mod flow {
                 .exists()
         );
 
-        // So does an update.
         run(&dir, &home, [10, 20, 90, 255], false);
         let updated = run(&dir, &home, [10, 20, 90, 255], true);
         assert!(updated.passed(), "{:?}", updated.failures());
         assert_eq!(baseline_of(&dir, "home.actual"), kept_other);
         assert_eq!(baseline_of(&dir, "home.diff"), kept_diff);
 
-        // Both baselines still compare against their own picture.
         let still = run(&dir, &other, [1, 2, 3, 255], false);
         assert!(still.passed(), "{:?}", still.failures());
     }
