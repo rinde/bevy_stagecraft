@@ -1,57 +1,6 @@
-//! Recording scenarios offscreen, for people to review (feature `record`).
+//! Recording scenarios offscreen (feature `record`).
 //!
-//! The real renderer runs with every camera pointed at an [`Image`] of the
-//! scenario's window size, and frames are read back through `Screenshot`. No
-//! window or display is needed; on a machine without a GPU, set
-//! `WGPU_BACKEND=vulkan` and install lavapipe.
-//!
-//! [`RecorderPlugins`] is the render set the app's own plugins go on top of.
-//! [`Recorder`] builds one app per scenario, plays it, and writes PNGs, a
-//! filmstrip, a GIF and an `index.html`, failures first (see
-//! [`crate::index`]). [`Recorder::check`] plays the same rendered scenarios
-//! and returns a [`Checked`] with no pictures, traces or files.
-//!
-//! # Variants and scale
-//!
-//! [`Recorder::variants`] records every scenario once per variant, one index
-//! entry each. With [`RecorderPlugins::with_scale_factor`] the image has the
-//! physical size, and the cameras' `ImageRenderTarget`, the synthetic
-//! pointer's and each `Screenshot`'s carry the scale factor; without it the
-//! pointer would be on no camera and the picture black. A scenario that does
-//! not name the variant is [`ScenarioRecording::skipped`]: nothing is played
-//! or written for it and its index card says `SKIPPED`. [`passed`],
-//! [`failed`] and [`Recording::any_failed`] keep skipped apart from failed.
-//!
-//! [`passed`]: ScenarioRecording::passed
-//! [`failed`]: ScenarioRecording::failed
-//!
-//! # Traces
-//!
-//! Every recorded scenario is traced (see [`crate::trace`]): the noise filter
-//! is [`Recorder::with_noise_filter`] and the result is
-//! [`ScenarioRecording::trace`]. `request_frames` runs after
-//! [`crate::ScenarioSystems::Trace`], so each trace
-//! point's frame has a picture.
-//!
-//! # Screenshot checks
-//!
-//! The recorder also answers screenshot checks (see
-//! [`crate::Check::screenshot`]). Its support plugin (`RecorderSupport`) has
-//! the `Pictures` resource, through which the player asks and the recorder
-//! answers, and the `ScreenshotSettings` resource:
-//!
-//! * `request_check_picture` (`Last`, after [`RecorderSystems::Capture`])
-//!   takes the picture the player wants. Bevy keeps one screenshot per target
-//!   per frame, so where `request_frames` already took one of that frame the
-//!   recording's own picture answers both;
-//! * `store_check_picture` hands the picture over;
-//! * `hide_overlay_for_picture` (`PostUpdate`, before visibility propagation)
-//!   hides every [`crate::overlay::OverlayRoot`] for it, so a
-//!   baseline holds the app and not the tooling, and `show_overlay_again`
-//!   (`First`) puts it back.
-//!
-//! A world without `Pictures` (headless tests, the gallery) skips screenshot
-//! checks.
+//! Without a GPU, set `WGPU_BACKEND=vulkan` and install lavapipe.
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;
@@ -106,107 +55,68 @@ use crate::{
     variant::Variant,
 };
 
-/// Every this many frames a picture is taken, unless configured otherwise.
 pub const DEFAULT_EVERY: u32 = 10;
-/// Updates run before the scenario starts, however fast the app settles, so
-/// layout, the glyph atlas and the render pipelines are in place.
+/// Updates run before the scenario starts so layout, the glyph atlas and pipelines are in place.
 pub const MIN_SETTLE_FRAMES: u32 = 4;
-/// Updates after which an app that has still not settled is an error.
 pub const MAX_SETTLE_FRAMES: u32 = 1200;
-/// Updates after the scenario ends that pictures still on their way to the
-/// CPU are waited for.
 pub const MAX_DRAIN_FRAMES: u32 = 240;
-/// Upper bound on a scenario's length in frames, so a script that never ends
-/// is an error and not a hang.
+/// A script that never ends is an error, not a hang.
 pub const MAX_SCENARIO_FRAMES: u32 = 1_000_000;
-/// The group of a scenario added without one.
 pub const DEFAULT_GROUP: &str = "Scenarios";
 
-/// The image the app's cameras render to, and where captured pictures wait.
 #[derive(Resource, Debug, Clone)]
 pub struct RecorderTarget(pub Handle<Image>);
 
-/// What the recorder knows about a picture when it asks for it.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct CaptureMeta {
-    /// The player frame the picture shows; `0` is before the first step.
+    /// `0` is before the first step.
     pub frame: u32,
-    /// The steps that began on this frame, by index into the script.
     pub steps: Vec<usize>,
-    /// The step, in words, as the caption strip shows it.
     pub step_text: String,
-    /// The checks so far, in words.
     pub checks_text: String,
-    /// The scenario's own caption at this frame.
     pub caption: Option<String>,
-    /// Whether a step or check had failed by this frame.
     pub failed: bool,
 }
 
-/// A picture with what was known when it was taken.
 #[derive(Debug, Clone)]
 pub struct Capture {
-    /// What was going on.
     pub meta: CaptureMeta,
-    /// The pixels.
     pub frame: Frame,
 }
 
-/// Pictures asked for, and pictures that have come back, by frame.
 #[derive(Resource, Debug, Default)]
 pub struct Captures {
-    /// Take a picture every this many frames; `0` means only at step
-    /// boundaries and the end.
+    /// `0` means only at step boundaries and the end.
     pub every: u32,
-    /// Whether the capture system is asking for pictures.
     pub enabled: bool,
-    /// How many pictures have been asked for.
     requested: u32,
-    /// The last frame a picture was asked for, so none is asked for twice.
     last_requested: Option<u32>,
-    /// Pictures that have come back, ordered by frame.
     done: BTreeMap<u32, Capture>,
 }
 
 impl Captures {
-    /// How many pictures were asked for and have not come back yet.
     #[must_use]
     pub fn outstanding(&self) -> u32 {
         self.requested
             .saturating_sub(u32::try_from(self.done.len()).unwrap_or(u32::MAX))
     }
 
-    /// The pictures that have come back, in frame order.
     pub fn captures(&self) -> impl Iterator<Item = &Capture> {
         self.done.values()
     }
 }
 
-/// System sets of the recorder, all in `PostUpdate` or `Last`.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecorderSystems {
-    /// Points cameras at the recorder's image, in `PostUpdate`.
     Retarget,
-    /// Asks for pictures of the frame just played, in `Last`.
     Capture,
 }
 
-/// The render set the app's own plugins go on top of.
-///
-/// It is a [`HeadlessPlugins`] app with the real renderer, `bevy_ui_render`
-/// (so the UI and the cursor are in the picture), the scenario player and the
-/// cursor overlay.
-///
-/// Do not add [`ScenarioPlayerPlugin`] or [`CursorOverlayPlugin`] again. The
-/// primary window stays virtual: it carries the cursor position and the size,
-/// and every camera that would render to it renders to an image instead, which
-/// `SyntheticInput` aims its pointer at.
+/// Do not add [`ScenarioPlayerPlugin`] or [`CursorOverlayPlugin`] again; cameras render to an image
+/// and the primary window stays virtual.
 #[derive(Debug, Clone, Copy)]
 pub struct RecorderPlugins {
-    /// Size of the virtual primary window, in logical pixels.
     window_size: (u32, u32),
-    /// Physical pixels per logical pixel; the image has that many times the
-    /// pixels of the window size.
     scale_factor: f32,
 }
 
@@ -220,18 +130,13 @@ impl Default for RecorderPlugins {
 }
 
 impl RecorderPlugins {
-    /// Sets the size of the window, in logical pixels. The image has that
-    /// size times the scale factor, in physical pixels.
     #[must_use]
     pub const fn with_window_size(mut self, width: u32, height: u32) -> Self {
         self.window_size = (width, height);
         self
     }
 
-    /// Sets the scale factor: physical pixels per logical pixel, as of
-    /// [`HeadlessPlugins::with_scale_factor`]. The UI lays out for the logical
-    /// size and the pictures have that many times the pixels. A value that is
-    /// not finite and above zero is ignored.
+    /// A value that is not finite and above zero is ignored.
     #[must_use]
     pub const fn with_scale_factor(mut self, scale_factor: f32) -> Self {
         if scale_factor.is_finite() && scale_factor > 0.0 {
@@ -251,8 +156,7 @@ impl PluginGroup for RecorderPlugins {
             // The render plugin brings the render crate's camera plugin.
             .disable::<RenderCameraSupport>()
             .add_before::<ImagePlugin>(RenderPlugin {
-                // Otherwise the first frames are drawn without their pipelines
-                // and frame 0 would differ from run to run.
+                // Without this, frame 0 differs from run to run.
                 synchronous_pipeline_compilation: true,
                 ..RenderPlugin::default()
             })
@@ -266,7 +170,6 @@ impl PluginGroup for RecorderPlugins {
     }
 }
 
-/// Aims cameras and pointer at the recorder's image and takes pictures.
 #[derive(Debug, Default, Clone, Copy)]
 struct RecorderSupport;
 
@@ -275,12 +178,8 @@ impl Plugin for RecorderSupport {
         app.init_resource::<Captures>()
             .init_resource::<Pictures>()
             .init_resource::<ScreenshotSettings>()
-            // The synthetic pointer writes `PointerInput` itself; Bevy's own
-            // mouse picking would add a second one aimed at the window, which
-            // nothing renders to, and the last one wins.
-            // Touch is the same: a scripted finger writes `PointerInput` for
-            // `PointerId::Touch` itself, aimed at the image, and a headless
-            // app has no window events for Bevy's touch picking to read.
+            // The synthetic pointer writes `PointerInput` itself; Bevy's mouse and touch picking
+            // would add a second one aimed at the window.
             .insert_resource(PointerInputSettings {
                 is_mouse_enabled: false,
                 is_touch_enabled: false,
@@ -291,9 +190,7 @@ impl Plugin for RecorderSupport {
             .add_systems(Startup, create_target)
             .add_systems(
                 PostUpdate,
-                // Every set that reads a camera's target is named on its own:
-                // Bevy chains them only weakly, so being before the first of
-                // them would no longer say anything about the others.
+                // Name every set that reads a camera's target: Bevy chains them only weakly.
                 hide_overlay_for_picture
                     .before(VisibilitySystems::VisibilityPropagate),
             )
@@ -320,12 +217,9 @@ impl Plugin for RecorderSupport {
     }
 }
 
-/// Marks the screenshot taken for a screenshot check, with the request it
-/// answers.
 #[derive(Component, Debug, Clone, Copy)]
 struct CheckPicture(u32);
 
-/// Takes the picture a screenshot check wants, of the frame just played.
 fn request_check_picture(
     mut commands: Commands,
     mut pictures: ResMut<Pictures>,
@@ -339,8 +233,7 @@ fn request_check_picture(
     let Some(token) = pictures.begin_taking() else {
         return;
     };
-    // Bevy keeps one screenshot of a target a frame: a second would replace or
-    // lose the first, so the recording's picture of this frame answers both.
+    // Bevy keeps one screenshot per target per frame; reuse the recording's picture.
     if let Some(entity) = already.iter().next() {
         commands.entity(entity).insert(CheckPicture(token));
         return;
@@ -354,7 +247,6 @@ fn request_check_picture(
     commands.spawn((screenshot(&target.0, scale_factor), CheckPicture(token)));
 }
 
-/// Hands a screenshot check the picture that came back for it.
 fn store_check_picture(
     event: On<ScreenshotCaptured>,
     requests: Query<&CheckPicture>,
@@ -373,9 +265,6 @@ fn store_check_picture(
     pictures.deliver(request.0, picture);
 }
 
-/// Hides the cursor, caption and the other overlay from the frame a screenshot
-/// check is about to take, before visibility is worked out, so a baseline
-/// holds the app and not the tooling.
 fn hide_overlay_for_picture(
     mut pictures: ResMut<Pictures>,
     mut roots: Query<(Entity, &mut Visibility), With<OverlayRoot>>,
@@ -391,7 +280,6 @@ fn hide_overlay_for_picture(
     pictures.hide(hidden);
 }
 
-/// Puts the overlay back after a picture was taken without it.
 fn show_overlay_again(mut pictures: ResMut<Pictures>, mut roots: Query<&mut Visibility>) {
     for (entity, before) in pictures.take_hidden() {
         if let Ok(mut visibility) = roots.get_mut(entity) {
@@ -400,7 +288,6 @@ fn show_overlay_again(mut pictures: ResMut<Pictures>, mut roots: Query<&mut Visi
     }
 }
 
-/// Creates the image and aims the synthetic pointer at it.
 fn create_target(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -422,8 +309,7 @@ fn create_target(
         },
     );
     let mut image = Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
-    // Read back through the screenshot's own copy, but keep the data on the
-    // CPU side so the handle is also a normal image.
+    // Keep the data on the CPU side so the handle is also a normal image.
     image.asset_usage = RenderAssetUsages::default();
     let handle = images.add(image);
     input.set_target(Some(NormalizedRenderTarget::Image(image_target(
@@ -433,9 +319,7 @@ fn create_target(
     commands.insert_resource(RecorderTarget(handle));
 }
 
-/// The image as a render target at the window's scale factor. The cameras'
-/// target and the synthetic pointer's must be equal, scale factor included, or
-/// the pointer's position is not on any camera's target.
+/// The cameras' and the pointer's targets must be equal, scale factor included.
 fn image_target(handle: &Handle<Image>, scale_factor: f32) -> ImageRenderTarget {
     ImageRenderTarget {
         handle: handle.clone(),
@@ -443,11 +327,8 @@ fn image_target(handle: &Handle<Image>, scale_factor: f32) -> ImageRenderTarget 
     }
 }
 
-/// Points every camera that renders to the primary window at the image.
-///
-/// A camera that renders to an image is never Bevy's default UI camera, so the
-/// one that would have been gets `IsDefaultUiCamera`; otherwise the app's UI
-/// and the overlay would vanish from the picture.
+/// A camera rendering to an image is never Bevy's default UI camera, so mark the one that
+/// would have been; otherwise the UI vanishes from the picture.
 fn retarget_cameras(
     mut commands: Commands,
     target: Option<Res<RecorderTarget>>,
@@ -483,9 +364,6 @@ fn retarget_cameras(
     }
 }
 
-/// Asks for a picture of the frame just played when it is one worth having:
-/// a step began, the trace took a point, it is every `every`th frame, or the
-/// scenario just finished.
 fn request_frames(
     mut commands: Commands,
     mut captures: ResMut<Captures>,
@@ -537,16 +415,12 @@ fn request_frames(
     commands.spawn((screenshot(&target.0, scale_factor), meta));
 }
 
-/// A screenshot of the recorder's image. It names the image with the scale
-/// factor the cameras render to it at: Bevy keys the screenshot's output by
-/// the whole render target, so one at another scale factor would be a
-/// different target, the cameras would not draw into it, and the picture would
-/// be black.
+/// Name the image with the cameras' scale factor: Bevy keys the output by the whole target,
+/// and any other one is black.
 fn screenshot(handle: &Handle<Image>, scale_factor: f32) -> Screenshot {
     Screenshot(RenderTarget::Image(image_target(handle, scale_factor)))
 }
 
-/// Whether any step or check has failed so far.
 fn has_failed(report: &ScenarioReport) -> bool {
     report
         .steps
@@ -556,7 +430,6 @@ fn has_failed(report: &ScenarioReport) -> bool {
         .any(|outcome| matches!(outcome, Outcome::Fail(_)))
 }
 
-/// Keeps a picture that came back from the GPU.
 fn store_capture(
     event: On<ScreenshotCaptured>,
     metas: Query<&CaptureMeta>,
@@ -575,7 +448,6 @@ fn store_capture(
     }
 }
 
-/// Asks for a picture of the app as it is now, outside the player's frames.
 /// The picture comes back after the next update.
 pub fn request_capture(world: &mut World, meta: CaptureMeta) {
     let Some(target) = world.get_resource::<RecorderTarget>().cloned() else {
@@ -594,31 +466,20 @@ pub fn request_capture(world: &mut World, meta: CaptureMeta) {
     world.spawn((screenshot(&target.0, scale_factor), meta));
 }
 
-/// Why recording failed. A scenario whose checks fail is not an error: it is
-/// reported in the [`Recording`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RecordError {
-    /// A file or directory could not be written.
     Io(PathBuf, io::Error),
-    /// A picture could not be read or encoded.
     Capture(CaptureError),
-    /// The app's settle hook never said it had settled.
     NeverSettled {
-        /// The scenario.
         scenario: String,
     },
-    /// The scenario never finished.
     NeverFinished {
-        /// The scenario.
         scenario: String,
     },
-    /// Pictures never came back from the GPU: there is probably no usable
-    /// one (try `WGPU_BACKEND=vulkan` with lavapipe installed).
+    /// Probably no usable GPU; try `WGPU_BACKEND=vulkan` with lavapipe.
     NoPictures {
-        /// The scenario.
         scenario: String,
-        /// How many pictures were asked for and never arrived.
         missing: u32,
     },
 }
@@ -651,143 +512,89 @@ impl From<CaptureError> for RecordError {
     }
 }
 
-/// What was recorded for one scenario.
 #[derive(Debug, Clone)]
 pub struct ScenarioRecording {
-    /// The scenario's name.
     pub name: String,
-    /// The group it is listed under.
     pub group: String,
-    /// Its directory under the output directory, also its anchor in the index.
     pub slug: String,
-    /// How it ended.
     pub report: ScenarioReport,
-    /// Whether the scenario does not run in its variant and was skipped rather
-    /// than played (see [`Variant::skips`]).
     pub skipped: bool,
-    /// The scenario's tags (see [`Scenario::tags`]).
     pub tags: Vec<String>,
-    /// Why the scenario was not played, when it is skipped or fixme (see
-    /// [`Scenario::skip`], [`Scenario::fixme`]).
     pub disabled: Option<Disabled>,
-    /// Why the scenario is expected to fail, when it is (see
-    /// [`Scenario::should_fail`]).
     pub should_fail: Option<String>,
-    /// How many pictures were written.
     pub pictures: usize,
-    /// The world around each step, which `trace.html` in the scenario's
-    /// directory shows.
     pub trace: Option<ScenarioTrace>,
 }
 
 impl ScenarioRecording {
-    /// Whether the scenario finished with every step and check passing.
     #[must_use]
     pub fn passed(&self) -> bool {
         self.report.passed() != self.should_fail.is_some()
     }
 
-    /// Whether the scenario failed and was expected to
-    /// ([`Scenario::should_fail`]), which counts as a pass.
     #[must_use]
     pub fn failed_as_expected(&self) -> bool {
         self.should_fail.is_some() && !self.report.passed()
     }
 
-    /// Whether the scenario does not run in its variant and was skipped rather
-    /// than played. A skipped scenario is nothing to fail over.
     #[must_use]
     pub const fn skipped(&self) -> bool {
         self.skipped
     }
 
-    /// Whether the scenario is skipped or fixme and was not played, whatever
-    /// the variant.
     #[must_use]
     pub const fn is_disabled(&self) -> bool {
         self.disabled.is_some()
     }
 
-    /// Whether the scenario ran and failed.
     #[must_use]
     pub fn failed(&self) -> bool {
         !self.passed() && !self.skipped && self.disabled.is_none()
     }
 }
 
-/// Everything a [`Recorder::record`] run wrote.
 #[derive(Debug, Clone)]
 pub struct Recording {
-    /// The output directory.
     pub directory: PathBuf,
-    /// The index page, `index.html` in the output directory.
     pub index: PathBuf,
-    /// One entry per scenario, in the order they were added.
     pub scenarios: Vec<ScenarioRecording>,
 }
 
 impl Recording {
-    /// Whether any scenario failed, for the calling binary to exit non-zero. A
-    /// scenario that was skipped is nothing to fail over.
     #[must_use]
     pub fn any_failed(&self) -> bool {
         self.scenarios.iter().any(ScenarioRecording::failed)
     }
 }
 
-/// Everything a [`Recorder::check`] run played: outcomes only, nothing written.
 #[derive(Debug, Clone)]
 pub struct Checked {
-    /// One entry per scenario, in the order they were added; no pictures, no
-    /// trace.
     pub scenarios: Vec<ScenarioRecording>,
 }
 
 impl Checked {
-    /// Whether any scenario failed, for the calling binary to exit non-zero. A
-    /// scenario that was skipped is nothing to fail over.
     #[must_use]
     pub fn any_failed(&self) -> bool {
         self.scenarios.iter().any(ScenarioRecording::failed)
     }
 }
 
-/// What playing one scenario produced: its report, its pictures and, as the
-/// recorder always asks for one, its trace.
 type PlayedScenario = (ScenarioReport, Vec<Capture>, Option<ScenarioTrace>);
-/// How the app says its world has settled.
 type SettleFn = dyn Fn(&mut World) -> bool + Send + Sync;
-/// How the app adds its own plugins to the recorder's render set.
 type BuildFn = dyn Fn(&mut App) + Send + Sync;
 
-/// One scenario and where it is listed.
 struct Entry {
-    /// The group in the index.
     group: String,
-    /// The scenario.
     scenario: Scenario,
 }
 
-/// Records scenarios offscreen: PNGs at step boundaries and every `n`th frame,
-/// a filmstrip and a GIF per scenario, and an `index.html` over all of them.
-///
-/// There is no golden-image comparison; the point is for a person to look.
-/// Whether any scenario failed is in [`Recording::any_failed`].
 pub struct Recorder {
-    /// Adds the app's own plugins, resources and registry.
     build: Arc<BuildFn>,
-    /// The scenarios, in order.
     entries: Vec<Entry>,
-    /// Says when the app's world has settled.
     settle: Option<Arc<SettleFn>>,
-    /// A picture every this many frames.
     every: u32,
-    /// Which reflected types the traces' snapshots leave out.
     noise: NoiseFilter,
-    /// The environments every scenario is recorded in, each its own index
-    /// entry; the default one (the scenario as written) unless set.
     variants: Vec<Variant>,
-    /// Which scenarios are recorded, by tag.
     tags: TagFilter,
 }
 
@@ -801,10 +608,6 @@ impl fmt::Debug for Recorder {
 }
 
 impl Recorder {
-    /// A recorder for an app. `build` runs on a fresh app that already has
-    /// [`RecorderPlugins`]: it adds the app's own plugins and resources, and
-    /// anything its scenarios' setups and checks need (for example
-    /// [`crate::script::Registry::install`]).
     pub fn new(build: impl Fn(&mut App) + Send + Sync + 'static) -> Self {
         Self {
             build: Arc::new(build),
@@ -817,13 +620,11 @@ impl Recorder {
         }
     }
 
-    /// Adds a scenario to the group [`DEFAULT_GROUP`].
     #[must_use]
     pub fn scenario(self, scenario: Scenario) -> Self {
         self.grouped(DEFAULT_GROUP, scenario)
     }
 
-    /// Adds a scenario under a group of the index.
     #[must_use]
     pub fn grouped(mut self, group: impl Into<String>, scenario: Scenario) -> Self {
         self.entries.push(Entry {
@@ -833,65 +634,42 @@ impl Recorder {
         self
     }
 
-    /// Records every scenario once per variant, each its own entry in the
-    /// index named `scenario [variant]`, instead of only as written. List
-    /// [`Variant::default`] too to keep the scenario as written. A variant a
-    /// scenario does not name (see [`Variant::skips`]) gets a skipped entry,
-    /// like the `.ron` test runner; a variant that it cannot run in (a step
-    /// aimed at a screen position, in a variant that changes the window) is
-    /// recorded as a failed entry saying so. An empty list records nothing.
-    ///
-    /// Name the variants differently ([`Variant::new`]): two with one name get
-    /// separate folders, but their index entries carry the same title.
+    /// Name variants differently: two with one name share an index title.
     #[must_use]
     pub fn variants(mut self, variants: impl IntoIterator<Item = Variant>) -> Self {
         self.variants = variants.into_iter().collect();
         self
     }
 
-    /// Records only the scenarios whose tags `tags` lets through (see
-    /// [`TagFilter`]); by default all of them. A scenario with `skip` or
-    /// `fixme` is listed in the index with its reason and not played.
     #[must_use]
     pub fn with_tag_filter(mut self, tags: TagFilter) -> Self {
         self.tags = tags;
         self
     }
 
-    /// Takes a picture every `frames` frames as well as at step boundaries;
-    /// `0` turns the interval off.
     #[must_use]
     pub const fn every(mut self, frames: u32) -> Self {
         self.every = frames;
         self
     }
 
-    /// Sets which reflected types the per-step snapshots in `trace.html` leave
-    /// out; by default Bevy's own and this crate's.
     #[must_use]
     pub fn with_noise_filter(mut self, noise: NoiseFilter) -> Self {
         self.noise = noise;
         self
     }
 
-    /// Lets the app say when its world has settled (for example, terrain
-    /// chunks have loaded), before step 1, so frame 0 is the same on every
-    /// run. It is called once per update, after the setup and the view, and
-    /// returns `true` when settled. At least [`MIN_SETTLE_FRAMES`] updates run
-    /// whatever it says.
+    /// At least [`MIN_SETTLE_FRAMES`] updates run whatever it says.
     #[must_use]
     pub fn settle(mut self, settled: impl Fn(&mut World) -> bool + Send + Sync + 'static) -> Self {
         self.settle = Some(Arc::new(settled));
         self
     }
 
-    /// Plays every scenario and writes the result under `directory`.
-    ///
     /// # Errors
     ///
-    /// Fails when a file cannot be written, a picture never comes back, or an
-    /// app never settles or never finishes. A scenario that merely fails its
-    /// checks is not an error.
+    /// Fails when a file cannot be written, a picture never comes back, or an app never settles
+    /// or finishes.
     pub fn record(&self, directory: impl AsRef<Path>) -> Result<Recording, RecordError> {
         let directory = directory.as_ref();
         create_dir(directory)?;
@@ -907,29 +685,18 @@ impl Recorder {
         })
     }
 
-    /// Plays every scenario with the real renderer, as [`Recorder::record`]
-    /// does, but takes no pictures, builds no traces and writes no files: for
-    /// a CI job that only needs the checks. Outcomes are the same as in a
-    /// recording, so [`Checked::any_failed`] says whether to exit non-zero.
-    ///
-    /// Screenshot checks (see [`crate::Check::screenshot`]) still take their
-    /// pictures and read or write their baselines, which are test data and not
-    /// a recording. The scenarios' [`ScenarioRecording::pictures`] is `0` and
-    /// their [`ScenarioRecording::trace`] is `None`.
+    /// Plays as [`Recorder::record`] does but takes no pictures, traces or files; screenshot checks
+    /// still use their baselines.
     ///
     /// # Errors
     ///
-    /// Fails when an app never settles or never finishes, or a screenshot
-    /// check's picture never comes back. A scenario that merely fails its
-    /// checks is not an error.
+    /// Fails when an app never settles or never finishes, or a screenshot check's picture never
+    /// comes back.
     pub fn check(&self) -> Result<Checked, RecordError> {
         let scenarios = self.run_all(false, |_, _| Ok(()))?;
         Ok(Checked { scenarios })
     }
 
-    /// Plays every scenario in every variant. `capture` says whether pictures
-    /// and traces are taken; `write` is handed each played scenario with its
-    /// pictures.
     fn run_all(
         &self,
         capture: bool,
@@ -945,9 +712,6 @@ impl Recorder {
             for variant in &self.variants {
                 let scenario = variant.varied(&entry.scenario);
                 let slug = unique_slug(scenario.name(), &mut used);
-                // A scenario that does not name this variant is skipped, not
-                // failed, and nothing is played or written for it; the `.ron`
-                // test runner does the same.
                 let skipped = variant.skips(&entry.scenario);
                 let (report, pictures, trace) = if skipped || disabled.is_some() {
                     (
@@ -985,10 +749,7 @@ impl Recorder {
         Ok(scenarios)
     }
 
-    /// Plays one scenario in a fresh app and returns its report, pictures and
-    /// trace. `refused` is why the scenario may not run in its variant: the
-    /// report is then a failed setup, as for any setup that fails. Without
-    /// `capture` no pictures are requested and no trace is kept.
+    /// `refused` is why the scenario may not run in its variant; the report is then a failed setup.
     fn play(
         &self,
         scenario: &Scenario,
@@ -1007,7 +768,6 @@ impl Recorder {
         app.finish();
         app.cleanup();
 
-        // A fresh app, so there is nothing to put back afterwards.
         scenario.fit_rem_size(app.world_mut());
         let setup = refused.map_or_else(|| scenario.run_setup(app.world_mut()), Err);
         if setup.is_ok()
@@ -1072,7 +832,6 @@ impl Recorder {
         Ok((report, pictures, trace))
     }
 
-    /// Runs updates until the app's settle hook is satisfied.
     fn settle_app(&self, app: &mut App, name: &str) -> Result<(), RecordError> {
         for frame in 1..=MAX_SETTLE_FRAMES {
             app.update();
@@ -1089,7 +848,6 @@ impl Recorder {
         })
     }
 
-    /// Runs updates until every picture asked for has come back.
     fn drain(app: &mut App, name: &str) -> Result<(), RecordError> {
         let outstanding = |app: &App| {
             app.world()
@@ -1112,7 +870,6 @@ impl Recorder {
     }
 }
 
-/// A directory-safe name for a scenario, different from every one in `used`.
 fn unique_slug(name: &str, used: &mut Vec<String>) -> String {
     let mut slug: String = name
         .chars()
@@ -1142,12 +899,10 @@ fn unique_slug(name: &str, used: &mut Vec<String>) -> String {
     slug
 }
 
-/// Creates `path` and its parents.
 pub(crate) fn create_dir(path: &Path) -> Result<(), RecordError> {
     fs::create_dir_all(path).map_err(|error| RecordError::Io(path.to_path_buf(), error))
 }
 
-/// Writes `bytes` to `path`.
 pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), RecordError> {
     fs::write(path, bytes).map_err(|error| RecordError::Io(path.to_path_buf(), error))
 }

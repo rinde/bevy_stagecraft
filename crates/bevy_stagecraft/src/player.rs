@@ -1,64 +1,4 @@
 //! Plays a scenario through [`SyntheticInput`] and records what happened.
-//!
-//! [`ScenarioPlayerPlugin`] plays one step list one frame per update and
-//! writes a [`ScenarioReport`]: one [`StepRecord`] per leaf step, then the
-//! scenario's expected checks. [`Scenario::run_headless`] and
-//! [`Scenario::run_in`] wrap it for tests; `run_in` first gives the app's
-//! primary window the scenario's window size and scale factor where it sets
-//! them, and leaves the window alone where it does not. The `_traced`
-//! variants also return the [`ScenarioTrace`].
-//!
-//! # What the player waits for
-//!
-//! - Before the first step, until every scene the setup queued is loaded
-//!   (always on, counted in frames, at most the scenario's action timeout).
-//!   If one is still not loaded, the report has a `setup_failure` naming the
-//!   assets and no step plays. A setup that fails (`AppSetup::build` returned
-//!   an error) also finishes the report with `setup_failure` set and every
-//!   step skipped.
-//! - An action on a target that names a widget (`MoveTo`, `Glide`, `Drag`,
-//!   and a `Click` or `Press` right after a move to a widget, which checks
-//!   that widget) waits frame by frame until the target is actionable (see
-//!   [`crate::targets::actionable`]), up to the step's or scenario's timeout,
-//!   then fails naming the first condition that did not hold. An ambiguous
-//!   or non-UI target fails at once. `Force` skips the checks and the hover
-//!   check. A waiting action is not at a step boundary.
-//! - A check that waits (`Check::Within`, also in the expect list) is polled
-//!   once per frame until it settles.
-//! - A screenshot check waits for the recorder's picture first, and those
-//!   waiting frames do not count against a `Within`.
-//!
-//! # Steps and the report
-//!
-//! The player plays the flattened steps, so a `Group` is no step of its own;
-//! each [`StepRecord`] keeps its group path, which
-//! [`ScenarioReport::failures`] puts in front of the line. A `Capture` step
-//! reads the world while the step expands and takes no frame; the values are
-//! passed to every `Check::poll`, the expected checks included, and a read
-//! that fails aborts the script naming the capture. Touch steps keep each
-//! finger's position, and a step on a finger in the wrong state fails at once.
-//!
-//! [`Outcome::Skipped`] is also a check that could not run here: a
-//! screenshot without a renderer. [`ScenarioReport::passed`] fails on a
-//! `Fail` check only; skipped steps stay strict. Each screenshot check's
-//! files are kept in [`ScenarioReport::screenshots`].
-//!
-//! # Tracing and pausing
-//!
-//! With `enable_trace(filter)` on, the `Last` system `trace_point` takes a
-//! [`TracePoint`] at each step boundary where a later step became due, and at
-//! the end; the player records each step's targets, captured values and
-//! checks too. `pause_before(Some(k))` halts inside the frame before step
-//! k's operations are expanded and takes that frame back, so the world that
-//! is left equals the trace's `before(k)`; `halted()` says so.
-//!
-//! # Panics in the app
-//!
-//! A panic in a system, command or observer reaches Bevy's fallback error
-//! handler. While a scenario is active the player installs a handler that
-//! keeps such errors (see `catch`), and fails the step last started when the
-//! frame is over, which aborts the script like any failed step. The app's
-//! own handler is restored afterwards.
 
 use alloc::collections::{BTreeMap, VecDeque};
 
@@ -103,88 +43,56 @@ use crate::{
     trace::{ScenarioTrace, TargetTrace, TraceCaptured, TraceCheck, TracePoint},
 };
 
-/// How a step or a check ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// It ran and held.
     Pass,
-    /// It ran and did not hold; the message says why.
     Fail(String),
-    /// It never ran, because an earlier step failed, or it could not run
-    /// here (a screenshot check without the recorder). A skipped check does
-    /// not fail the scenario; a skipped step does.
+    /// A skipped check does not fail the scenario; a skipped step does.
     Skipped,
 }
 
 impl Outcome {
-    /// Whether this is [`Outcome::Pass`].
     #[must_use]
     pub const fn is_pass(&self) -> bool {
         matches!(self, Self::Pass)
     }
 }
 
-/// What happened to one step.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepRecord {
-    /// The step.
     pub step: Step,
-    /// The names of the [`Step::Group`]s the step is in, outermost first;
-    /// empty for a step at the top level.
     pub group: Vec<String>,
-    /// How it ended.
     pub outcome: Outcome,
-    /// The player frame the step began on, counted from 1.
     pub frame: u32,
 }
 
-/// Which kind of check a [`CheckRecord`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckKind {
-    /// Run by a [`Step::Check`] part-way through.
     Step,
-    /// Run at the end of the script.
     Expect,
 }
 
-/// What happened to one check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckRecord {
-    /// The check's name.
     pub name: String,
-    /// When it runs.
     pub kind: CheckKind,
-    /// How it ended.
     pub outcome: Outcome,
 }
 
-/// The outcome of the scenario being played, read by the gallery and the
-/// recorder.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct ScenarioReport {
-    /// The scenario's name.
     pub name: String,
-    /// One record per step, in script order; steps not reached are
-    /// [`Outcome::Skipped`].
     pub steps: Vec<StepRecord>,
-    /// One record per check that ran or was skipped, in the order they ran.
     pub checks: Vec<CheckRecord>,
-    /// The caption currently showing, if any.
     pub caption: Option<String>,
-    /// How many frames the player has run.
     pub frames: u32,
-    /// Whether the script and the expectations are done.
     pub finished: bool,
-    /// Why the scenario's setup failed, if it did; no step plays then.
     pub setup_failure: Option<String>,
-    /// What each screenshot check did with its files, in the order they ran.
     pub screenshots: Vec<ScreenshotRecord>,
 }
 
 impl ScenarioReport {
-    /// Whether the scenario finished with every step passing and no check
-    /// failed. A check that was skipped because it cannot run here counts as
-    /// neither; steps are only skipped after one failed.
+    /// A check skipped because it cannot run here counts as neither.
     #[must_use]
     pub fn passed(&self) -> bool {
         self.finished
@@ -196,7 +104,6 @@ impl ScenarioReport {
                 .any(|record| matches!(record.outcome, Outcome::Fail(_)))
     }
 
-    /// One line per failure, naming the step or check.
     #[must_use]
     pub fn failures(&self) -> Vec<String> {
         let steps =
@@ -226,21 +133,14 @@ impl ScenarioReport {
     }
 }
 
-/// System sets of the player plugin.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScenarioSystems {
-    /// Advances the script by one frame, in `PreUpdate`. Runs before the
-    /// synthetic input is drained, so what it queues reaches Bevy in the same
-    /// frame.
+    /// Runs before the synthetic input is drained, so what it queues reaches Bevy the same frame.
     Play,
-    /// Takes a [`TracePoint`] when the player is between steps, in `Last`,
-    /// once the frame has been played. Does nothing unless
-    /// [`ScenarioPlayer::enable_trace`] was called.
     Trace,
 }
 
-/// Registers [`ScenarioPlayer`], [`ScenarioReport`] and the system that advances the script. Needs `SyntheticInputPlugin`, which
-/// [`HeadlessPlugins`] includes.
+/// Needs `SyntheticInputPlugin`, which [`HeadlessPlugins`] includes.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScenarioPlayerPlugin;
 
@@ -268,152 +168,91 @@ impl Plugin for ScenarioPlayerPlugin {
     }
 }
 
-/// Present when something other than [`ScenarioPlayerPlugin`]'s own system
-/// advances the script, such as the gallery, which paces it.
+/// Present when something else, such as the gallery, advances the script.
 #[derive(Resource, Debug, Default, Clone, Copy)]
 pub(crate) struct ExternallyDriven;
 
-/// One frame's worth of work, or a zero-frame action between frames.
 #[derive(Debug)]
 enum Op {
-    /// Queue these events and let one frame pass.
     Frame(usize, Vec<SyntheticEvent>),
-    /// Confirm the widget is under the pointer, as the last frame left it.
     CheckHover {
-        /// Index of the step this belongs to.
         step: usize,
-        /// The widget that should be hovered.
         widget: Entity,
-        /// The step's name for the target, for the message.
         label: String,
     },
-    /// Wait until the targets of the step can be acted on, then queue its
-    /// frames; this has waited `waited` frames of at most `timeout`.
     Act {
-        /// Index of the step this belongs to.
         step: usize,
-        /// The step, without the `Timeout(..)` around it.
         action: Step,
-        /// How many frames it may wait.
         timeout: u16,
-        /// Frames waited so far.
         waited: u32,
     },
-    /// Run the check, which has waited this many frames to hold.
     Check {
-        /// Index of the step this belongs to.
         step: usize,
-        /// The check.
         check: Check,
-        /// Frames waited so far, for [`Check::Within`].
         waited: u32,
     },
-    /// Change the caption.
     Caption(String),
 }
 
-/// The widget an earlier step sent the pointer to, which a press right
-/// after it acts on.
 #[derive(Debug, Clone)]
 struct Aim {
-    /// The widget.
     widget: Entity,
-    /// How the script named it, for messages.
     label: String,
 }
 
-/// A scenario being played.
 #[derive(Debug)]
 struct Running {
-    /// The scenario.
     scenario: Scenario,
-    /// The steps to play: the script with its groups flattened away, so a
-    /// grouped script plays frame for frame as the same steps ungrouped.
+    /// Groups are flattened away, so a grouped script plays frame for frame like an ungrouped one.
     plan: Vec<Step>,
-    /// Index of the next step to expand into operations.
     next_step: usize,
-    /// Operations expanded from steps but not yet done.
     ops: VecDeque<Op>,
-    /// Where the pointer is, as far as the script has moved it.
     cursor: Vec2,
-    /// Where each finger that is down is, as far as the script has put it.
     touches: BTreeMap<u8, Vec2>,
-    /// The widget the last move sent the pointer to, until a press acts on
-    /// it or the pointer goes elsewhere.
     aim: Option<Aim>,
-    /// Whether a step failed and the rest is being skipped.
     aborted: bool,
-    /// Whether the targets steps look up are written down.
     tracing: bool,
-    /// What steps found for their targets, until the player moves it into
-    /// its trace.
     resolved: Vec<(usize, TargetTrace)>,
-    /// What `Capture` steps have read so far, for checks to compare with.
     captures: CapturedValues,
-    /// What `Capture` steps read, until the player moves it into its trace.
     captured: Vec<(usize, TraceCaptured)>,
-    /// The expectations' outcomes so far, once the steps are done: `None`
-    /// for one still waiting to hold.
+    /// `None` marks one still waiting to hold.
     expected: Option<Vec<Option<Outcome>>>,
-    /// Frames the first step has waited for the setup's scenes to be loaded.
     scenes_waited: u32,
-    /// Whether every scene is loaded, so the steps may begin.
     scenes_ready: bool,
-    /// Frames the expectations have waited.
     expect_waited: u32,
 }
 
-/// Plays one scenario at a time, a frame per update.
 #[derive(Resource, Debug, Default)]
 pub struct ScenarioPlayer {
-    /// Waiting to begin on the next frame.
     pending: Option<Scenario>,
-    /// Why the setup of the scenario waiting to begin failed, if it did.
     setup_failure: Option<String>,
-    /// Being played.
     running: Option<Running>,
-    /// What snapshots leave out, while a trace is being kept.
     tracing: Option<NoiseFilter>,
-    /// What the last run (or the one going) did, between its steps.
     trace: Option<ScenarioTrace>,
-    /// The step the run stops before, so a caller can look at the world as
-    /// that step finds it.
     halt_before: Option<usize>,
-    /// Whether the run has stopped at `halt_before`.
     halted: bool,
-    /// The app's own error handler, while the player's catching one is in
-    /// the world.
     previous_handler: Option<ErrorHandler>,
 }
 
 impl ScenarioPlayer {
-    /// Starts playing `scenario` on the next frame, replacing the report. The
-    /// app should have run `scenario.run_setup` and laid its UI out first.
+    /// The app should have run `scenario.run_setup` and laid its UI out first.
     pub fn start(&mut self, scenario: Scenario) {
         self.running = None;
         self.pending = Some(scenario);
         self.setup_failure = None;
     }
 
-    /// Starts `scenario` with the outcome of its setup
-    /// ([`Scenario::run_setup`]): as [`ScenarioPlayer::start`] does when it
-    /// built the world, and otherwise as a run that fails on the next frame
-    /// with every step skipped and `message` as the report's
-    /// [`ScenarioReport::setup_failure`].
     pub fn start_after_setup(&mut self, scenario: Scenario, setup: Result<bool, String>) {
         self.start(scenario);
         self.setup_failure = setup.err();
     }
 
-    /// Whether a scenario is waiting to begin or still being played.
     #[must_use]
     pub const fn is_active(&self) -> bool {
         self.pending.is_some() || self.running.is_some()
     }
 
-    /// Adds `check` to the expectations of the scenario waiting to begin or
-    /// being played, unless its expectations have begun to run; a finished
-    /// run is left as it was.
+    /// Does nothing once the expectations have begun to run.
     #[cfg(feature = "gallery")]
     pub(crate) fn add_expect(&mut self, check: Check) {
         if let Some(scenario) = self.pending.as_mut() {
@@ -425,8 +264,6 @@ impl ScenarioPlayer {
         }
     }
 
-    /// Installs the catching error handler while a scenario is active and
-    /// restores the app's own when it is not.
     fn sync_error_handler(&mut self, world: &mut World) {
         match (self.is_active(), self.previous_handler) {
             (true, None) => self.previous_handler = Some(catch::install(world)),
@@ -438,7 +275,6 @@ impl ScenarioPlayer {
         }
     }
 
-    /// Drops the scenario being played or waiting to begin, if any.
     pub fn stop(&mut self) {
         self.pending = None;
         self.running = None;
@@ -447,51 +283,37 @@ impl ScenarioPlayer {
         self.halted = false;
     }
 
-    /// Keeps a [`ScenarioTrace`] of the runs that begin from now on, its
-    /// snapshots leaving out what `filter` ignores. Needs
-    /// [`ScenarioPlayerPlugin`], which takes the points.
+    /// Needs [`ScenarioPlayerPlugin`], which takes the points.
     pub fn enable_trace(&mut self, filter: NoiseFilter) {
         self.tracing = Some(filter);
     }
 
-    /// The trace of the run being played or the last one, if tracing is on.
     #[must_use]
     pub const fn trace(&self) -> Option<&ScenarioTrace> {
         self.trace.as_ref()
     }
 
-    /// Takes the trace out, leaving none.
     pub const fn take_trace(&mut self) -> Option<ScenarioTrace> {
         self.trace.take()
     }
 
-    /// Makes the run stop, before step `index` begins, with
-    /// [`ScenarioPlayer::halted`] set: the world is then as that step finds
-    /// it, on the frame [`ScenarioTrace::before`] reports for it. Call
-    /// before [`ScenarioPlayer::start`] (which leaves it alone) or while the
-    /// run is going; `None` lets the run on, and a run already stopped
-    /// continues on the next frame.
+    /// `None` lets the run on. Call before [`ScenarioPlayer::start`] or while the run is going.
     pub const fn pause_before(&mut self, index: Option<usize>) {
         self.halt_before = index;
         self.halted = false;
     }
 
-    /// Whether the run stopped where [`ScenarioPlayer::pause_before`] said.
     #[must_use]
     pub const fn halted(&self) -> bool {
         self.halted
     }
 
-    /// How many steps have begun, which is also the index of the next one.
     #[must_use]
     pub fn steps_started(&self) -> usize {
         self.running.as_ref().map_or(0, |run| run.next_step)
     }
 
-    /// Whether the player is between steps: no frame of the last one is left.
-    /// What may remain are checks and captions, which take no frame. A player
-    /// with no scenario counts as between steps; one whose step waits for a
-    /// check to hold or for a target to become actionable does not.
+    /// A player with no scenario counts as between steps; a step waiting on a check or target does not.
     #[must_use]
     pub fn at_step_boundary(&self) -> bool {
         self.running.as_ref().is_none_or(|run| {
@@ -505,15 +327,10 @@ impl ScenarioPlayer {
     }
 }
 
-/// Whether a trace is being kept; the condition of the system that takes its
-/// points.
 fn tracing(player: Option<bevy::ecs::system::Res<ScenarioPlayer>>) -> bool {
     player.is_some_and(|player| player.tracing.is_some())
 }
 
-/// Takes a [`TracePoint`] after a frame that left the player between steps
-/// with a later step due than the last point had, and one more when the
-/// scenario ended.
 fn trace_point(world: &mut World) {
     let Some(mut player) = world.remove_resource::<ScenarioPlayer>() else {
         return;
@@ -542,14 +359,10 @@ fn trace_point(world: &mut World) {
     world.insert_resource(player);
 }
 
-/// Whether the player's error handler is in the world.
 fn catching(player: Option<bevy::ecs::system::Res<ScenarioPlayer>>) -> bool {
     player.is_some_and(|player| player.previous_handler.is_some())
 }
 
-/// Installs the catching error handler while a scenario is active and puts
-/// the app's own back once it is not, so a panic in the app fails the step
-/// it happened in instead of ending the run.
 fn sync_error_handler(world: &mut World) {
     let Some(mut player) = world.remove_resource::<ScenarioPlayer>() else {
         return;
@@ -558,8 +371,6 @@ fn sync_error_handler(world: &mut World) {
     world.insert_resource(player);
 }
 
-/// Fails the step during which the app panicked, once the frame is over, and
-/// stops the script there.
 fn fail_caught_errors(world: &mut World) {
     let caught = catch::take();
     if caught.is_empty() {
@@ -570,7 +381,6 @@ fn fail_caught_errors(world: &mut World) {
     };
     if let Some(mut report) = world.get_resource_mut::<ScenarioReport>() {
         let message = caught.join("; ");
-        // The step last started is the last one not skipped.
         let index = report
             .steps
             .iter()
@@ -594,17 +404,12 @@ fn fail_caught_errors(world: &mut World) {
     world.insert_resource(player);
 }
 
-/// The player system: advances the script one frame.
 fn play(world: &mut World) {
     advance_world(world, true);
 }
 
-/// Advances the script by one frame, if one is playing.
-///
-/// With `settled` false the call does only what needs no fresh picking or
-/// layout: it moves on only when the next operation is a frame of input. A
-/// caller that runs several frames in one update uses this for all but the
-/// first, so a hover check or a target lookup never sees stale state.
+/// With `settled` false it moves on only when the next op is a frame of input, so a hover
+/// check or target lookup never sees stale state.
 pub(crate) fn advance_world(world: &mut World, settled: bool) {
     let Some(mut player) = world.remove_resource::<ScenarioPlayer>() else {
         return;
@@ -619,19 +424,16 @@ pub(crate) fn advance_world(world: &mut World, settled: bool) {
     world.insert_resource(player);
 }
 
-/// Eases `t` in `0..=1` so movement starts and ends gently.
 fn ease(t: f32) -> f32 {
     t * t * 2.0f32.mul_add(-t, 3.0)
 }
 
-/// Marks a step failed in the report.
 fn fail_step(report: &mut ScenarioReport, index: usize, message: String) {
     if let Some(record) = report.steps.get_mut(index) {
         record.outcome = Outcome::Fail(message);
     }
 }
 
-/// Records a check's outcome.
 fn record_check(report: &mut ScenarioReport, name: &str, kind: CheckKind, outcome: Outcome) {
     report.checks.push(CheckRecord {
         name: name.into(),
@@ -641,8 +443,6 @@ fn record_check(report: &mut ScenarioReport, name: &str, kind: CheckKind, outcom
 }
 
 impl ScenarioPlayer {
-    /// Starts `scenario`: a fresh report with every step not yet reached,
-    /// or, when its setup failed, a finished report saying so.
     fn begin(&mut self, world: &mut World, report: &mut ScenarioReport, scenario: Scenario) {
         self.halted = false;
         self.trace = self.tracing.clone().map(|filter| {
@@ -672,8 +472,7 @@ impl ScenarioPlayer {
             report.finished = true;
             return;
         }
-        // What the script last did beats where a real window thinks the
-        // cursor is, so a gallery restart does not depend on the mouse.
+        // What the script last did beats the real cursor, so a gallery restart does not depend on the mouse.
         let cursor = world
             .get_resource::<SyntheticInput>()
             .and_then(SyntheticInput::cursor)
@@ -708,7 +507,6 @@ impl ScenarioPlayer {
         });
     }
 
-    /// Does the work of one frame.
     fn advance(&mut self, world: &mut World, report: &mut ScenarioReport, settled: bool) {
         self.advance_frame(world, report, settled);
         if let Some(run) = self.running.as_mut() {
@@ -716,8 +514,6 @@ impl ScenarioPlayer {
         }
     }
 
-    /// Does the work of one frame, leaving what the steps found for their
-    /// targets in the run.
     fn advance_frame(&mut self, world: &mut World, report: &mut ScenarioReport, settled: bool) {
         if self.halted {
             return;
@@ -743,8 +539,7 @@ impl ScenarioPlayer {
         loop {
             let Some(op) = run.ops.pop_front() else {
                 if self.halt_before.is_some_and(|index| run.next_step >= index) {
-                    // This frame did not happen: the world is as the last one
-                    // left it, and the next call takes up from here.
+                    // This frame did not happen; the next call takes up from here.
                     report.frames -= 1;
                     self.halted = true;
                     return;
@@ -759,7 +554,6 @@ impl ScenarioPlayer {
                     move_targets(&mut self.trace, run);
                     self.running = None;
                 }
-                // Either the end, or a frame for expectations still waiting.
                 return;
             };
             match op {
@@ -775,7 +569,6 @@ impl ScenarioPlayer {
                 } => match run.act(world, step, &action, false) {
                     Ok(()) => {}
                     Err(NotActionable::Yet(_)) if waited < u32::from(timeout) => {
-                        // Not yet: look again after one more frame.
                         run.ops.push_front(Op::Act {
                             step,
                             action,
@@ -817,20 +610,14 @@ impl ScenarioPlayer {
     }
 }
 
-/// Where a run stands on the scenes the setup spawned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SceneWait {
-    /// Every scene is loaded, or there is none: the steps may play.
     Ready,
-    /// Some are not: the first step waits one more frame.
     Waiting,
-    /// Some still are after the timeout: the report says so and is finished.
     TimedOut,
 }
 
 impl Running {
-    /// Holds the first step while a scene is not loaded, up to the
-    /// scenario's action timeout, then fails the report's setup.
     fn await_scenes(&mut self, world: &World, report: &mut ScenarioReport) -> SceneWait {
         if self.scenes_ready {
             return SceneWait::Ready;
@@ -854,11 +641,7 @@ impl Running {
     }
 }
 
-/// What of the scenes the app spawned is not loaded yet, one line each, in a
-/// fixed order: the assets a scene still waits for, else the scene itself.
-/// Empty where there are none, or every scene and its dependencies are loaded.
-/// A scene is applied in the frame it resolves, so a resolved scene is a
-/// spawned one.
+/// A scene is applied in the frame it resolves, so a resolved scene is a spawned one.
 fn unready_scenes(world: &World) -> Vec<String> {
     let Some(server) = world.get_resource::<AssetServer>() else {
         return Vec::new();
@@ -892,15 +675,12 @@ fn unready_scenes(world: &World) -> Vec<String> {
     lines
 }
 
-/// The asset's path where it has one, else its id.
 fn asset_name(server: &AssetServer, id: UntypedAssetId) -> String {
     server
         .get_path(id)
         .map_or_else(|| id.to_string(), |path| path.to_string())
 }
 
-/// One line saying an unresolved scene is waiting, for which assets if any
-/// of them is not loaded.
 fn waiting_for(
     server: &AssetServer,
     kind: &str,
@@ -925,8 +705,7 @@ fn waiting_for(
 }
 
 impl Running {
-    /// Polls one check op. Returns whether the frame is over, which it is
-    /// while the check waits for its picture or for a `Within` to settle.
+    /// Returns whether the frame is over, which it is while the check waits for its picture or a `Within`.
     fn play_check(
         &mut self,
         world: &mut World,
@@ -939,8 +718,7 @@ impl Running {
         let name = check.to_string();
         let result = match self.poll_check(world, report, &check, waited) {
             Polled::Waiting => {
-                // The picture is on its way, which is no waiting for the
-                // check to hold.
+                // A picture on its way is not waiting for the check to hold.
                 self.ops.push_front(Op::Check {
                     step,
                     check,
@@ -949,7 +727,6 @@ impl Running {
                 return true;
             }
             Polled::Done(None) => {
-                // Not yet: look again after one more frame.
                 self.ops.push_front(Op::Check {
                     step,
                     check,
@@ -964,8 +741,6 @@ impl Running {
     }
 }
 
-/// Records the end of a step's check in the report and the trace, and fails
-/// the step if it did not hold.
 fn record_step_check(
     trace: &mut Option<ScenarioTrace>,
     report: &mut ScenarioReport,
@@ -988,7 +763,6 @@ fn record_step_check(
     }
 }
 
-/// Moves what the steps of `run` found for their targets into `trace`.
 fn move_targets(trace: &mut Option<ScenarioTrace>, run: &mut Running) {
     let Some(trace) = trace.as_mut() else {
         return;
@@ -1002,7 +776,6 @@ fn move_targets(trace: &mut Option<ScenarioTrace>, run: &mut Running) {
 }
 
 impl Running {
-    /// [`reach`], writing down what it found when a trace is kept.
     fn reach_traced(
         &mut self,
         world: &World,
@@ -1039,7 +812,6 @@ impl Running {
         result
     }
 
-    /// Stops the script at a failed step; what is left is skipped.
     fn abort(&mut self, report: &mut ScenarioReport, step: usize, message: String) {
         fail_step(report, step, message);
         self.ops.clear();
@@ -1047,7 +819,6 @@ impl Running {
         self.aborted = true;
     }
 
-    /// Queues `events` and tracks where they leave the pointer.
     fn apply(
         &mut self,
         world: &mut World,
@@ -1086,7 +857,6 @@ impl Running {
         }
     }
 
-    /// Turns step `index` into operations.
     fn expand(&mut self, world: &World, report: &mut ScenarioReport, index: usize) {
         let Some(step) = self.plan.get(index).cloned() else {
             return;
@@ -1151,8 +921,7 @@ impl Running {
                 }],
             ),
             Step::MoveBurst(positions) => {
-                // The positions name no widget, so a press right after it
-                // checks none, as after a move to a position.
+                // Positions name no widget, so a press right after checks none.
                 self.aim = None;
                 let events = positions
                     .iter()
@@ -1166,8 +935,6 @@ impl Running {
                     self.frame(index, Vec::new());
                 }
             }
-            // Keys were handled above; `unwrapped` took the wrappers off, and
-            // the groups were flattened away when the run began.
             Step::Key { .. }
             | Step::KeyUp { .. }
             | Step::Tap { .. }
@@ -1184,8 +951,6 @@ impl Running {
         }
     }
 
-    /// Reads `value` now and keeps it as `name`; stops the script, naming the
-    /// capture, if it cannot be read.
     fn capture(
         &mut self,
         world: &World,
@@ -1217,9 +982,7 @@ impl Running {
         }
     }
 
-    /// Queues the frames of `step` (a move, glide, drag, click or press) if
-    /// its targets can be acted on now, or says why not. A `forced` step
-    /// skips the checks, and the hover check after it.
+    /// A `forced` step skips the checks and the hover check after it.
     fn act(
         &mut self,
         world: &World,
@@ -1239,8 +1002,7 @@ impl Running {
                 self.aim_at(to, target, forced);
             }
             Step::Drag { from, to, frames } => {
-                // Both ends are checked on the same frame, before anything
-                // moves: the drag presses at its start.
+                // Check both ends on the same frame, before anything moves.
                 let start = self.reach_traced(world, index, from, Action::Press, forced)?;
                 let end = self.reach_traced(world, index, to, Action::Point, forced)?;
                 self.move_ops(
@@ -1257,8 +1019,6 @@ impl Running {
                         ButtonState::Pressed,
                     )],
                 );
-                // The glide starts where the drag does, whatever the cursor
-                // was doing before.
                 self.cursor = start.position;
                 self.glide_ops(index, end, *frames, to, !forced);
                 self.frame(
@@ -1289,9 +1049,7 @@ impl Running {
                 text,
                 into: Some(target),
             } => {
-                // The click lands on the frame after the move, as a `MoveTo`
-                // and a `Click` do, so a text field is focused before the
-                // first character arrives.
+                // Click on the frame after the move so a text field is focused before the first character.
                 let to = self.reach_traced(world, index, target, Action::Press, forced)?;
                 self.move_ops(index, core::iter::once(to.position), to, target, !forced);
                 self.aim = None;
@@ -1309,9 +1067,7 @@ impl Running {
         Ok(())
     }
 
-    /// Queues the frames of a touch step on a target, as [`Self::act`] does
-    /// for the mouse. The finger is checked first, so a mistake in the script
-    /// fails at once rather than waiting for the target.
+    /// The finger is checked first so a script mistake fails at once.
     fn act_touch(
         &mut self,
         world: &World,
@@ -1339,8 +1095,7 @@ impl Running {
             Step::TouchTap(target) => {
                 self.finger_ready(0, false)?;
                 let at = self.reach_traced(world, index, target, Action::Press, forced)?;
-                // The lift waits a frame: Bevy clicks only an entity the
-                // pointer hovered the frame before.
+                // Lift a frame later: Bevy clicks only an entity the pointer hovered the frame before.
                 self.frame(
                     index,
                     vec![touch_event(0, TouchPhase::Started, at.position)],
@@ -1369,8 +1124,6 @@ impl Running {
         Ok(())
     }
 
-    /// Fails at once if finger `finger` is down (or not) against what the
-    /// step needs.
     fn finger_ready(&self, finger: u8, must_be_down: bool) -> Result<(), NotActionable> {
         match (self.touches.contains_key(&finger), must_be_down) {
             (true, false) => Err(NotActionable::Never(format!(
@@ -1381,8 +1134,6 @@ impl Running {
         }
     }
 
-    /// Lifts or cancels finger `finger` where it is, or stops the script if
-    /// it is not down.
     fn lift(&mut self, report: &mut ScenarioReport, index: usize, finger: u8, phase: TouchPhase) {
         match self.touches.get(&finger).copied() {
             Some(position) => self.frame(index, vec![touch_event(finger, phase, position)]),
@@ -1390,15 +1141,12 @@ impl Running {
         }
     }
 
-    /// Queues one frame per character of `text`.
     fn type_frames(&mut self, step: usize, text: &str) {
         for character in text.chars() {
             self.frame(step, character_events(character));
         }
     }
 
-    /// Remembers the widget a move sent the pointer to, for a press right
-    /// after it; a forced move, or one to a position, leaves none.
     fn aim_at(&mut self, to: ResolvedTarget, target: &Target, forced: bool) {
         self.aim = to.widget.filter(|_| !forced).map(|widget| Aim {
             widget,
@@ -1406,13 +1154,10 @@ impl Running {
         });
     }
 
-    /// Queues one frame of `events`.
     fn frame(&mut self, step: usize, events: Vec<SyntheticEvent>) {
         self.ops.push_back(Op::Frame(step, events));
     }
 
-    /// Queues one frame per position, then, when `confirm` says so, the
-    /// hover check for the target.
     fn move_ops(
         &mut self,
         step: usize,
@@ -1433,7 +1178,6 @@ impl Running {
         }
     }
 
-    /// Queues an eased move from the cursor to `to` over `frames` frames.
     fn glide_ops(
         &mut self,
         step: usize,
@@ -1450,9 +1194,7 @@ impl Running {
         self.move_ops(step, positions, to, target, confirm);
     }
 
-    /// Runs the end-of-script expectations and, once none waits any more,
-    /// records them in order and closes the report. Returns whether it did;
-    /// otherwise a frame passes and it runs again.
+    /// Returns whether it finished; otherwise a frame passes and it runs again.
     fn finish(&mut self, world: &mut World, report: &mut ScenarioReport) -> bool {
         let expects = self.scenario.expects();
         let waited = self.expect_waited;
@@ -1469,8 +1211,7 @@ impl Running {
             } else {
                 match self.poll_check(world, report, expect, waited) {
                     Polled::Waiting => {
-                        // A picture is on its way: the other expectations
-                        // keep their place and wait with it.
+                        // A picture is on its way: the other expectations keep their place.
                         self.expected = Some(outcomes);
                         return false;
                     }
@@ -1498,17 +1239,13 @@ impl Running {
     }
 }
 
-/// What polling a check came to for the player.
 enum Polled {
-    /// A screenshot check's picture is not here yet: poll again after a frame
-    /// without counting it as waiting for the check to hold.
+    /// Poll again after a frame, without counting it as waiting for the check to hold.
     Waiting,
-    /// The check's outcome, or `None` while a `Within` waits.
     Done(Option<Outcome>),
 }
 
 impl Running {
-    /// Polls `check`, having a picture taken first where it compares one.
     fn poll_check(
         &self,
         world: &mut World,
@@ -1532,9 +1269,7 @@ impl Running {
     }
 }
 
-/// `step` without the `Timeout(..)` and `Force(..)` around it, with the
-/// frames it may wait for its target (the innermost `Timeout(..)`, else
-/// `timeout`) and whether it is forced.
+/// Returns the frames it may wait (innermost `Timeout(..)`, else `timeout`) and whether it is forced.
 fn unwrapped(step: Step, timeout: u16) -> (Step, u16, bool) {
     match step {
         Step::Timeout(frames, inner) => unwrapped(*inner, frames),
@@ -1546,12 +1281,10 @@ fn unwrapped(step: Step, timeout: u16) -> (Step, u16, bool) {
     }
 }
 
-/// The message for a step that needs a finger which is not down.
 fn finger_not_down(finger: u8) -> String {
     format!("finger {finger} is not down")
 }
 
-/// One phase of one finger as a synthetic event.
 fn touch_event(finger: u8, phase: TouchPhase, position: Vec2) -> SyntheticEvent {
     SyntheticEvent::Touch {
         finger: u64::from(finger),
@@ -1560,8 +1293,6 @@ fn touch_event(finger: u8, phase: TouchPhase, position: Vec2) -> SyntheticEvent 
     }
 }
 
-/// Works `target` out for `action`: checked for actionability, or, when
-/// `forced`, as it is now with no checks, a miss failing at once.
 fn reach(
     world: &World,
     target: &Target,
@@ -1577,7 +1308,6 @@ fn reach(
     }
 }
 
-/// The events of a keyboard step, or `None` for any other step.
 fn key_events(step: &Step) -> Option<Vec<SyntheticEvent>> {
     let press = |code: KeyCode| SyntheticEvent::Key(code, ButtonState::Pressed);
     let release = |code: KeyCode| SyntheticEvent::Key(code, ButtonState::Released);
@@ -1608,25 +1338,15 @@ fn key_events(step: &Step) -> Option<Vec<SyntheticEvent>> {
     }
 }
 
-/// Frames of layout and picking a fresh UI needs before the script starts.
 const SETTLE_FRAMES: usize = 2;
 
 impl Scenario {
-    /// Plays the scenario in `app`, which needs [`HeadlessPlugins`] (or the
-    /// equivalent) and, if [`ScenarioPlayerPlugin`] is not there yet, gets it
-    /// even after the app is finished.
-    /// The scenario's window size and scale factor, where it sets them, are
-    /// applied to the app's primary window first and stay on it afterwards;
-    /// where it sets none the window is left as the app has it.
-    /// Builds the world with the scenario's setup and settles the UI first,
-    /// then returns the report; a setup that fails fails the report, with
-    /// every step skipped.
+    /// Gets [`ScenarioPlayerPlugin`] if the app lacks it, even after the app is finished.
+    /// The window size and scale factor the scenario sets stay on the primary window.
     pub fn run_in(&self, app: &mut App) -> ScenarioReport {
         self.play_in(app, None).0
     }
 
-    /// Plays the scenario in `app` as [`Scenario::run_in`] does, keeping a
-    /// [`ScenarioTrace`] whose snapshots leave out what `filter` ignores.
     pub fn run_in_traced(
         &self,
         app: &mut App,
@@ -1639,22 +1359,18 @@ impl Scenario {
         )
     }
 
-    /// Plays the scenario in a fresh [`HeadlessPlugins`] app and returns the
-    /// report and its trace, with the default [`NoiseFilter`].
     #[must_use]
     pub fn run_headless_traced(&self) -> (ScenarioReport, ScenarioTrace) {
         self.run_in_traced(&mut self.headless_app(), NoiseFilter::default())
     }
 
-    /// Plays the scenario, with a trace when `filter` is given.
     fn play_in(
         &self,
         app: &mut App,
         filter: Option<NoiseFilter>,
     ) -> (ScenarioReport, Option<ScenarioTrace>) {
         if !app.world().contains_resource::<ScenarioPlayer>() {
-            // `add_plugins` refuses once the app is finished, but the app is
-            // allowed to gain systems and resources, so build it by hand.
+            // `add_plugins` refuses once the app is finished; build by hand.
             Plugin::build(&ScenarioPlayerPlugin, app);
         }
         self.fit_primary_window(app.world_mut());
@@ -1669,7 +1385,7 @@ impl Scenario {
             }
             player.start_after_setup(self.clone(), setup);
         }
-        // Not left to the first update: a panic in it should be caught too.
+        // A panic in the first update should be caught too.
         sync_error_handler(app.world_mut());
         while app
             .world()
@@ -1688,17 +1404,12 @@ impl Scenario {
             .get_resource::<ScenarioReport>()
             .cloned()
             .unwrap_or_default();
-        // The app was handed to us, so it gets its own text size back.
+        // The app was handed in, so restore its text size.
         restore_rem_size(app.world_mut(), rem_before);
         (report, trace)
     }
 
-    /// Gives the primary window the size and scale factor the scenario asks
-    /// for, before its setup runs, so a file's `window_size` and
-    /// `scale_factor` hold in an app [`Scenario::run_in`] was handed as they
-    /// do in [`Scenario::headless_app`]. What the scenario does not say stays
-    /// as the app has it. The scale factor goes first because the logical size
-    /// is derived from the physical one.
+    /// Applies the scale factor first because the logical size is derived from the physical one.
     fn fit_primary_window(&self, world: &mut World) {
         let scale = self
             .scale()
@@ -1729,17 +1440,12 @@ impl Scenario {
         }
     }
 
-    /// Plays the scenario in a fresh [`HeadlessPlugins`] app and returns the
-    /// report.
     #[must_use]
     pub fn run_headless(&self) -> ScenarioReport {
         self.run_in(&mut self.headless_app())
     }
 
-    /// A finished [`HeadlessPlugins`] app with the scenario's window size and
-    /// scale factor, or the default ones. Use it to add what the scenario
-    /// needs (for example [`crate::script::Registry::install`]) before
-    /// [`Scenario::run_in`].
+    /// Add what the scenario needs (for example [`crate::script::Registry::install`]) before [`Scenario::run_in`].
     pub fn headless_app(&self) -> App {
         let mut plugins = HeadlessPlugins::default();
         if let Some((width, height)) = self.window() {
